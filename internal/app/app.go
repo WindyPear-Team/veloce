@@ -12,12 +12,12 @@ import (
 	"strings"
 	"time"
 
+	webui "github.com/WindyPear-Team/flai-web"
 	"github.com/WindyPear-Team/flai/internal/api"
 	"github.com/WindyPear-Team/flai/internal/config"
 	"github.com/WindyPear-Team/flai/internal/middleware"
 	"github.com/WindyPear-Team/flai/internal/model"
 	"github.com/WindyPear-Team/flai/internal/service"
-	webui "github.com/WindyPear-Team/flai/web"
 	"github.com/gin-gonic/gin"
 )
 

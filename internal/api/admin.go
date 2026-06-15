@@ -24,6 +24,7 @@ import (
 type SystemAPI struct{}
 
 type systemSettingsResponse struct {
+	Edition                     string `json:"edition"`
 	SiteName                    string `json:"site_name"`
 	BaseURL                     string `json:"base_url"`
 	IconURL                     string `json:"icon_url"`
@@ -307,6 +308,7 @@ func (api *SystemAPI) UpdateSettings(c *gin.Context) {
 
 func currentPublicSystemSettings() systemSettingsResponse {
 	return systemSettingsResponse{
+		Edition:                     service.CurrentEdition(),
 		SiteName:                    settingString("site_name", "flai"),
 		BaseURL:                     settingString("base_url", ""),
 		IconURL:                     settingString("icon_url", ""),

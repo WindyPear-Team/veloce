@@ -1,5 +1,3 @@
-//go:build !premium
-
 package service
 
 import (
@@ -16,19 +14,44 @@ type SensitiveWordMatch struct {
 	Word string
 }
 
+type SensitiveFilterHooks struct {
+	Enabled    func() bool
+	Scope      func() string
+	MatchWords func(text string) (SensitiveWordMatch, bool)
+	Words      func() []string
+}
+
+var sensitiveFilterHooks SensitiveFilterHooks
+
+func RegisterSensitiveFilterHooks(hooks SensitiveFilterHooks) {
+	sensitiveFilterHooks = hooks
+}
+
 func SensitiveFilterEnabled() bool {
+	if sensitiveFilterHooks.Enabled != nil {
+		return sensitiveFilterHooks.Enabled()
+	}
 	return false
 }
 
 func SensitiveFilterScope() string {
+	if sensitiveFilterHooks.Scope != nil {
+		return sensitiveFilterHooks.Scope()
+	}
 	return SensitiveFilterScopeRequest
 }
 
 func MatchSensitiveWords(text string) (SensitiveWordMatch, bool) {
+	if sensitiveFilterHooks.MatchWords != nil {
+		return sensitiveFilterHooks.MatchWords(text)
+	}
 	return SensitiveWordMatch{}, false
 }
 
 func SensitiveWords() []string {
+	if sensitiveFilterHooks.Words != nil {
+		return sensitiveFilterHooks.Words()
+	}
 	return nil
 }
 

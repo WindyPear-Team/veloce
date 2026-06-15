@@ -1,5 +1,3 @@
-//go:build !premium
-
 package service
 
 import (
@@ -17,16 +15,40 @@ type URLGuardOptions struct {
 	Resolve              bool
 }
 
+type URLGuardHooks struct {
+	ValidateConfiguredHTTPURL    func(raw string) error
+	ValidateConfiguredTCPAddress func(raw string) error
+	ValidateConfiguredStatus     func(target string, checkType string) error
+	ValidateOutboundHTTPURL      func(raw string, options URLGuardOptions) error
+	CurrentOptions               func() URLGuardOptions
+	Enabled                      func() bool
+}
+
+var urlGuardHooks URLGuardHooks
+
+func RegisterURLGuardHooks(hooks URLGuardHooks) {
+	urlGuardHooks = hooks
+}
+
 func ValidateConfiguredHTTPURL(raw string) error {
+	if urlGuardHooks.ValidateConfiguredHTTPURL != nil {
+		return urlGuardHooks.ValidateConfiguredHTTPURL(raw)
+	}
 	return validateHTTPURLSyntax(raw)
 }
 
 func ValidateConfiguredTCPAddress(raw string) error {
+	if urlGuardHooks.ValidateConfiguredTCPAddress != nil {
+		return urlGuardHooks.ValidateConfiguredTCPAddress(raw)
+	}
 	_, _, err := net.SplitHostPort(strings.TrimSpace(raw))
 	return err
 }
 
 func ValidateConfiguredStatusTarget(target string, checkType string) error {
+	if urlGuardHooks.ValidateConfiguredStatus != nil {
+		return urlGuardHooks.ValidateConfiguredStatus(target, checkType)
+	}
 	if strings.EqualFold(strings.TrimSpace(checkType), StatusCheckTCP) {
 		address, err := statusTCPGuardAddress(target)
 		if err != nil {
@@ -62,14 +84,23 @@ func statusTCPGuardAddress(target string) (string, error) {
 }
 
 func ValidateOutboundHTTPURL(raw string, options URLGuardOptions) error {
+	if urlGuardHooks.ValidateOutboundHTTPURL != nil {
+		return urlGuardHooks.ValidateOutboundHTTPURL(raw, options)
+	}
 	return validateHTTPURLSyntax(raw)
 }
 
 func CurrentURLGuardOptions() URLGuardOptions {
+	if urlGuardHooks.CurrentOptions != nil {
+		return urlGuardHooks.CurrentOptions()
+	}
 	return URLGuardOptions{}
 }
 
 func SSRFProtectionEnabled() bool {
+	if urlGuardHooks.Enabled != nil {
+		return urlGuardHooks.Enabled()
+	}
 	return false
 }
 
