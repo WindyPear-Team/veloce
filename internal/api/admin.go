@@ -255,8 +255,6 @@ func (api *SystemAPI) UpdateSettings(c *gin.Context) {
 		"payment_openpayment_config_url":  input.PaymentOpenPaymentConfigURL,
 		"payment_openpayment_merchant_id": input.PaymentOpenPaymentMerchantID,
 		"payment_openpayment_key":         input.PaymentOpenPaymentKey,
-		"payment_openpayment_notify_url":  input.PaymentOpenPaymentNotifyURL,
-		"payment_openpayment_return_url":  input.PaymentOpenPaymentReturnURL,
 		"rate_limit_requests_per_minute":  input.RateLimitRequestsPerMinute,
 		"rate_limit_burst":                input.RateLimitBurst,
 		"sensitive_words":                 input.SensitiveWords,
@@ -410,9 +408,17 @@ func currentAdminSystemSettings() systemSettingsResponse {
 	settings.PaymentOpenPaymentConfigURL = settingString("payment_openpayment_config_url", "")
 	settings.PaymentOpenPaymentMerchantID = settingString("payment_openpayment_merchant_id", "")
 	settings.PaymentOpenPaymentKey = settingString("payment_openpayment_key", "")
-	settings.PaymentOpenPaymentNotifyURL = settingString("payment_openpayment_notify_url", "")
-	settings.PaymentOpenPaymentReturnURL = settingString("payment_openpayment_return_url", "")
+	settings.PaymentOpenPaymentNotifyURL = callbackURLFromBaseURL(settings.BaseURL, "/api/payment/openpayment/notify")
+	settings.PaymentOpenPaymentReturnURL = callbackURLFromBaseURL(settings.BaseURL, "/api/payment/openpayment/return")
 	return settings
+}
+
+func callbackURLFromBaseURL(baseURL, path string) string {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if baseURL == "" {
+		return ""
+	}
+	return baseURL + path
 }
 
 func settingString(key, fallback string) string {

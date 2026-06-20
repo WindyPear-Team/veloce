@@ -271,8 +271,8 @@ func currentPaymentConfig() paymentConfig {
 		OpenPaymentConfigURL:  settingString("payment_openpayment_config_url", ""),
 		OpenPaymentMerchantID: settingString("payment_openpayment_merchant_id", ""),
 		OpenPaymentKey:        settingString("payment_openpayment_key", ""),
-		OpenPaymentNotifyURL:  settingString("payment_openpayment_notify_url", ""),
-		OpenPaymentReturnURL:  settingString("payment_openpayment_return_url", ""),
+		OpenPaymentNotifyURL:  "",
+		OpenPaymentReturnURL:  "",
 	}
 }
 

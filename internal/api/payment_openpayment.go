@@ -159,8 +159,8 @@ func buildOpenPaymentPaymentParams(c *gin.Context, cfg paymentConfig, order mode
 		openPaymentFieldName(discovery, "merchant_order_no"): order.OrderNo,
 		openPaymentFieldName(discovery, "subject"):           "Balance recharge " + order.OrderNo,
 		openPaymentFieldName(discovery, "amount"):            order.RMBAmount.StringFixed(2),
-		openPaymentFieldName(discovery, "notify_url"):        firstNonEmptyString(cfg.OpenPaymentNotifyURL, publicCallbackURL(c, "/api/payment/openpayment/notify")),
-		openPaymentFieldName(discovery, "return_url"):        firstNonEmptyString(cfg.OpenPaymentReturnURL, publicCallbackURL(c, "/api/payment/openpayment/return")),
+		openPaymentFieldName(discovery, "notify_url"):        publicCallbackURL(c, "/api/payment/openpayment/notify"),
+		openPaymentFieldName(discovery, "return_url"):        publicCallbackURL(c, "/api/payment/openpayment/return"),
 	}
 	if clientIP := strings.TrimSpace(c.ClientIP()); clientIP != "" {
 		params[openPaymentFieldName(discovery, "client_ip")] = clientIP
