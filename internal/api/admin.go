@@ -2547,17 +2547,19 @@ type UserAPI struct {
 }
 
 type apiKeyResponse struct {
-	ID                  uint       `json:"id"`
-	Name                string     `json:"name"`
-	KeyPrefix           string     `json:"key_prefix"`
-	AllowedModels       []string   `json:"allowed_models"`
-	AllowedUserChannels []uint     `json:"allowed_user_channels"`
-	AllowedIPs          []string   `json:"allowed_ips"`
-	Enabled             bool       `json:"enabled"`
-	Usage               usageStats `json:"usage"`
-	LastUsedAt          *time.Time `json:"last_used_at"`
-	CreatedAt           time.Time  `json:"created_at"`
-	UpdatedAt           time.Time  `json:"updated_at"`
+	ID                  uint             `json:"id"`
+	Name                string           `json:"name"`
+	KeyPrefix           string           `json:"key_prefix"`
+	AllowedModels       []string         `json:"allowed_models"`
+	AllowedUserChannels []uint           `json:"allowed_user_channels"`
+	AllowedIPs          []string         `json:"allowed_ips"`
+	QuotaLimit          decimal.Decimal  `json:"quota_limit"`
+	QuotaRemaining      *decimal.Decimal `json:"quota_remaining,omitempty"`
+	Enabled             bool             `json:"enabled"`
+	Usage               usageStats       `json:"usage"`
+	LastUsedAt          *time.Time       `json:"last_used_at"`
+	CreatedAt           time.Time        `json:"created_at"`
+	UpdatedAt           time.Time        `json:"updated_at"`
 }
 
 type usageStats struct {
@@ -2570,11 +2572,12 @@ type usageStats struct {
 }
 
 type apiKeyInput struct {
-	Name                string   `json:"name"`
-	AllowedModels       []string `json:"allowed_models"`
-	AllowedUserChannels []uint   `json:"allowed_user_channels"`
-	AllowedIPs          []string `json:"allowed_ips"`
-	Enabled             *bool    `json:"enabled"`
+	Name                string           `json:"name"`
+	AllowedModels       []string         `json:"allowed_models"`
+	AllowedUserChannels []uint           `json:"allowed_user_channels"`
+	AllowedIPs          []string         `json:"allowed_ips"`
+	QuotaLimit          *decimal.Decimal `json:"quota_limit"`
+	Enabled             *bool            `json:"enabled"`
 }
 
 func (api *UserAPI) GetMe(c *gin.Context) {
@@ -2733,6 +2736,11 @@ func (api *UserAPI) CreateAPIKey(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	quotaLimit, err := validateAPIKeyQuotaLimit(input.QuotaLimit)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 
 	raw, hash, err := service.GenerateAPIKey()
 	if err != nil {
@@ -2752,6 +2760,7 @@ func (api *UserAPI) CreateAPIKey(c *gin.Context) {
 		AllowedModels:       service.JoinList(input.AllowedModels),
 		AllowedUserChannels: service.JoinUintList([]uint{userChannelID}),
 		AllowedIPs:          service.JoinList(input.AllowedIPs),
+		QuotaLimit:          quotaLimit,
 		Enabled:             enabled,
 	}
 	if err := model.DB.Create(&apiKey).Error; err != nil {
@@ -2794,6 +2803,14 @@ func (api *UserAPI) UpdateAPIKey(c *gin.Context) {
 		"allowed_models":        service.JoinList(input.AllowedModels),
 		"allowed_user_channels": service.JoinUintList([]uint{userChannelID}),
 		"allowed_ips":           service.JoinList(input.AllowedIPs),
+	}
+	if input.QuotaLimit != nil {
+		quotaLimit, err := validateAPIKeyQuotaLimit(input.QuotaLimit)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		updates["quota_limit"] = quotaLimit
 	}
 	if input.Enabled != nil {
 		updates["enabled"] = *input.Enabled
@@ -3088,19 +3105,29 @@ func currentUser(c *gin.Context) (*model.User, bool) {
 }
 
 func toAPIKeyResponse(apiKey model.APIKey) apiKeyResponse {
-	return apiKeyResponse{
+	usage := apiKeyUsageStats(apiKey.ID, apiKey.UserID)
+	response := apiKeyResponse{
 		ID:                  apiKey.ID,
 		Name:                apiKey.Name,
 		KeyPrefix:           apiKey.KeyPrefix,
 		AllowedModels:       service.ParseList(apiKey.AllowedModels),
 		AllowedUserChannels: service.ParseUintList(apiKey.AllowedUserChannels),
 		AllowedIPs:          service.ParseList(apiKey.AllowedIPs),
+		QuotaLimit:          apiKey.QuotaLimit,
 		Enabled:             apiKey.Enabled,
-		Usage:               apiKeyUsageStats(apiKey.ID, apiKey.UserID),
+		Usage:               usage,
 		LastUsedAt:          apiKey.LastUsedAt,
 		CreatedAt:           apiKey.CreatedAt,
 		UpdatedAt:           apiKey.UpdatedAt,
 	}
+	if apiKey.QuotaLimit.GreaterThan(decimal.Zero) {
+		remaining := apiKey.QuotaLimit.Sub(usage.TotalCost)
+		if remaining.LessThan(decimal.Zero) {
+			remaining = decimal.Zero
+		}
+		response.QuotaRemaining = &remaining
+	}
+	return response
 }
 
 func apiKeyUsageStats(apiKeyID uint, userID uint) usageStats {
@@ -3133,6 +3160,16 @@ func validateAPIKeyUserChannel(userChannelIDs []uint) (uint, error) {
 		return 0, err
 	}
 	return userChannel.ID, nil
+}
+
+func validateAPIKeyQuotaLimit(value *decimal.Decimal) (decimal.Decimal, error) {
+	if value == nil {
+		return decimal.Zero, nil
+	}
+	if value.LessThan(decimal.Zero) {
+		return decimal.Zero, errors.New("API key quota limit cannot be negative")
+	}
+	return *value, nil
 }
 
 func firstNonEmptyString(values ...string) string {

@@ -3,6 +3,9 @@ package service
 import (
 	"strings"
 	"testing"
+
+	"github.com/WindyPear-Team/flai/internal/model"
+	"github.com/shopspring/decimal"
 )
 
 func TestGenerateAPIKey(t *testing.T) {
@@ -25,6 +28,28 @@ func TestHashAPIKeyIsStable(t *testing.T) {
 	raw := "sk-test-key"
 	if HashAPIKey(raw) != HashAPIKey(raw) {
 		t.Fatal("hash should be stable")
+	}
+}
+
+func TestAPIKeyQuotaExceededUsesInclusiveLimit(t *testing.T) {
+	apiKey := &model.APIKey{
+		ID:         1,
+		UserID:     2,
+		QuotaLimit: decimal.NewFromInt(10),
+	}
+
+	if exceeded := apiKeyQuotaExceeded(apiKey, decimal.NewFromInt(9), decimal.NewFromInt(1)); exceeded {
+		t.Fatal("expected exact quota usage to be allowed")
+	}
+	if exceeded := apiKeyQuotaExceeded(apiKey, decimal.NewFromInt(10), decimal.Zero); !exceeded {
+		t.Fatal("expected exhausted quota to be exceeded")
+	}
+	if exceeded := apiKeyQuotaExceeded(apiKey, decimal.NewFromInt(9), decimal.RequireFromString("1.000001")); !exceeded {
+		t.Fatal("expected usage over quota to be exceeded")
+	}
+	apiKey.QuotaLimit = decimal.Zero
+	if exceeded := apiKeyQuotaExceeded(apiKey, decimal.NewFromInt(100), decimal.NewFromInt(100)); exceeded {
+		t.Fatal("expected zero quota limit to be unlimited")
 	}
 }
 

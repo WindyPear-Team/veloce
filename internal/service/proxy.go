@@ -444,6 +444,13 @@ func (s *ProxyService) resolveTarget(c *gin.Context, modelName string) (*proxyTa
 		c.JSON(http.StatusPaymentRequired, gin.H{"error": "Insufficient balance"})
 		return nil, false
 	}
+	if exceeded, err := APIKeyQuotaExceeded(apiKey, decimal.Zero); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check API key quota"})
+		return nil, false
+	} else if exceeded {
+		c.JSON(http.StatusPaymentRequired, gin.H{"error": "API key quota exceeded"})
+		return nil, false
+	}
 
 	return &proxyTarget{
 		User:        user,
@@ -613,6 +620,14 @@ func (s *ProxyService) billUsage(c *gin.Context, user *model.User, apiKey *model
 	tx := model.DB.Begin()
 	if tx.Error != nil {
 		return http.StatusInternalServerError, "Failed to start transaction", tx.Error
+	}
+
+	if exceeded, err := APIKeyQuotaExceededInTx(tx, apiKey, cost); err != nil {
+		tx.Rollback()
+		return http.StatusInternalServerError, "Failed to check API key quota", err
+	} else if exceeded {
+		tx.Rollback()
+		return http.StatusPaymentRequired, "API key quota exceeded", ErrAPIKeyQuotaExceeded
 	}
 
 	if err := ApplyUsageCharge(tx, user.ID, cost); err != nil {

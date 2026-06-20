@@ -30,19 +30,20 @@ type User struct {
 
 // APIKey represents a user-owned API token.
 type APIKey struct {
-	ID                  uint       `gorm:"primaryKey" json:"id"`
-	UserID              uint       `gorm:"index;not null" json:"user_id"`
-	User                User       `gorm:"foreignKey:UserID" json:"-"`
-	Name                string     `gorm:"size:100;not null" json:"name"`
-	KeyHash             string     `gorm:"uniqueIndex;size:64;not null" json:"-"`
-	KeyPrefix           string     `gorm:"size:16" json:"key_prefix"`
-	AllowedModels       string     `gorm:"column:allowed_models;type:text" json:"-"`
-	AllowedUserChannels string     `gorm:"column:allowed_user_channels;type:text" json:"-"`
-	AllowedIPs          string     `gorm:"column:allowed_ips;type:text" json:"-"`
-	Enabled             bool       `gorm:"default:true" json:"enabled"`
-	LastUsedAt          *time.Time `json:"last_used_at"`
-	CreatedAt           time.Time  `json:"created_at"`
-	UpdatedAt           time.Time  `json:"updated_at"`
+	ID                  uint            `gorm:"primaryKey" json:"id"`
+	UserID              uint            `gorm:"index;not null" json:"user_id"`
+	User                User            `gorm:"foreignKey:UserID" json:"-"`
+	Name                string          `gorm:"size:100;not null" json:"name"`
+	KeyHash             string          `gorm:"uniqueIndex;size:64;not null" json:"-"`
+	KeyPrefix           string          `gorm:"size:16" json:"key_prefix"`
+	AllowedModels       string          `gorm:"column:allowed_models;type:text" json:"-"`
+	AllowedUserChannels string          `gorm:"column:allowed_user_channels;type:text" json:"-"`
+	AllowedIPs          string          `gorm:"column:allowed_ips;type:text" json:"-"`
+	QuotaLimit          decimal.Decimal `gorm:"type:decimal(20,10);default:0" json:"quota_limit"`
+	Enabled             bool            `gorm:"default:true" json:"enabled"`
+	LastUsedAt          *time.Time      `json:"last_used_at"`
+	CreatedAt           time.Time       `json:"created_at"`
+	UpdatedAt           time.Time       `json:"updated_at"`
 }
 
 // CheckInRecord records a user's daily check-in reward.

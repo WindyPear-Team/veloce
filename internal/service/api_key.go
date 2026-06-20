@@ -13,14 +13,16 @@ import (
 	"time"
 
 	"github.com/WindyPear-Team/flai/internal/model"
+	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 )
 
 const apiKeyPrefix = "sk-"
 
 var (
-	ErrAPIKeyNotFound     = errors.New("api key not found")
-	ErrAPIKeyIPRestricted = errors.New("api key is not allowed from this IP")
+	ErrAPIKeyNotFound      = errors.New("api key not found")
+	ErrAPIKeyIPRestricted  = errors.New("api key is not allowed from this IP")
+	ErrAPIKeyQuotaExceeded = errors.New("api key quota exceeded")
 )
 
 func GenerateAPIKey() (string, string, error) {
@@ -147,6 +149,43 @@ func APIKeyAllowsUserChannel(apiKey *model.APIKey, userChannelID *uint) bool {
 		return false
 	}
 	return allowed[0] == *userChannelID
+}
+
+func APIKeyQuotaExceeded(apiKey *model.APIKey, cost decimal.Decimal) (bool, error) {
+	return APIKeyQuotaExceededInTx(model.DB, apiKey, cost)
+}
+
+func APIKeyQuotaExceededInTx(tx *gorm.DB, apiKey *model.APIKey, cost decimal.Decimal) (bool, error) {
+	if apiKey == nil || apiKey.QuotaLimit.LessThanOrEqual(decimal.Zero) {
+		return false, nil
+	}
+	used, err := APIKeyUsageCost(tx, apiKey.ID, apiKey.UserID)
+	if err != nil {
+		return false, err
+	}
+	return apiKeyQuotaExceeded(apiKey, used, cost), nil
+}
+
+func APIKeyUsageCost(tx *gorm.DB, apiKeyID uint, userID uint) (decimal.Decimal, error) {
+	if tx == nil {
+		tx = model.DB
+	}
+	if apiKeyID == 0 || userID == 0 {
+		return decimal.Zero, nil
+	}
+	var total decimal.Decimal
+	err := tx.Model(&model.TokenLog{}).
+		Where("api_key_id = ? AND user_id = ?", apiKeyID, userID).
+		Select("COALESCE(SUM(cost), 0)").
+		Scan(&total).Error
+	return total, err
+}
+
+func apiKeyQuotaExceeded(apiKey *model.APIKey, used decimal.Decimal, cost decimal.Decimal) bool {
+	if apiKey == nil || apiKey.QuotaLimit.LessThanOrEqual(decimal.Zero) {
+		return false
+	}
+	return used.Add(cost).GreaterThan(apiKey.QuotaLimit) || used.GreaterThanOrEqual(apiKey.QuotaLimit)
 }
 
 func ParseList(raw string) []string {
