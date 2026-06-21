@@ -1,7 +1,8 @@
 WindyPear Token Market
 
-«Community Edition
-English | "简体中文" (README_szh.md)»
+Community Edition
+
+English | [简体中文](README_szh.md)
 
 WindyPear Token Market (Token Market) is an AI token marketplace and API gateway designed for building AI platforms and developer ecosystems.
 

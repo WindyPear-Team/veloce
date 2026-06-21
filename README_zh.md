@@ -1,7 +1,8 @@
 WindyPear Token Market
 
-«社区版
-"English" (README.md) | 简体中文»
+社区版
+
+[English](README.md) | 简体中文
 
 WindyPear Token Market（简称 Token Market）是一款面向 AI 平台与开发者生态打造的 AI Token 市场与 API 网关。
 
@@ -35,7 +36,7 @@ web/          前端
 
 如果需要更多高级功能、商业支持或企业级能力，可以购买 Professional Edition（专业版）：
 
-https://project.flweb.cn/tokenmarket
+https://tk.flweb.cn/buy
 
 构建
 
