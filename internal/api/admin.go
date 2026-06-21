@@ -2702,6 +2702,7 @@ type UserAPI struct {
 type apiKeyResponse struct {
 	ID                  uint             `json:"id"`
 	Name                string           `json:"name"`
+	APIKey              string           `json:"api_key"`
 	KeyPrefix           string           `json:"key_prefix"`
 	AllowedModels       []string         `json:"allowed_models"`
 	AllowedUserChannels []uint           `json:"allowed_user_channels"`
@@ -2817,14 +2818,8 @@ func (api *UserAPI) ChangePassword(c *gin.Context) {
 }
 
 func (api *UserAPI) RotateAPIKey(c *gin.Context) {
-	val, exists := c.Get("user")
-	if !exists {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-		return
-	}
-
-	user, ok := val.(*model.User)
-	if !ok || user == nil {
+	user, ok := currentUser(c)
+	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
 		return
 	}
@@ -2834,9 +2829,39 @@ func (api *UserAPI) RotateAPIKey(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate API key"})
 		return
 	}
+
+	keyID := strings.TrimSpace(c.Param("id"))
+	if keyID != "" {
+		var apiKey model.APIKey
+		if err := model.DB.Where("id = ? AND user_id = ?", keyID, user.ID).First(&apiKey).Error; err != nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "API key not found"})
+			return
+		}
+		updates := map[string]interface{}{
+			"api_key":      raw,
+			"key_hash":     hash,
+			"key_prefix":   service.APIKeyPrefix(raw),
+			"last_used_at": nil,
+		}
+		if err := model.DB.Model(&apiKey).Updates(updates).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to rotate API key"})
+			return
+		}
+		if err := model.DB.First(&apiKey, apiKey.ID).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to reload API key"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"api_key": raw,
+			"key":     toAPIKeyResponse(apiKey),
+		})
+		return
+	}
+
 	apiKey := model.APIKey{
 		UserID:    user.ID,
 		Name:      "Default key",
+		APIKey:    raw,
 		KeyHash:   hash,
 		KeyPrefix: service.APIKeyPrefix(raw),
 		Enabled:   true,
@@ -2908,6 +2933,7 @@ func (api *UserAPI) CreateAPIKey(c *gin.Context) {
 	apiKey := model.APIKey{
 		UserID:              user.ID,
 		Name:                firstNonEmptyString(input.Name, "API key"),
+		APIKey:              raw,
 		KeyHash:             hash,
 		KeyPrefix:           service.APIKeyPrefix(raw),
 		AllowedModels:       service.JoinList(input.AllowedModels),
@@ -3262,6 +3288,7 @@ func toAPIKeyResponse(apiKey model.APIKey) apiKeyResponse {
 	response := apiKeyResponse{
 		ID:                  apiKey.ID,
 		Name:                apiKey.Name,
+		APIKey:              apiKey.APIKey,
 		KeyPrefix:           apiKey.KeyPrefix,
 		AllowedModels:       service.ParseList(apiKey.AllowedModels),
 		AllowedUserChannels: service.ParseUintList(apiKey.AllowedUserChannels),

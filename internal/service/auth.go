@@ -101,7 +101,7 @@ func (s *AuthService) HandleCallback(ctx context.Context, code string, referralC
 		if err != nil {
 			return nil, "", err
 		}
-		_, apiKeyHash, err := GenerateAPIKey()
+		apiKeyRaw, _, err := GenerateAPIKey()
 		if err != nil {
 			return nil, "", err
 		}
@@ -126,7 +126,7 @@ func (s *AuthService) HandleCallback(ctx context.Context, code string, referralC
 			OIDCSub:       &claims.Subject,
 			EmailVerified: strings.TrimSpace(claims.Email) != "",
 			AvatarURL:     strings.TrimSpace(claims.Picture),
-			APIKey:        apiKeyHash,
+			APIKey:        apiKeyRaw,
 			GroupID:       defaultGroup.ID,
 			ReferralCode:  &userReferralCode,
 			ReferrerID:    referrerID,

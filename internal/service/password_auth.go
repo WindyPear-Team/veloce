@@ -161,7 +161,7 @@ func (s *AuthService) SetupInitialAdmin(input InitialSetupInput) (*model.User, s
 	if err != nil {
 		return nil, "", err
 	}
-	_, apiKeyHash, err := GenerateAPIKey()
+	apiKeyRaw, _, err := GenerateAPIKey()
 	if err != nil {
 		return nil, "", err
 	}
@@ -199,7 +199,7 @@ func (s *AuthService) SetupInitialAdmin(input InitialSetupInput) (*model.User, s
 			Email:         email,
 			PasswordHash:  string(passwordHash),
 			EmailVerified: true,
-			APIKey:        apiKeyHash,
+			APIKey:        apiKeyRaw,
 			GroupID:       defaultGroup.ID,
 			ReferralCode:  &userReferralCode,
 			IsAdmin:       true,
@@ -295,7 +295,7 @@ func (s *AuthService) RegisterWithPassword(input PasswordRegisterInput) (*model.
 	if err != nil {
 		return nil, "", err
 	}
-	_, apiKeyHash, err := GenerateAPIKey()
+	apiKeyRaw, _, err := GenerateAPIKey()
 	if err != nil {
 		return nil, "", err
 	}
@@ -317,7 +317,7 @@ func (s *AuthService) RegisterWithPassword(input PasswordRegisterInput) (*model.
 		Email:         email,
 		PasswordHash:  string(passwordHash),
 		EmailVerified: settingBool("email_verification_required", false),
-		APIKey:        apiKeyHash,
+		APIKey:        apiKeyRaw,
 		GroupID:       defaultGroup.ID,
 		ReferralCode:  &userReferralCode,
 		ReferrerID:    referrerID,

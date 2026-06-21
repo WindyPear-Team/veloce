@@ -407,6 +407,7 @@ func Run() error {
 		userGroup.GET("/api-keys", userAPI.ListAPIKeys)
 		userGroup.POST("/api-keys", userAPI.CreateAPIKey)
 		userGroup.PUT("/api-keys/:id", userAPI.UpdateAPIKey)
+		userGroup.POST("/api-keys/:id/rotate", userAPI.RotateAPIKey)
 		userGroup.DELETE("/api-keys/:id", userAPI.DeleteAPIKey)
 		userGroup.POST("/api-key/rotate", userAPI.RotateAPIKey)
 		service.ApplyUserRouteHooks(userGroup)

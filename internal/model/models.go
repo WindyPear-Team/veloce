@@ -34,6 +34,7 @@ type APIKey struct {
 	UserID              uint            `gorm:"index;not null" json:"user_id"`
 	User                User            `gorm:"foreignKey:UserID" json:"-"`
 	Name                string          `gorm:"size:100;not null" json:"name"`
+	APIKey              string          `gorm:"column:api_key;size:100" json:"api_key,omitempty"`
 	KeyHash             string          `gorm:"uniqueIndex;size:64;not null" json:"-"`
 	KeyPrefix           string          `gorm:"size:16" json:"key_prefix"`
 	AllowedModels       string          `gorm:"column:allowed_models;type:text" json:"-"`

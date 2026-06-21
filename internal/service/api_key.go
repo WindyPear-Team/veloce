@@ -54,8 +54,7 @@ func FindUserByAPIKey(raw, clientIP string) (*model.User, *model.APIKey, error) 
 		return nil, nil, ErrAPIKeyNotFound
 	}
 
-	hash := HashAPIKey(raw)
-	apiKey, err := findAPIKeyByHash(hash)
+	apiKey, err := findAPIKeyByRaw(raw)
 	if err == nil {
 		if !apiKey.Enabled {
 			return nil, nil, ErrAPIKeyNotFound
@@ -70,25 +69,49 @@ func FindUserByAPIKey(raw, clientIP string) (*model.User, *model.APIKey, error) 
 		return nil, nil, err
 	}
 
-	user, err := findLegacyUserByAPIKey(hash)
+	hash := HashAPIKey(raw)
+	apiKey, err = findAPIKeyByHash(hash)
+	if err == nil {
+		if strings.TrimSpace(apiKey.APIKey) == "" {
+			if updateErr := model.DB.Model(apiKey).Update("api_key", raw).Error; updateErr != nil {
+				return nil, nil, updateErr
+			}
+			apiKey.APIKey = raw
+		}
+		if !apiKey.Enabled {
+			return nil, nil, ErrAPIKeyNotFound
+		}
+		if !APIKeyAllowsIP(apiKey, clientIP) {
+			return nil, nil, ErrAPIKeyIPRestricted
+		}
+		markAPIKeyUsed(apiKey)
+		return &apiKey.User, apiKey, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil, err
+	}
+
+	user, err := findLegacyUserByAPIKey(raw)
 	if err != nil {
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil, err
 		}
-		user, err = findLegacyUserByAPIKey(raw)
+		user, err = findLegacyUserByAPIKey(hash)
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return nil, nil, ErrAPIKeyNotFound
 			}
 			return nil, nil, err
 		}
-		if err := model.DB.Model(user).Update("api_key", hash).Error; err != nil {
+	}
+	if user.APIKey != raw {
+		if err := model.DB.Model(user).Update("api_key", raw).Error; err != nil {
 			return nil, nil, err
 		}
-		user.APIKey = hash
+		user.APIKey = raw
 	}
 
-	apiKey, err = ensureLegacyAPIKey(user, hash, APIKeyPrefix(raw))
+	apiKey, err = ensureLegacyAPIKey(user, raw, hash, APIKeyPrefix(raw))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -246,6 +269,14 @@ func JoinUintList(items []uint) string {
 	return strings.Join(out, ",")
 }
 
+func findAPIKeyByRaw(raw string) (*model.APIKey, error) {
+	var apiKey model.APIKey
+	if err := model.DB.Preload("User").Where("api_key = ?", raw).First(&apiKey).Error; err != nil {
+		return nil, err
+	}
+	return &apiKey, nil
+}
+
 func findAPIKeyByHash(hash string) (*model.APIKey, error) {
 	var apiKey model.APIKey
 	if err := model.DB.Preload("User").Where("key_hash = ?", hash).First(&apiKey).Error; err != nil {
@@ -262,10 +293,16 @@ func findLegacyUserByAPIKey(stored string) (*model.User, error) {
 	return &user, nil
 }
 
-func ensureLegacyAPIKey(user *model.User, hash, prefix string) (*model.APIKey, error) {
+func ensureLegacyAPIKey(user *model.User, raw, hash, prefix string) (*model.APIKey, error) {
 	var apiKey model.APIKey
 	err := model.DB.Where("key_hash = ?", hash).First(&apiKey).Error
 	if err == nil {
+		if strings.TrimSpace(apiKey.APIKey) == "" {
+			if updateErr := model.DB.Model(&apiKey).Update("api_key", raw).Error; updateErr != nil {
+				return nil, updateErr
+			}
+			apiKey.APIKey = raw
+		}
 		return &apiKey, nil
 	}
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -275,6 +312,7 @@ func ensureLegacyAPIKey(user *model.User, hash, prefix string) (*model.APIKey, e
 	apiKey = model.APIKey{
 		UserID:    user.ID,
 		Name:      "Legacy key",
+		APIKey:    raw,
 		KeyHash:   hash,
 		KeyPrefix: prefix,
 		Enabled:   true,
