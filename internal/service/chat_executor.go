@@ -3,8 +3,10 @@ package service
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -14,8 +16,9 @@ import (
 )
 
 // ChatExecutorMessage is a single message in a server-side chat completion call.
-// Content may be empty when the assistant message only carries tool calls, and
-// ToolCalls / ToolCallID carry OpenAI tool-calling state across turns.
+// Content may be empty when the assistant message only carries tool calls.
+// ToolCalls, ToolCallID and Name are provider-neutral tool-loop state; each
+// protocol-specific request builder translates them into its own wire format.
 type ChatExecutorMessage struct {
 	Role       string                   `json:"role"`
 	Content    string                   `json:"content"`
@@ -79,13 +82,9 @@ func newChatExecutorError(status int, message string) *ChatExecutorError {
 // ExecuteServerChatCompletion runs one billed chat-completion turn for a user
 // directly against a channel, without going through the public /v1 HTTP endpoint
 // or a user token. It selects a channel for (model, userChannel) using the same
-// routing the proxy uses, calls the OpenAI-protocol upstream (optionally with
-// tools), bills the user via the shared usage-charge path, and returns the
+// routing the proxy uses, translates server-side tools into the selected provider
+// protocol, bills the user via the shared usage-charge path, and returns the
 // assistant message plus any tool calls.
-//
-// Only OpenAI-protocol channels support tools. When tools are requested but the
-// resolved channel speaks another protocol, the call fails with a clear error so
-// the caller can retry without tools.
 func ExecuteServerChatCompletion(c *gin.Context, user *model.User, req ChatExecutorRequest) (*ChatExecutorResult, error) {
 	if user == nil {
 		return nil, newChatExecutorError(http.StatusUnauthorized, "Unauthorized")
@@ -114,9 +113,6 @@ func ExecuteServerChatCompletion(c *gin.Context, user *model.User, req ChatExecu
 	}
 
 	protocol := channelProtocol(channel.Type)
-	if len(req.Tools) > 0 && protocol != protocolOpenAI {
-		return nil, newChatExecutorError(http.StatusBadRequest, "Selected channel does not support tool calling")
-	}
 
 	if err := ValidateConfiguredHTTPURL(channel.BaseURL); err != nil {
 		return nil, newChatExecutorError(http.StatusBadGateway, "Upstream URL blocked by SSRF protection")
@@ -167,7 +163,7 @@ func ExecuteServerChatCompletion(c *gin.Context, user *model.User, req ChatExecu
 		return nil, newChatExecutorError(status, message)
 	}
 
-	result := parseServerChatResponse(responseData)
+	result := parseServerChatResponse(protocol, responseData)
 	result.Cost = cost
 	return result, nil
 }
@@ -274,23 +270,21 @@ func userAgentForLog(c *gin.Context) string {
 	return c.Request.UserAgent()
 }
 
-// prepareServerChatRequest builds the upstream HTTP request. Tool-enabled requests
-// are only built for the OpenAI protocol (guarded by the caller); other protocols
-// reuse the normalized text payload builders.
+// prepareServerChatRequest builds the upstream HTTP request and translates the
+// provider-neutral MCP tool loop into the selected upstream protocol.
 func prepareServerChatRequest(channel *model.Channel, protocol proxyProtocol, upstreamModelName string, req ChatExecutorRequest) (preparedUpstreamRequest, error) {
-	if protocol == protocolOpenAI {
+	switch protocol {
+	case protocolOpenAI:
 		return prepareServerOpenAIChatRequest(channel, upstreamModelName, req)
+	case protocolResponses:
+		return prepareServerOpenAIResponsesRequest(channel, upstreamModelName, req)
+	case protocolClaude:
+		return prepareServerClaudeMessagesRequest(channel, upstreamModelName, req)
+	case protocolGemini:
+		return prepareServerGeminiGenerateContentRequest(channel, upstreamModelName, req)
+	default:
+		return preparedUpstreamRequest{}, fmt.Errorf("unsupported upstream protocol: %s", protocol)
 	}
-	normalized := normalizedAIRequest{
-		Model:       upstreamModelName,
-		System:      req.System,
-		MaxTokens:   req.MaxTokens,
-		Temperature: req.Temperature,
-	}
-	for _, message := range req.Messages {
-		addNormalizedMessage(&normalized, message.Role, message.Content)
-	}
-	return prepareProviderRequest(channel, protocol, normalized)
 }
 
 func prepareServerOpenAIChatRequest(channel *model.Channel, upstreamModelName string, req ChatExecutorRequest) (preparedUpstreamRequest, error) {
@@ -309,7 +303,7 @@ func prepareServerOpenAIChatRequest(channel *model.Channel, upstreamModelName st
 		if message.ToolCallID != "" {
 			entry["tool_call_id"] = message.ToolCallID
 		}
-		if message.Name != "" {
+		if message.Name != "" && !strings.EqualFold(message.Role, "tool") {
 			entry["name"] = message.Name
 		}
 		messages = append(messages, entry)
@@ -328,22 +322,7 @@ func prepareServerOpenAIChatRequest(channel *model.Channel, upstreamModelName st
 		payload["temperature"] = *req.Temperature
 	}
 	if len(req.Tools) > 0 {
-		tools := make([]map[string]interface{}, 0, len(req.Tools))
-		for _, tool := range req.Tools {
-			parameters := tool.Schema
-			if parameters == nil {
-				parameters = map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}
-			}
-			tools = append(tools, map[string]interface{}{
-				"type": "function",
-				"function": map[string]interface{}{
-					"name":        tool.Name,
-					"description": tool.Description,
-					"parameters":  parameters,
-				},
-			})
-		}
-		payload["tools"] = tools
+		payload["tools"] = openAIChatTools(req.Tools)
 		payload["tool_choice"] = "auto"
 	}
 	body, err := json.Marshal(payload)
@@ -352,15 +331,200 @@ func prepareServerOpenAIChatRequest(channel *model.Channel, upstreamModelName st
 	}
 	headers := jsonHeaders()
 	headers.Set("Authorization", "Bearer "+strings.TrimSpace(channel.APIKey))
-	return preparedUpstreamRequest{
-		Method: http.MethodPost,
-		URL:    upstreamURLForRequest(channel.BaseURL, "/v1/chat/completions"),
-		Body:   body,
-		Header: headers,
-	}, nil
+	return preparedUpstreamRequest{Method: http.MethodPost, URL: upstreamURLForRequest(channel.BaseURL, "/v1/chat/completions"), Body: body, Header: headers}, nil
 }
 
-func parseServerChatResponse(responseData map[string]interface{}) *ChatExecutorResult {
+func prepareServerOpenAIResponsesRequest(channel *model.Channel, upstreamModelName string, req ChatExecutorRequest) (preparedUpstreamRequest, error) {
+	input := make([]map[string]interface{}, 0, len(req.Messages)+1)
+	if strings.TrimSpace(req.System) != "" {
+		input = append(input, map[string]interface{}{"role": "system", "content": req.System})
+	}
+	for _, message := range req.Messages {
+		switch strings.ToLower(strings.TrimSpace(message.Role)) {
+		case "assistant":
+			if strings.TrimSpace(message.Content) != "" {
+				input = append(input, map[string]interface{}{"role": "assistant", "content": message.Content})
+			}
+			for _, call := range toolCallsFromOpenAIMaps(message.ToolCalls) {
+				input = append(input, map[string]interface{}{
+					"type":      "function_call",
+					"call_id":   call.ID,
+					"name":      call.Name,
+					"arguments": call.Arguments,
+				})
+			}
+		case "tool":
+			input = append(input, map[string]interface{}{
+				"type":    "function_call_output",
+				"call_id": message.ToolCallID,
+				"output":  message.Content,
+			})
+		default:
+			role := responseInputRole(message.Role)
+			if strings.TrimSpace(message.Content) != "" || role == "user" {
+				input = append(input, map[string]interface{}{"role": role, "content": message.Content})
+			}
+		}
+	}
+	if len(input) == 0 {
+		return preparedUpstreamRequest{}, errors.New("input is required")
+	}
+	payload := map[string]interface{}{"model": upstreamModelName, "input": input}
+	if req.MaxTokens > 0 {
+		payload["max_output_tokens"] = req.MaxTokens
+	}
+	if req.Temperature != nil {
+		payload["temperature"] = *req.Temperature
+	}
+	if len(req.Tools) > 0 {
+		payload["tools"] = openAIResponsesTools(req.Tools)
+		payload["tool_choice"] = "auto"
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return preparedUpstreamRequest{}, err
+	}
+	headers := jsonHeaders()
+	headers.Set("Authorization", "Bearer "+strings.TrimSpace(channel.APIKey))
+	return preparedUpstreamRequest{Method: http.MethodPost, URL: upstreamURLForRequest(channel.BaseURL, "/v1/responses"), Body: body, Header: headers}, nil
+}
+
+func prepareServerClaudeMessagesRequest(channel *model.Channel, upstreamModelName string, req ChatExecutorRequest) (preparedUpstreamRequest, error) {
+	messages := make([]map[string]interface{}, 0, len(req.Messages))
+	for _, message := range req.Messages {
+		switch strings.ToLower(strings.TrimSpace(message.Role)) {
+		case "assistant":
+			blocks := []map[string]interface{}{}
+			if strings.TrimSpace(message.Content) != "" {
+				blocks = append(blocks, map[string]interface{}{"type": "text", "text": message.Content})
+			}
+			for _, call := range toolCallsFromOpenAIMaps(message.ToolCalls) {
+				blocks = append(blocks, map[string]interface{}{"type": "tool_use", "id": call.ID, "name": call.Name, "input": toolArgumentsObject(call.Arguments)})
+			}
+			if len(blocks) > 0 {
+				messages = append(messages, map[string]interface{}{"role": "assistant", "content": blocks})
+			}
+		case "tool":
+			messages = append(messages, map[string]interface{}{
+				"role": "user",
+				"content": []map[string]interface{}{{
+					"type":        "tool_result",
+					"tool_use_id": message.ToolCallID,
+					"content":     message.Content,
+				}},
+			})
+		default:
+			if strings.TrimSpace(message.Content) != "" {
+				messages = append(messages, map[string]interface{}{"role": "user", "content": message.Content})
+			}
+		}
+	}
+	if len(messages) == 0 {
+		return preparedUpstreamRequest{}, errors.New("messages are required")
+	}
+	maxTokens := req.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = 1024
+	}
+	payload := map[string]interface{}{"model": upstreamModelName, "max_tokens": maxTokens, "messages": messages}
+	if strings.TrimSpace(req.System) != "" {
+		payload["system"] = req.System
+	}
+	if req.Temperature != nil {
+		payload["temperature"] = *req.Temperature
+	}
+	if len(req.Tools) > 0 {
+		payload["tools"] = claudeTools(req.Tools)
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return preparedUpstreamRequest{}, err
+	}
+	headers := jsonHeaders()
+	headers.Set("x-api-key", strings.TrimSpace(channel.APIKey))
+	headers.Set("Authorization", "Bearer "+strings.TrimSpace(channel.APIKey))
+	headers.Set("anthropic-version", "2023-06-01")
+	return preparedUpstreamRequest{Method: http.MethodPost, URL: upstreamURLForRequest(channel.BaseURL, "/v1/messages"), Body: body, Header: headers}, nil
+}
+
+func prepareServerGeminiGenerateContentRequest(channel *model.Channel, upstreamModelName string, req ChatExecutorRequest) (preparedUpstreamRequest, error) {
+	contents := make([]map[string]interface{}, 0, len(req.Messages))
+	for _, message := range req.Messages {
+		switch strings.ToLower(strings.TrimSpace(message.Role)) {
+		case "assistant":
+			parts := []map[string]interface{}{}
+			if strings.TrimSpace(message.Content) != "" {
+				parts = append(parts, map[string]interface{}{"text": message.Content})
+			}
+			for _, call := range toolCallsFromOpenAIMaps(message.ToolCalls) {
+				parts = append(parts, map[string]interface{}{"functionCall": map[string]interface{}{"name": call.Name, "args": toolArgumentsObject(call.Arguments)}})
+			}
+			if len(parts) > 0 {
+				contents = append(contents, map[string]interface{}{"role": "model", "parts": parts})
+			}
+		case "tool":
+			name := strings.TrimSpace(message.Name)
+			if name == "" {
+				name = strings.TrimSpace(message.ToolCallID)
+			}
+			contents = append(contents, map[string]interface{}{
+				"role": "function",
+				"parts": []map[string]interface{}{{"functionResponse": map[string]interface{}{
+					"name":     name,
+					"response": map[string]interface{}{"content": message.Content},
+				}}},
+			})
+		default:
+			if strings.TrimSpace(message.Content) != "" {
+				contents = append(contents, map[string]interface{}{"role": "user", "parts": []map[string]interface{}{{"text": message.Content}}})
+			}
+		}
+	}
+	if len(contents) == 0 {
+		return preparedUpstreamRequest{}, errors.New("contents are required")
+	}
+	payload := map[string]interface{}{"contents": contents}
+	if strings.TrimSpace(req.System) != "" {
+		payload["systemInstruction"] = map[string]interface{}{"parts": []map[string]interface{}{{"text": req.System}}}
+	}
+	generationConfig := map[string]interface{}{}
+	if req.MaxTokens > 0 {
+		generationConfig["maxOutputTokens"] = req.MaxTokens
+	}
+	if req.Temperature != nil {
+		generationConfig["temperature"] = *req.Temperature
+	}
+	if len(generationConfig) > 0 {
+		payload["generationConfig"] = generationConfig
+	}
+	if len(req.Tools) > 0 {
+		payload["tools"] = geminiTools(req.Tools)
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return preparedUpstreamRequest{}, err
+	}
+	fullURL := upstreamURLForRequest(channel.BaseURL, "/v1beta/models/"+url.PathEscape(strings.TrimPrefix(upstreamModelName, "models/"))+":generateContent")
+	if strings.TrimSpace(channel.APIKey) != "" {
+		fullURL = withQueryParam(fullURL, "key", strings.TrimSpace(channel.APIKey))
+	}
+	return preparedUpstreamRequest{Method: http.MethodPost, URL: fullURL, Body: body, Header: jsonHeaders()}, nil
+}
+
+func parseServerChatResponse(protocol proxyProtocol, responseData map[string]interface{}) *ChatExecutorResult {
+	switch protocol {
+	case protocolClaude:
+		return parseServerClaudeMessagesResponse(responseData)
+	case protocolGemini:
+		return parseServerGeminiGenerateContentResponse(responseData)
+	case protocolResponses:
+		return parseServerOpenAIResponsesResponse(responseData)
+	default:
+		return parseServerOpenAIChatResponse(responseData)
+	}
+}
+
+func parseServerOpenAIChatResponse(responseData map[string]interface{}) *ChatExecutorResult {
 	result := &ChatExecutorResult{}
 	choices, ok := responseData["choices"].([]interface{})
 	if !ok || len(choices) == 0 {
@@ -379,21 +543,226 @@ func parseServerChatResponse(responseData map[string]interface{}) *ChatExecutorR
 	}
 	result.AssistantMessage = message
 	result.Content = stringFromValue(message["content"])
-	if toolCalls, ok := message["tool_calls"].([]interface{}); ok {
-		for _, raw := range toolCalls {
-			call, ok := raw.(map[string]interface{})
+	result.ToolCalls = toolCallsFromOpenAIInterface(message["tool_calls"])
+	return result
+}
+
+func parseServerOpenAIResponsesResponse(responseData map[string]interface{}) *ChatExecutorResult {
+	result := &ChatExecutorResult{FinishReason: stringFromValue(responseData["status"])}
+	parts := []string{}
+	if output, ok := responseData["output"].([]interface{}); ok {
+		for _, raw := range output {
+			item, ok := raw.(map[string]interface{})
 			if !ok {
 				continue
 			}
-			function, _ := call["function"].(map[string]interface{})
-			result.ToolCalls = append(result.ToolCalls, ChatExecutorToolCall{
-				ID:        stringFromValue(call["id"]),
-				Name:      stringFromValue(function["name"]),
-				Arguments: stringFromValue(function["arguments"]),
-			})
+			switch stringFromValue(item["type"]) {
+			case "message":
+				if text := contentToText(item["content"]); strings.TrimSpace(text) != "" {
+					parts = append(parts, text)
+				}
+			case "function_call":
+				id := firstNonEmptyString(stringFromValue(item["call_id"]), stringFromValue(item["id"]))
+				call := ChatExecutorToolCall{ID: id, Name: stringFromValue(item["name"]), Arguments: stringFromValue(item["arguments"])}
+				result.ToolCalls = append(result.ToolCalls, call)
+			}
 		}
 	}
+	result.Content = strings.TrimSpace(strings.Join(parts, "\n"))
+	if result.Content == "" {
+		result.Content = openAIResponseText(responseData)
+	}
+	result.AssistantMessage = assistantMessageFromToolCalls(result.Content, result.ToolCalls)
 	return result
+}
+
+func parseServerClaudeMessagesResponse(responseData map[string]interface{}) *ChatExecutorResult {
+	result := &ChatExecutorResult{FinishReason: stringFromValue(responseData["stop_reason"])}
+	parts := []string{}
+	if content, ok := responseData["content"].([]interface{}); ok {
+		for _, raw := range content {
+			item, ok := raw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			switch stringFromValue(item["type"]) {
+			case "text":
+				if text := contentToText(item); strings.TrimSpace(text) != "" {
+					parts = append(parts, text)
+				}
+			case "tool_use":
+				arguments, _ := json.Marshal(item["input"])
+				result.ToolCalls = append(result.ToolCalls, ChatExecutorToolCall{ID: stringFromValue(item["id"]), Name: stringFromValue(item["name"]), Arguments: string(arguments)})
+			}
+		}
+	}
+	result.Content = strings.TrimSpace(strings.Join(parts, "\n"))
+	result.AssistantMessage = assistantMessageFromToolCalls(result.Content, result.ToolCalls)
+	return result
+}
+
+func parseServerGeminiGenerateContentResponse(responseData map[string]interface{}) *ChatExecutorResult {
+	result := &ChatExecutorResult{}
+	parts := []string{}
+	if candidates, ok := responseData["candidates"].([]interface{}); ok && len(candidates) > 0 {
+		if candidate, ok := candidates[0].(map[string]interface{}); ok {
+			result.FinishReason = stringFromValue(candidate["finishReason"])
+			if content, ok := candidate["content"].(map[string]interface{}); ok {
+				if rawParts, ok := content["parts"].([]interface{}); ok {
+					for index, rawPart := range rawParts {
+						part, ok := rawPart.(map[string]interface{})
+						if !ok {
+							continue
+						}
+						if text := contentToText(part); strings.TrimSpace(text) != "" {
+							parts = append(parts, text)
+						}
+						if functionCall, ok := part["functionCall"].(map[string]interface{}); ok {
+							name := stringFromValue(functionCall["name"])
+							arguments, _ := json.Marshal(functionCall["args"])
+							result.ToolCalls = append(result.ToolCalls, ChatExecutorToolCall{ID: fmt.Sprintf("%s_%d", name, index), Name: name, Arguments: string(arguments)})
+						}
+					}
+				}
+			}
+		}
+	}
+	result.Content = strings.TrimSpace(strings.Join(parts, "\n"))
+	result.AssistantMessage = assistantMessageFromToolCalls(result.Content, result.ToolCalls)
+	return result
+}
+
+func openAIChatTools(tools []ChatExecutorTool) []map[string]interface{} {
+	items := make([]map[string]interface{}, 0, len(tools))
+	for _, tool := range tools {
+		items = append(items, map[string]interface{}{
+			"type": "function",
+			"function": map[string]interface{}{
+				"name":        tool.Name,
+				"description": tool.Description,
+				"parameters":  toolSchema(tool),
+			},
+		})
+	}
+	return items
+}
+
+func openAIResponsesTools(tools []ChatExecutorTool) []map[string]interface{} {
+	items := make([]map[string]interface{}, 0, len(tools))
+	for _, tool := range tools {
+		items = append(items, map[string]interface{}{
+			"type":        "function",
+			"name":        tool.Name,
+			"description": tool.Description,
+			"parameters":  toolSchema(tool),
+		})
+	}
+	return items
+}
+
+func claudeTools(tools []ChatExecutorTool) []map[string]interface{} {
+	items := make([]map[string]interface{}, 0, len(tools))
+	for _, tool := range tools {
+		items = append(items, map[string]interface{}{
+			"name":         tool.Name,
+			"description":  tool.Description,
+			"input_schema": toolSchema(tool),
+		})
+	}
+	return items
+}
+
+func geminiTools(tools []ChatExecutorTool) []map[string]interface{} {
+	declarations := make([]map[string]interface{}, 0, len(tools))
+	for _, tool := range tools {
+		declarations = append(declarations, map[string]interface{}{
+			"name":        tool.Name,
+			"description": tool.Description,
+			"parameters":  toolSchema(tool),
+		})
+	}
+	return []map[string]interface{}{{"functionDeclarations": declarations}}
+}
+
+func toolSchema(tool ChatExecutorTool) map[string]interface{} {
+	if tool.Schema != nil {
+		return tool.Schema
+	}
+	return map[string]interface{}{"type": "object", "properties": map[string]interface{}{}}
+}
+
+func toolCallsFromOpenAIInterface(raw interface{}) []ChatExecutorToolCall {
+	items, ok := raw.([]interface{})
+	if !ok {
+		return nil
+	}
+	calls := make([]ChatExecutorToolCall, 0, len(items))
+	for _, item := range items {
+		call, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		function, _ := call["function"].(map[string]interface{})
+		calls = append(calls, ChatExecutorToolCall{ID: stringFromValue(call["id"]), Name: stringFromValue(function["name"]), Arguments: stringFromValue(function["arguments"])})
+	}
+	return calls
+}
+
+func toolCallsFromOpenAIMaps(items []map[string]interface{}) []ChatExecutorToolCall {
+	calls := make([]ChatExecutorToolCall, 0, len(items))
+	for _, call := range items {
+		function, _ := call["function"].(map[string]interface{})
+		calls = append(calls, ChatExecutorToolCall{ID: stringFromValue(call["id"]), Name: stringFromValue(function["name"]), Arguments: stringFromValue(function["arguments"])})
+	}
+	return calls
+}
+
+func assistantMessageFromToolCalls(content string, calls []ChatExecutorToolCall) map[string]interface{} {
+	message := map[string]interface{}{"role": "assistant"}
+	if strings.TrimSpace(content) != "" {
+		message["content"] = content
+	}
+	if len(calls) == 0 {
+		return message
+	}
+	toolCalls := make([]interface{}, 0, len(calls))
+	for _, call := range calls {
+		toolCalls = append(toolCalls, openAIToolCallMap(call))
+	}
+	message["tool_calls"] = toolCalls
+	return message
+}
+
+func openAIToolCallMap(call ChatExecutorToolCall) map[string]interface{} {
+	return map[string]interface{}{
+		"id":   call.ID,
+		"type": "function",
+		"function": map[string]interface{}{
+			"name":      call.Name,
+			"arguments": call.Arguments,
+		},
+	}
+}
+
+func toolArgumentsObject(raw string) map[string]interface{} {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return map[string]interface{}{}
+	}
+	var object map[string]interface{}
+	if err := json.Unmarshal([]byte(raw), &object); err == nil && object != nil {
+		return object
+	}
+	return map[string]interface{}{"value": raw}
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func serverChatMessagesText(req ChatExecutorRequest) string {
