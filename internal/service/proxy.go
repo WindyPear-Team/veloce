@@ -3,6 +3,7 @@ package service
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -84,10 +85,11 @@ type normalizedAIMessage struct {
 }
 
 type preparedUpstreamRequest struct {
-	Method string
-	URL    string
-	Body   []byte
-	Header http.Header
+	Method  string
+	URL     string
+	Body    []byte
+	Header  http.Header
+	Context context.Context
 }
 
 type providerResponseData struct {
@@ -1116,7 +1118,11 @@ func (s *ProxyService) forwardToUpstream(channel *model.Channel, method, path st
 }
 
 func (s *ProxyService) doUpstreamRequest(prepared preparedUpstreamRequest) (*http.Response, error) {
-	req, err := http.NewRequest(prepared.Method, prepared.URL, bytes.NewBuffer(prepared.Body))
+	ctx := prepared.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	req, err := http.NewRequestWithContext(ctx, prepared.Method, prepared.URL, bytes.NewBuffer(prepared.Body))
 	if err != nil {
 		return nil, err
 	}

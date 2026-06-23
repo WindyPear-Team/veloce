@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -46,6 +47,8 @@ type ChatExecutorRequest struct {
 	Tools         []ChatExecutorTool
 	MaxTokens     int
 	Temperature   *float64
+	Stream        bool
+	OnTextDelta   func(delta string) error
 }
 
 // ChatExecutorToolCall is a tool invocation requested by the model.
@@ -123,9 +126,14 @@ func ExecuteServerChatCompletion(c *gin.Context, user *model.User, req ChatExecu
 		upstreamModelName = modelName
 	}
 
-	prepared, err := prepareServerChatRequest(&channel, protocol, upstreamModelName, req)
+	upstreamReq := req
+	upstreamReq.Stream = req.Stream && req.OnTextDelta != nil && serverChatStreamSupported(protocol)
+	prepared, err := prepareServerChatRequest(&channel, protocol, upstreamModelName, upstreamReq)
 	if err != nil {
 		return nil, newChatExecutorError(http.StatusBadRequest, err.Error())
+	}
+	if c != nil && c.Request != nil {
+		prepared.Context = c.Request.Context()
 	}
 
 	resp, err := executor.doUpstreamRequest(prepared)
@@ -135,15 +143,40 @@ func ExecuteServerChatCompletion(c *gin.Context, user *model.User, req ChatExecu
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, newChatExecutorError(http.StatusBadGateway, "Failed to read upstream response")
-	}
 	if resp.StatusCode >= http.StatusBadRequest {
+		respBody, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, newChatExecutorError(http.StatusBadGateway, "Failed to read upstream response")
+		}
 		logUpstreamError(c, &channel, prepared.URL, resp.StatusCode, prepared.Body, respBody)
 		return nil, newChatExecutorError(resp.StatusCode, "Upstream request failed")
 	}
 
+	if upstreamReq.Stream && isStreamingResponse(resp) {
+		result, usage, usageOK, err := readServerChatStream(resp.Body, protocol, req.OnTextDelta)
+		if err != nil {
+			return nil, newChatExecutorError(http.StatusBadGateway, "Failed to read upstream stream")
+		}
+		if !usageOK {
+			usage = usageTokenCounts{
+				InputTokens:  CountTokens(modelName, serverChatMessagesText(req)),
+				OutputTokens: CountTokens(modelName, result.Content),
+			}
+		}
+
+		apiKey := currentAPIKey(c)
+		cost, status, message, err := executor.billServerUsage(c, user, apiKey, &channel, &modelConfig, modelName, usage)
+		if err != nil {
+			return nil, newChatExecutorError(status, message)
+		}
+		result.Cost = cost
+		return result, nil
+	}
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, newChatExecutorError(http.StatusBadGateway, "Failed to read upstream response")
+	}
 	var responseData map[string]interface{}
 	if err := json.Unmarshal(respBody, &responseData); err != nil {
 		return nil, newChatExecutorError(http.StatusBadGateway, "Failed to parse upstream response")
@@ -270,6 +303,10 @@ func userAgentForLog(c *gin.Context) string {
 	return c.Request.UserAgent()
 }
 
+func serverChatStreamSupported(protocol proxyProtocol) bool {
+	return protocol == protocolOpenAI || protocol == protocolResponses || protocol == protocolClaude
+}
+
 // prepareServerChatRequest builds the upstream HTTP request and translates the
 // provider-neutral MCP tool loop into the selected upstream protocol.
 func prepareServerChatRequest(channel *model.Channel, protocol proxyProtocol, upstreamModelName string, req ChatExecutorRequest) (preparedUpstreamRequest, error) {
@@ -325,11 +362,18 @@ func prepareServerOpenAIChatRequest(channel *model.Channel, upstreamModelName st
 		payload["tools"] = openAIChatTools(req.Tools)
 		payload["tool_choice"] = "auto"
 	}
+	if req.Stream {
+		payload["stream"] = true
+		payload["stream_options"] = map[string]interface{}{"include_usage": true}
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return preparedUpstreamRequest{}, err
 	}
 	headers := jsonHeaders()
+	if req.Stream {
+		headers.Set("Accept", "text/event-stream")
+	}
 	headers.Set("Authorization", "Bearer "+strings.TrimSpace(channel.APIKey))
 	return preparedUpstreamRequest{Method: http.MethodPost, URL: upstreamURLForRequest(channel.BaseURL, "/v1/chat/completions"), Body: body, Header: headers}, nil
 }
@@ -380,11 +424,17 @@ func prepareServerOpenAIResponsesRequest(channel *model.Channel, upstreamModelNa
 		payload["tools"] = openAIResponsesTools(req.Tools)
 		payload["tool_choice"] = "auto"
 	}
+	if req.Stream {
+		payload["stream"] = true
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return preparedUpstreamRequest{}, err
 	}
 	headers := jsonHeaders()
+	if req.Stream {
+		headers.Set("Accept", "text/event-stream")
+	}
 	headers.Set("Authorization", "Bearer "+strings.TrimSpace(channel.APIKey))
 	return preparedUpstreamRequest{Method: http.MethodPost, URL: upstreamURLForRequest(channel.BaseURL, "/v1/responses"), Body: body, Header: headers}, nil
 }
@@ -436,11 +486,17 @@ func prepareServerClaudeMessagesRequest(channel *model.Channel, upstreamModelNam
 	if len(req.Tools) > 0 {
 		payload["tools"] = claudeTools(req.Tools)
 	}
+	if req.Stream {
+		payload["stream"] = true
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return preparedUpstreamRequest{}, err
 	}
 	headers := jsonHeaders()
+	if req.Stream {
+		headers.Set("Accept", "text/event-stream")
+	}
 	headers.Set("x-api-key", strings.TrimSpace(channel.APIKey))
 	headers.Set("Authorization", "Bearer "+strings.TrimSpace(channel.APIKey))
 	headers.Set("anthropic-version", "2023-06-01")
@@ -630,6 +686,278 @@ func parseServerGeminiGenerateContentResponse(responseData map[string]interface{
 	result.Content = strings.TrimSpace(strings.Join(parts, "\n"))
 	result.AssistantMessage = assistantMessageFromToolCalls(result.Content, result.ToolCalls)
 	return result
+}
+
+func readServerChatStream(body io.Reader, protocol proxyProtocol, onTextDelta func(string) error) (*ChatExecutorResult, usageTokenCounts, bool, error) {
+	result := &ChatExecutorResult{}
+	var usage usageTokenCounts
+	var usageOK bool
+	scanner := bufio.NewScanner(body)
+	scanner.Buffer(make([]byte, 0, 64*1024), maxBufferedStreamBytes)
+
+	var event string
+	var dataLines []string
+	flush := func() error {
+		if len(dataLines) == 0 {
+			event = ""
+			return nil
+		}
+		payload := strings.TrimSpace(strings.Join(dataLines, "\n"))
+		eventName := event
+		event = ""
+		dataLines = dataLines[:0]
+		if payload == "" || payload == "[DONE]" {
+			return nil
+		}
+		var data map[string]interface{}
+		if err := json.Unmarshal([]byte(payload), &data); err != nil {
+			return nil
+		}
+		delta, parsedUsage, parsedUsageOK := applyServerChatStreamEvent(result, protocol, eventName, data)
+		if parsedUsageOK {
+			usage = parsedUsage
+			usageOK = true
+		}
+		if delta != "" && onTextDelta != nil {
+			if err := onTextDelta(delta); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.TrimSpace(line) == "" {
+			if err := flush(); err != nil {
+				return result, usage, usageOK, err
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "event:") {
+			event = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+			continue
+		}
+		if strings.HasPrefix(line, "data:") {
+			dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return result, usage, usageOK, err
+	}
+	if err := flush(); err != nil {
+		return result, usage, usageOK, err
+	}
+	finalizeServerChatStreamResult(result)
+	return result, usage, usageOK, nil
+}
+
+func applyServerChatStreamEvent(result *ChatExecutorResult, protocol proxyProtocol, eventName string, data map[string]interface{}) (string, usageTokenCounts, bool) {
+	if usage, ok := parseUsageTokens(data); ok {
+		switch protocol {
+		case protocolOpenAI:
+			return applyOpenAIChatStreamEvent(result, data), usage, true
+		case protocolResponses:
+			return applyOpenAIResponsesStreamEvent(result, eventName, data), usage, true
+		case protocolClaude:
+			return applyClaudeStreamEvent(result, data), usage, true
+		default:
+			return "", usage, true
+		}
+	}
+	switch protocol {
+	case protocolOpenAI:
+		return applyOpenAIChatStreamEvent(result, data), usageTokenCounts{}, false
+	case protocolResponses:
+		return applyOpenAIResponsesStreamEvent(result, eventName, data), usageTokenCounts{}, false
+	case protocolClaude:
+		return applyClaudeStreamEvent(result, data), usageTokenCounts{}, false
+	default:
+		return "", usageTokenCounts{}, false
+	}
+}
+
+func applyOpenAIChatStreamEvent(result *ChatExecutorResult, data map[string]interface{}) string {
+	choices, ok := data["choices"].([]interface{})
+	if !ok || len(choices) == 0 {
+		return ""
+	}
+	choice, ok := choices[0].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	if finishReason := stringFromValue(choice["finish_reason"]); finishReason != "" {
+		result.FinishReason = finishReason
+	}
+	delta, ok := choice["delta"].(map[string]interface{})
+	if !ok {
+		return ""
+	}
+	content := contentToText(delta["content"])
+	if content != "" {
+		result.Content += content
+	}
+	mergeOpenAIStreamToolCalls(result, delta["tool_calls"])
+	return content
+}
+
+func applyOpenAIResponsesStreamEvent(result *ChatExecutorResult, eventName string, data map[string]interface{}) string {
+	eventType := firstNonEmptyString(eventName, stringFromValue(data["type"]))
+	if status := stringFromValue(data["status"]); status != "" {
+		result.FinishReason = status
+	}
+	switch eventType {
+	case "response.output_text.delta", "response.refusal.delta":
+		delta := stringFromValue(data["delta"])
+		result.Content += delta
+		return delta
+	case "response.function_call_arguments.delta":
+		index := intFromStreamValue(data["output_index"], data["item_index"], data["index"])
+		mergeResponsesStreamToolCall(result, index, data)
+	case "response.output_item.added", "response.output_item.done":
+		if item, ok := data["item"].(map[string]interface{}); ok && stringFromValue(item["type"]) == "function_call" {
+			index := intFromStreamValue(data["output_index"], data["item_index"], data["index"])
+			mergeResponsesStreamToolCall(result, index, item)
+		}
+	case "response.completed":
+		if response, ok := data["response"].(map[string]interface{}); ok {
+			parsed := parseServerOpenAIResponsesResponse(response)
+			if strings.TrimSpace(parsed.Content) != "" {
+				result.Content = parsed.Content
+			}
+			if len(parsed.ToolCalls) > 0 {
+				result.ToolCalls = parsed.ToolCalls
+			}
+			result.FinishReason = parsed.FinishReason
+		}
+	}
+	return ""
+}
+
+func applyClaudeStreamEvent(result *ChatExecutorResult, data map[string]interface{}) string {
+	eventType := stringFromValue(data["type"])
+	switch eventType {
+	case "content_block_start":
+		if block, ok := data["content_block"].(map[string]interface{}); ok && stringFromValue(block["type"]) == "tool_use" {
+			index := intFromStreamValue(data["index"])
+			mergeClaudeStreamToolCall(result, index, block)
+		}
+	case "content_block_delta":
+		delta, _ := data["delta"].(map[string]interface{})
+		switch stringFromValue(delta["type"]) {
+		case "text_delta":
+			text := stringFromValue(delta["text"])
+			result.Content += text
+			return text
+		case "input_json_delta":
+			index := intFromStreamValue(data["index"])
+			mergeClaudeStreamToolCall(result, index, map[string]interface{}{"partial_json": stringFromValue(delta["partial_json"])})
+		}
+	case "message_delta":
+		if delta, ok := data["delta"].(map[string]interface{}); ok {
+			if stopReason := stringFromValue(delta["stop_reason"]); stopReason != "" {
+				result.FinishReason = stopReason
+			}
+		}
+	}
+	return ""
+}
+
+func mergeOpenAIStreamToolCalls(result *ChatExecutorResult, raw interface{}) {
+	items, ok := raw.([]interface{})
+	if !ok {
+		return
+	}
+	for _, item := range items {
+		call, ok := item.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		index := intFromStreamValue(call["index"])
+		for len(result.ToolCalls) <= index {
+			result.ToolCalls = append(result.ToolCalls, ChatExecutorToolCall{})
+		}
+		current := &result.ToolCalls[index]
+		if id := stringFromValue(call["id"]); id != "" {
+			current.ID = id
+		}
+		function, _ := call["function"].(map[string]interface{})
+		if name := stringFromValue(function["name"]); name != "" {
+			current.Name = name
+		}
+		if arguments := stringFromValue(function["arguments"]); arguments != "" {
+			current.Arguments += arguments
+		}
+	}
+}
+
+func mergeResponsesStreamToolCall(result *ChatExecutorResult, index int, item map[string]interface{}) {
+	for len(result.ToolCalls) <= index {
+		result.ToolCalls = append(result.ToolCalls, ChatExecutorToolCall{})
+	}
+	current := &result.ToolCalls[index]
+	if id := firstNonEmptyString(stringFromValue(item["call_id"]), stringFromValue(item["id"])); id != "" {
+		current.ID = id
+	}
+	if name := stringFromValue(item["name"]); name != "" {
+		current.Name = name
+	}
+	if arguments := firstNonEmptyString(stringFromValue(item["arguments"]), stringFromValue(item["delta"])); arguments != "" {
+		if stringFromValue(item["arguments"]) != "" {
+			current.Arguments = arguments
+		} else {
+			current.Arguments += arguments
+		}
+	}
+}
+
+func mergeClaudeStreamToolCall(result *ChatExecutorResult, index int, item map[string]interface{}) {
+	for len(result.ToolCalls) <= index {
+		result.ToolCalls = append(result.ToolCalls, ChatExecutorToolCall{})
+	}
+	current := &result.ToolCalls[index]
+	if id := stringFromValue(item["id"]); id != "" {
+		current.ID = id
+	}
+	if name := stringFromValue(item["name"]); name != "" {
+		current.Name = name
+	}
+	if partial := stringFromValue(item["partial_json"]); partial != "" {
+		current.Arguments += partial
+	}
+}
+
+func finalizeServerChatStreamResult(result *ChatExecutorResult) {
+	calls := make([]ChatExecutorToolCall, 0, len(result.ToolCalls))
+	for _, call := range result.ToolCalls {
+		if strings.TrimSpace(call.ID) == "" && strings.TrimSpace(call.Name) == "" && strings.TrimSpace(call.Arguments) == "" {
+			continue
+		}
+		calls = append(calls, call)
+	}
+	result.ToolCalls = calls
+	result.AssistantMessage = assistantMessageFromToolCalls(result.Content, result.ToolCalls)
+}
+
+func intFromStreamValue(values ...interface{}) int {
+	for _, value := range values {
+		switch v := value.(type) {
+		case float64:
+			if v >= 0 {
+				return int(v)
+			}
+		case int:
+			if v >= 0 {
+				return v
+			}
+		case json.Number:
+			parsed, err := v.Int64()
+			if err == nil && parsed >= 0 {
+				return int(parsed)
+			}
+		}
+	}
+	return 0
 }
 
 func openAIChatTools(tools []ChatExecutorTool) []map[string]interface{} {
