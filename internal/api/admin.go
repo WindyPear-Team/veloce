@@ -21,8 +21,10 @@ import (
 type SystemAPI struct{}
 
 const (
-	chatPageModeBasic    = "basic"
-	chatPageModeAdvanced = "advanced"
+	chatPageModeBasic     = "basic"
+	chatPageModeAdvanced  = "advanced"
+	authAgreementNotice   = "notice"
+	authAgreementCheckbox = "checkbox"
 )
 
 type systemSettingsResponse struct {
@@ -35,6 +37,9 @@ type systemSettingsResponse struct {
 	HomeIframeURL                string `json:"home_iframe_url"`
 	PrivacyPolicy                string `json:"privacy_policy"`
 	Terms                        string `json:"terms"`
+	PrivacyPolicyURL             string `json:"privacy_policy_url"`
+	TermsURL                     string `json:"terms_url"`
+	AuthAgreementMode            string `json:"auth_agreement_mode"`
 	Announcement                 string `json:"announcement"`
 	TopNavEnabled                bool   `json:"top_nav_enabled"`
 	TopNavItems                  string `json:"top_nav_items"`
@@ -121,6 +126,9 @@ type systemSettingsInput struct {
 	HomeIframeURL                *string `json:"home_iframe_url"`
 	PrivacyPolicy                *string `json:"privacy_policy"`
 	Terms                        *string `json:"terms"`
+	PrivacyPolicyURL             *string `json:"privacy_policy_url"`
+	TermsURL                     *string `json:"terms_url"`
+	AuthAgreementMode            *string `json:"auth_agreement_mode"`
 	Announcement                 *string `json:"announcement"`
 	TopNavEnabled                *bool   `json:"top_nav_enabled"`
 	TopNavItems                  *string `json:"top_nav_items"`
@@ -226,6 +234,15 @@ func (api *SystemAPI) UpdateSettings(c *gin.Context) {
 		}
 	}
 
+	var authAgreementMode string
+	if input.AuthAgreementMode != nil {
+		authAgreementMode = normalizeAuthAgreementMode(*input.AuthAgreementMode)
+		if authAgreementMode == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid auth agreement mode"})
+			return
+		}
+	}
+
 	if input.SiteName != nil {
 		siteName := strings.TrimSpace(*input.SiteName)
 		if siteName == "" {
@@ -250,6 +267,8 @@ func (api *SystemAPI) UpdateSettings(c *gin.Context) {
 		"home_iframe_url":                 input.HomeIframeURL,
 		"privacy_policy":                  input.PrivacyPolicy,
 		"terms":                           input.Terms,
+		"privacy_policy_url":              input.PrivacyPolicyURL,
+		"terms_url":                       input.TermsURL,
 		"announcement":                    input.Announcement,
 		"top_nav_items":                   input.TopNavItems,
 		"oidc_issuer":                     input.OIDCIssuer,
@@ -304,6 +323,12 @@ func (api *SystemAPI) UpdateSettings(c *gin.Context) {
 
 	if input.ChatPageMode != nil {
 		if err := model.SetSystemSetting("chat_page_mode", chatPageMode); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update system settings"})
+			return
+		}
+	}
+	if input.AuthAgreementMode != nil {
+		if err := model.SetSystemSetting("auth_agreement_mode", authAgreementMode); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update system settings"})
 			return
 		}
@@ -366,6 +391,9 @@ func currentPublicSystemSettings() systemSettingsResponse {
 		HomeIframeURL:               settingString("home_iframe_url", ""),
 		PrivacyPolicy:               settingString("privacy_policy", ""),
 		Terms:                       settingString("terms", ""),
+		PrivacyPolicyURL:            settingString("privacy_policy_url", ""),
+		TermsURL:                    settingString("terms_url", ""),
+		AuthAgreementMode:           currentAuthAgreementMode(),
 		Announcement:                settingString("announcement", ""),
 		TopNavEnabled:               settingBool("top_nav_enabled", false),
 		TopNavItems:                 settingString("top_nav_items", ""),
@@ -460,6 +488,31 @@ func currentChatPageMode() string {
 	return mode
 }
 
+func currentAuthAgreementMode() string {
+	mode := normalizeAuthAgreementMode(settingString("auth_agreement_mode", authAgreementNotice))
+	if mode == "" {
+		return authAgreementNotice
+	}
+	return mode
+}
+
+func RequireAuthAgreementAccepted(accepted bool) error {
+	if !authAgreementRequired() || accepted {
+		return nil
+	}
+	return errors.New("agreement confirmation is required")
+}
+
+func authAgreementRequired() bool {
+	if currentAuthAgreementMode() != authAgreementCheckbox {
+		return false
+	}
+	return strings.TrimSpace(settingString("privacy_policy", "")) != "" ||
+		strings.TrimSpace(settingString("terms", "")) != "" ||
+		strings.TrimSpace(settingString("privacy_policy_url", "")) != "" ||
+		strings.TrimSpace(settingString("terms_url", "")) != ""
+}
+
 func normalizeChatPageMode(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "", chatPageModeBasic:
@@ -468,6 +521,26 @@ func normalizeChatPageMode(value string) string {
 		return chatPageModeAdvanced
 	default:
 		return ""
+	}
+}
+
+func normalizeAuthAgreementMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", authAgreementNotice:
+		return authAgreementNotice
+	case authAgreementCheckbox:
+		return authAgreementCheckbox
+	default:
+		return ""
+	}
+}
+
+func ParseAgreementAccepted(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "on", "accepted":
+		return true
+	default:
+		return false
 	}
 }
 

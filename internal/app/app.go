@@ -129,11 +129,16 @@ func Run() error {
 	{
 		auth.POST("/password/login", func(c *gin.Context) {
 			var input struct {
-				Identifier   string `json:"identifier"`
-				Password     string `json:"password"`
-				CaptchaToken string `json:"captcha_token"`
+				Identifier        string `json:"identifier"`
+				Password          string `json:"password"`
+				CaptchaToken      string `json:"captcha_token"`
+				AgreementAccepted bool   `json:"agreement_accepted"`
 			}
 			if err := c.ShouldBindJSON(&input); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+			if err := api.RequireAuthAgreementAccepted(input.AgreementAccepted); err != nil {
 				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 				return
 			}
@@ -150,14 +155,19 @@ func Run() error {
 		})
 		auth.POST("/password/register", func(c *gin.Context) {
 			var input struct {
-				Username     string `json:"username"`
-				Email        string `json:"email"`
-				Password     string `json:"password"`
-				EmailCode    string `json:"email_code"`
-				CaptchaToken string `json:"captcha_token"`
-				ReferralCode string `json:"referral_code"`
+				Username          string `json:"username"`
+				Email             string `json:"email"`
+				Password          string `json:"password"`
+				EmailCode         string `json:"email_code"`
+				CaptchaToken      string `json:"captcha_token"`
+				ReferralCode      string `json:"referral_code"`
+				AgreementAccepted bool   `json:"agreement_accepted"`
 			}
 			if err := c.ShouldBindJSON(&input); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+			if err := api.RequireAuthAgreementAccepted(input.AgreementAccepted); err != nil {
 				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 				return
 			}
@@ -206,6 +216,10 @@ func Run() error {
 			}
 			if referralCode := model.NormalizeReferralCode(c.Query("ref")); referralCode != "" {
 				setReferralCookie(c, referralCode, 30*24*60*60)
+			}
+			if err := api.RequireAuthAgreementAccepted(api.ParseAgreementAccepted(c.Query("agreement_accepted"))); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
 			}
 			state, err := newOIDCState()
 			if err != nil {

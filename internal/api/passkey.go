@@ -31,9 +31,14 @@ func (api *PasskeyAPI) BeginLogin(c *gin.Context) {
 		return
 	}
 	var input struct {
-		Identifier string `json:"identifier"`
+		Identifier        string `json:"identifier"`
+		AgreementAccepted bool   `json:"agreement_accepted"`
 	}
 	_ = c.ShouldBindJSON(&input)
+	if err := RequireAuthAgreementAccepted(input.AgreementAccepted); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	_, rpID, origin, ok := passkeyRequestContext(c)
 	if !ok {
 		return
