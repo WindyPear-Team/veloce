@@ -16,8 +16,27 @@ var modelProviderPresets = []ModelProvider{
 	{ID: "meta", Name: "Meta", IconURL: "https://cdn.jsdelivr.net/npm/simple-icons@latest/icons/meta.svg"},
 	{ID: "mistral", Name: "Mistral AI", IconURL: "https://cdn.jsdelivr.net/npm/simple-icons@latest/icons/mistralai.svg"},
 	{ID: "qwen", Name: "Qwen", IconURL: "https://cdn.jsdelivr.net/npm/simple-icons@latest/icons/alibabacloud.svg"},
-	{ID: "moonshot", Name: "Moonshot AI", IconURL: ""},
-	{ID: "zhipu", Name: "Zhipu AI", IconURL: ""},
+	{ID: "moonshot", Name: "Moonshot AI", IconURL: "https://www.moonshot.cn/favicon.ico"},
+	{ID: "zhipu", Name: "Zhipu AI", IconURL: "https://open.bigmodel.cn/favicon.ico"},
+	{ID: "xai", Name: "xAI", IconURL: "https://cdn.jsdelivr.net/npm/simple-icons@latest/icons/x.svg"},
+	{ID: "groq", Name: "Groq", IconURL: "https://cdn.jsdelivr.net/npm/simple-icons@latest/icons/groq.svg"},
+	{ID: "cohere", Name: "Cohere", IconURL: "https://cdn.jsdelivr.net/npm/simple-icons@latest/icons/cohere.svg"},
+	{ID: "perplexity", Name: "Perplexity", IconURL: "https://cdn.jsdelivr.net/npm/simple-icons@latest/icons/perplexity.svg"},
+	{ID: "minimax", Name: "MiniMax", IconURL: "https://www.minimaxi.com/favicon.ico"},
+	{ID: "baichuan", Name: "Baichuan AI", IconURL: "https://www.baichuan-ai.com/favicon.ico"},
+	{ID: "stepfun", Name: "StepFun", IconURL: "https://www.stepfun.com/favicon.ico"},
+	{ID: "yi", Name: "01.AI", IconURL: "https://www.01.ai/favicon.ico"},
+	{ID: "baidu", Name: "Baidu", IconURL: "https://cdn.jsdelivr.net/npm/simple-icons@latest/icons/baidu.svg"},
+	{ID: "tencent", Name: "Tencent", IconURL: "https://cloud.tencent.com/favicon.ico"},
+	{ID: "doubao", Name: "Doubao", IconURL: "https://www.volcengine.com/favicon.ico"},
+	{ID: "siliconflow", Name: "SiliconFlow", IconURL: "https://siliconflow.cn/favicon.ico"},
+	{ID: "openrouter", Name: "OpenRouter", IconURL: "https://openrouter.ai/favicon.ico"},
+	{ID: "huggingface", Name: "Hugging Face", IconURL: "https://cdn.jsdelivr.net/npm/simple-icons@latest/icons/huggingface.svg"},
+	{ID: "together", Name: "Together AI", IconURL: "https://www.together.ai/favicon.ico"},
+	{ID: "fireworks", Name: "Fireworks AI", IconURL: "https://fireworks.ai/favicon.ico"},
+	{ID: "cloudflare", Name: "Cloudflare", IconURL: "https://cdn.jsdelivr.net/npm/simple-icons@latest/icons/cloudflare.svg"},
+	{ID: "ollama", Name: "Ollama", IconURL: "https://cdn.jsdelivr.net/npm/simple-icons@latest/icons/ollama.svg"},
+	{ID: "jina", Name: "Jina AI", IconURL: "https://cdn.jsdelivr.net/npm/simple-icons@latest/icons/jina.svg"},
 	{ID: "custom", Name: "Custom", IconURL: ""},
 }
 
@@ -77,6 +96,44 @@ func InferModelProvider(modelName string) string {
 		return "moonshot"
 	case strings.Contains(name, "glm"), strings.Contains(name, "zhipu"):
 		return "zhipu"
+	case strings.Contains(name, "grok"), strings.Contains(name, "xai"), strings.Contains(name, "x-ai"):
+		return "xai"
+	case strings.Contains(name, "groq"):
+		return "groq"
+	case strings.Contains(name, "command"), strings.Contains(name, "cohere"):
+		return "cohere"
+	case strings.Contains(name, "sonar"), strings.Contains(name, "perplexity"):
+		return "perplexity"
+	case strings.Contains(name, "abab"), strings.Contains(name, "minimax"):
+		return "minimax"
+	case strings.Contains(name, "baichuan"):
+		return "baichuan"
+	case strings.Contains(name, "stepfun"), strings.HasPrefix(name, "step-"), strings.HasPrefix(name, "step_"):
+		return "stepfun"
+	case strings.HasPrefix(name, "yi-"), strings.HasPrefix(name, "yi_"), strings.Contains(name, "01-ai"), strings.Contains(name, "lingyi"):
+		return "yi"
+	case strings.Contains(name, "ernie"), strings.Contains(name, "wenxin"), strings.Contains(name, "baidu"):
+		return "baidu"
+	case strings.Contains(name, "hunyuan"), strings.Contains(name, "tencent"):
+		return "tencent"
+	case strings.Contains(name, "doubao"), strings.Contains(name, "volcengine"), strings.Contains(name, "volc-"):
+		return "doubao"
+	case strings.Contains(name, "siliconflow"):
+		return "siliconflow"
+	case strings.Contains(name, "openrouter"):
+		return "openrouter"
+	case strings.Contains(name, "huggingface"), strings.Contains(name, "hf-"):
+		return "huggingface"
+	case strings.Contains(name, "together"):
+		return "together"
+	case strings.Contains(name, "fireworks"):
+		return "fireworks"
+	case strings.Contains(name, "cloudflare"):
+		return "cloudflare"
+	case strings.Contains(name, "ollama"):
+		return "ollama"
+	case strings.Contains(name, "jina"):
+		return "jina"
 	case strings.Contains(name, "gpt"), strings.Contains(name, "dall-e"), strings.Contains(name, "dalle"), strings.Contains(name, "o1"), strings.Contains(name, "o3"), strings.Contains(name, "o4"):
 		return "openai"
 	default:
