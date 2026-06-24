@@ -43,6 +43,7 @@ type systemSettingsResponse struct {
 	Announcement                 string `json:"announcement"`
 	TopNavEnabled                bool   `json:"top_nav_enabled"`
 	TopNavItems                  string `json:"top_nav_items"`
+	PageLayouts                  string `json:"page_layouts"`
 	SidebarDashboardEnabled      bool   `json:"sidebar_dashboard_enabled"`
 	SidebarUsageEnabled          bool   `json:"sidebar_usage_enabled"`
 	SidebarWalletEnabled         bool   `json:"sidebar_wallet_enabled"`
@@ -132,6 +133,7 @@ type systemSettingsInput struct {
 	Announcement                 *string `json:"announcement"`
 	TopNavEnabled                *bool   `json:"top_nav_enabled"`
 	TopNavItems                  *string `json:"top_nav_items"`
+	PageLayouts                  *string `json:"page_layouts"`
 	SidebarDashboardEnabled      *bool   `json:"sidebar_dashboard_enabled"`
 	SidebarUsageEnabled          *bool   `json:"sidebar_usage_enabled"`
 	SidebarWalletEnabled         *bool   `json:"sidebar_wallet_enabled"`
@@ -271,6 +273,7 @@ func (api *SystemAPI) UpdateSettings(c *gin.Context) {
 		"terms_url":                       input.TermsURL,
 		"announcement":                    input.Announcement,
 		"top_nav_items":                   input.TopNavItems,
+		"page_layouts":                    input.PageLayouts,
 		"oidc_issuer":                     input.OIDCIssuer,
 		"oidc_client_id":                  input.OIDCClientID,
 		"oidc_client_secret":              input.OIDCClientSecret,
@@ -397,6 +400,7 @@ func currentPublicSystemSettings() systemSettingsResponse {
 		Announcement:                settingString("announcement", ""),
 		TopNavEnabled:               settingBool("top_nav_enabled", false),
 		TopNavItems:                 settingString("top_nav_items", ""),
+		PageLayouts:                 settingString("page_layouts", "{}"),
 		SidebarDashboardEnabled:     settingBool("sidebar_dashboard_enabled", true),
 		SidebarUsageEnabled:         settingBool("sidebar_usage_enabled", true),
 		SidebarWalletEnabled:        settingBool("sidebar_wallet_enabled", true),

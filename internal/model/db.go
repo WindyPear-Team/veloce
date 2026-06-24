@@ -314,6 +314,7 @@ func EnsureDefaultSystemSettings() error {
 		"announcement":                    "",
 		"top_nav_enabled":                 "false",
 		"top_nav_items":                   "",
+		"page_layouts":                    "{}",
 		"sidebar_dashboard_enabled":       "true",
 		"sidebar_usage_enabled":           "true",
 		"sidebar_wallet_enabled":          "true",
