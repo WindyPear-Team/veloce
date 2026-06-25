@@ -971,6 +971,9 @@ func uniqueSortedModelNames(modelNames []string) []string {
 }
 
 func currentAPIKey(c *gin.Context) *model.APIKey {
+	if c == nil {
+		return nil
+	}
 	value, exists := c.Get("api_key")
 	if !exists {
 		return nil
@@ -2023,8 +2026,8 @@ func writeJSONProxyResponse(c *gin.Context, status int, body []byte) {
 func logUpstreamRequestFailure(c *gin.Context, channel *model.Channel, upstreamURL string, body []byte, err error) {
 	log.Printf(
 		"upstream request failed: method=%s path=%s channel_id=%d upstream_url=%s request_body=%s error=%v",
-		c.Request.Method,
-		c.Request.URL.RequestURI(),
+		requestMethodForLog(c),
+		requestPathForLog(c),
 		channel.ID,
 		redactedUpstreamURL(upstreamURL),
 		redactedRequestBodyPreview(body),
@@ -2035,14 +2038,28 @@ func logUpstreamRequestFailure(c *gin.Context, channel *model.Channel, upstreamU
 func logUpstreamError(c *gin.Context, channel *model.Channel, upstreamURL string, status int, requestBody []byte, responseBody []byte) {
 	log.Printf(
 		"upstream returned error: method=%s path=%s channel_id=%d upstream_url=%s status=%d request_body=%s response_body=%q",
-		c.Request.Method,
-		c.Request.URL.RequestURI(),
+		requestMethodForLog(c),
+		requestPathForLog(c),
 		channel.ID,
 		redactedUpstreamURL(upstreamURL),
 		status,
 		redactedRequestBodyPreview(requestBody),
 		proxyBodyPreview(responseBody, 1000),
 	)
+}
+
+func requestMethodForLog(c *gin.Context) string {
+	if c == nil || c.Request == nil {
+		return ""
+	}
+	return c.Request.Method
+}
+
+func requestPathForLog(c *gin.Context) string {
+	if c == nil || c.Request == nil || c.Request.URL == nil {
+		return ""
+	}
+	return c.Request.URL.RequestURI()
 }
 
 func redactedUpstreamURL(rawURL string) string {

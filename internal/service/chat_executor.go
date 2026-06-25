@@ -2,6 +2,7 @@ package service
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -40,6 +41,7 @@ type ChatExecutorTool struct {
 // UserChannelID, when non-zero, pins the request to a single user-facing channel
 // (渠道) exactly like an API key bound to that channel would.
 type ChatExecutorRequest struct {
+	Context       context.Context
 	ModelName     string
 	UserChannelID uint
 	Messages      []ChatExecutorMessage
@@ -132,7 +134,10 @@ func ExecuteServerChatCompletion(c *gin.Context, user *model.User, req ChatExecu
 	if err != nil {
 		return nil, newChatExecutorError(http.StatusBadRequest, err.Error())
 	}
-	if c != nil && c.Request != nil {
+	if req.Context != nil {
+		prepared.Context = req.Context
+	}
+	if prepared.Context == nil && c != nil && c.Request != nil {
 		prepared.Context = c.Request.Context()
 	}
 
