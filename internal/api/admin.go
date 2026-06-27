@@ -1251,32 +1251,33 @@ type modelSyncApplyInput struct {
 }
 
 type modelConfigInput struct {
-	ChannelID                   uint                `json:"channel_id"`
-	ModelID                     uint                `json:"model_id"`
-	ModelName                   string              `json:"model_name"`
-	UpstreamModelName           string              `json:"upstream_model_name"`
-	Provider                    string              `json:"provider"`
-	ProviderIconURL             string              `json:"provider_icon_url"`
-	QuotaType                   int                 `json:"quota_type"`
-	InputPrice                  decimal.Decimal     `json:"input_price"`
-	OutputPrice                 decimal.Decimal     `json:"output_price"`
-	CachedInputPrice            decimal.Decimal     `json:"cached_input_price"`
-	CacheWriteInputPrice        decimal.Decimal     `json:"cache_write_input_price"`
-	CacheWrite1hInputPrice      decimal.Decimal     `json:"cache_write_1h_input_price"`
-	ImageInputPrice             decimal.Decimal     `json:"image_input_price"`
-	ImageOutputPrice            decimal.Decimal     `json:"image_output_price"`
-	AudioInputPrice             decimal.Decimal     `json:"audio_input_price"`
-	AudioOutputPrice            decimal.Decimal     `json:"audio_output_price"`
-	InputPriceTiers             model.PriceTierList `json:"input_price_tiers"`
-	OutputPriceTiers            model.PriceTierList `json:"output_price_tiers"`
-	CachedInputPriceTiers       model.PriceTierList `json:"cached_input_price_tiers"`
-	CacheWriteInputPriceTiers   model.PriceTierList `json:"cache_write_input_price_tiers"`
-	CacheWrite1hInputPriceTiers model.PriceTierList `json:"cache_write_1h_input_price_tiers"`
-	ImageInputPriceTiers        model.PriceTierList `json:"image_input_price_tiers"`
-	ImageOutputPriceTiers       model.PriceTierList `json:"image_output_price_tiers"`
-	AudioInputPriceTiers        model.PriceTierList `json:"audio_input_price_tiers"`
-	AudioOutputPriceTiers       model.PriceTierList `json:"audio_output_price_tiers"`
-	Enabled                     *bool               `json:"enabled"`
+	ChannelID                   uint                     `json:"channel_id"`
+	ModelID                     uint                     `json:"model_id"`
+	ModelName                   string                   `json:"model_name"`
+	UpstreamModelName           string                   `json:"upstream_model_name"`
+	Provider                    string                   `json:"provider"`
+	ProviderIconURL             string                   `json:"provider_icon_url"`
+	QuotaType                   int                      `json:"quota_type"`
+	InputPrice                  decimal.Decimal          `json:"input_price"`
+	OutputPrice                 decimal.Decimal          `json:"output_price"`
+	CachedInputPrice            decimal.Decimal          `json:"cached_input_price"`
+	CacheWriteInputPrice        decimal.Decimal          `json:"cache_write_input_price"`
+	CacheWrite1hInputPrice      decimal.Decimal          `json:"cache_write_1h_input_price"`
+	ImageInputPrice             decimal.Decimal          `json:"image_input_price"`
+	ImageOutputPrice            decimal.Decimal          `json:"image_output_price"`
+	AudioInputPrice             decimal.Decimal          `json:"audio_input_price"`
+	AudioOutputPrice            decimal.Decimal          `json:"audio_output_price"`
+	InputPriceTiers             model.PriceTierList      `json:"input_price_tiers"`
+	OutputPriceTiers            model.PriceTierList      `json:"output_price_tiers"`
+	CachedInputPriceTiers       model.PriceTierList      `json:"cached_input_price_tiers"`
+	CacheWriteInputPriceTiers   model.PriceTierList      `json:"cache_write_input_price_tiers"`
+	CacheWrite1hInputPriceTiers model.PriceTierList      `json:"cache_write_1h_input_price_tiers"`
+	ImageInputPriceTiers        model.PriceTierList      `json:"image_input_price_tiers"`
+	ImageOutputPriceTiers       model.PriceTierList      `json:"image_output_price_tiers"`
+	AudioInputPriceTiers        model.PriceTierList      `json:"audio_input_price_tiers"`
+	AudioOutputPriceTiers       model.PriceTierList      `json:"audio_output_price_tiers"`
+	VideoBillingConfig          model.VideoBillingConfig `json:"video_billing_config"`
+	Enabled                     *bool                    `json:"enabled"`
 }
 
 type publicModelCatalogItem struct {
@@ -1306,52 +1307,55 @@ type publicModelCatalogItem struct {
 	ImageOutputPriceTiers       model.PriceTierList      `json:"image_output_price_tiers"`
 	AudioInputPriceTiers        model.PriceTierList      `json:"audio_input_price_tiers"`
 	AudioOutputPriceTiers       model.PriceTierList      `json:"audio_output_price_tiers"`
+	VideoBillingConfig          model.VideoBillingConfig `json:"video_billing_config"`
 	UserChannels                []publicModelUserChannel `json:"user_channels"`
 	ReferencedModels            []publicModelCatalogItem `json:"referenced_models,omitempty"`
 }
 
 type publicModelUserChannel struct {
-	ID                                   uint                `json:"id"`
-	Name                                 string              `json:"name"`
-	Description                          string              `json:"description"`
-	Multiplier                           decimal.Decimal     `json:"multiplier"`
-	QuotaType                            int                 `json:"quota_type"`
-	InputPrice                           decimal.Decimal     `json:"input_price"`
-	OutputPrice                          decimal.Decimal     `json:"output_price"`
-	CachedInputPrice                     decimal.Decimal     `json:"cached_input_price"`
-	CacheWriteInputPrice                 decimal.Decimal     `json:"cache_write_input_price"`
-	CacheWrite1hInputPrice               decimal.Decimal     `json:"cache_write_1h_input_price"`
-	ImageInputPrice                      decimal.Decimal     `json:"image_input_price"`
-	ImageOutputPrice                     decimal.Decimal     `json:"image_output_price"`
-	AudioInputPrice                      decimal.Decimal     `json:"audio_input_price"`
-	AudioOutputPrice                     decimal.Decimal     `json:"audio_output_price"`
-	InputPriceTiers                      model.PriceTierList `json:"input_price_tiers"`
-	OutputPriceTiers                     model.PriceTierList `json:"output_price_tiers"`
-	CachedInputPriceTiers                model.PriceTierList `json:"cached_input_price_tiers"`
-	CacheWriteInputPriceTiers            model.PriceTierList `json:"cache_write_input_price_tiers"`
-	CacheWrite1hInputPriceTiers          model.PriceTierList `json:"cache_write_1h_input_price_tiers"`
-	ImageInputPriceTiers                 model.PriceTierList `json:"image_input_price_tiers"`
-	ImageOutputPriceTiers                model.PriceTierList `json:"image_output_price_tiers"`
-	AudioInputPriceTiers                 model.PriceTierList `json:"audio_input_price_tiers"`
-	AudioOutputPriceTiers                model.PriceTierList `json:"audio_output_price_tiers"`
-	EffectiveInputPrice                  decimal.Decimal     `json:"effective_input_price"`
-	EffectiveOutputPrice                 decimal.Decimal     `json:"effective_output_price"`
-	EffectiveCachedInputPrice            decimal.Decimal     `json:"effective_cached_input_price"`
-	EffectiveCacheWriteInputPrice        decimal.Decimal     `json:"effective_cache_write_input_price"`
-	EffectiveCacheWrite1hInputPrice      decimal.Decimal     `json:"effective_cache_write_1h_input_price"`
-	EffectiveImageInputPrice             decimal.Decimal     `json:"effective_image_input_price"`
-	EffectiveImageOutputPrice            decimal.Decimal     `json:"effective_image_output_price"`
-	EffectiveAudioInputPrice             decimal.Decimal     `json:"effective_audio_input_price"`
-	EffectiveAudioOutputPrice            decimal.Decimal     `json:"effective_audio_output_price"`
-	EffectiveInputPriceTiers             model.PriceTierList `json:"effective_input_price_tiers"`
-	EffectiveOutputPriceTiers            model.PriceTierList `json:"effective_output_price_tiers"`
-	EffectiveCachedInputPriceTiers       model.PriceTierList `json:"effective_cached_input_price_tiers"`
-	EffectiveCacheWriteInputPriceTiers   model.PriceTierList `json:"effective_cache_write_input_price_tiers"`
-	EffectiveCacheWrite1hInputPriceTiers model.PriceTierList `json:"effective_cache_write_1h_input_price_tiers"`
-	EffectiveImageInputPriceTiers        model.PriceTierList `json:"effective_image_input_price_tiers"`
-	EffectiveImageOutputPriceTiers       model.PriceTierList `json:"effective_image_output_price_tiers"`
-	EffectiveAudioInputPriceTiers        model.PriceTierList `json:"effective_audio_input_price_tiers"`
-	EffectiveAudioOutputPriceTiers       model.PriceTierList `json:"effective_audio_output_price_tiers"`
+	ID                                   uint                     `json:"id"`
+	Name                                 string                   `json:"name"`
+	Description                          string                   `json:"description"`
+	Multiplier                           decimal.Decimal          `json:"multiplier"`
+	QuotaType                            int                      `json:"quota_type"`
+	InputPrice                           decimal.Decimal          `json:"input_price"`
+	OutputPrice                          decimal.Decimal          `json:"output_price"`
+	CachedInputPrice                     decimal.Decimal          `json:"cached_input_price"`
+	CacheWriteInputPrice                 decimal.Decimal          `json:"cache_write_input_price"`
+	CacheWrite1hInputPrice               decimal.Decimal          `json:"cache_write_1h_input_price"`
+	ImageInputPrice                      decimal.Decimal          `json:"image_input_price"`
+	ImageOutputPrice                     decimal.Decimal          `json:"image_output_price"`
+	AudioInputPrice                      decimal.Decimal          `json:"audio_input_price"`
+	AudioOutputPrice                     decimal.Decimal          `json:"audio_output_price"`
+	InputPriceTiers                      model.PriceTierList      `json:"input_price_tiers"`
+	OutputPriceTiers                     model.PriceTierList      `json:"output_price_tiers"`
+	CachedInputPriceTiers                model.PriceTierList      `json:"cached_input_price_tiers"`
+	CacheWriteInputPriceTiers            model.PriceTierList      `json:"cache_write_input_price_tiers"`
+	CacheWrite1hInputPriceTiers          model.PriceTierList      `json:"cache_write_1h_input_price_tiers"`
+	ImageInputPriceTiers                 model.PriceTierList      `json:"image_input_price_tiers"`
+	ImageOutputPriceTiers                model.PriceTierList      `json:"image_output_price_tiers"`
+	AudioInputPriceTiers                 model.PriceTierList      `json:"audio_input_price_tiers"`
+	AudioOutputPriceTiers                model.PriceTierList      `json:"audio_output_price_tiers"`
+	EffectiveInputPrice                  decimal.Decimal          `json:"effective_input_price"`
+	EffectiveOutputPrice                 decimal.Decimal          `json:"effective_output_price"`
+	EffectiveCachedInputPrice            decimal.Decimal          `json:"effective_cached_input_price"`
+	EffectiveCacheWriteInputPrice        decimal.Decimal          `json:"effective_cache_write_input_price"`
+	EffectiveCacheWrite1hInputPrice      decimal.Decimal          `json:"effective_cache_write_1h_input_price"`
+	EffectiveImageInputPrice             decimal.Decimal          `json:"effective_image_input_price"`
+	EffectiveImageOutputPrice            decimal.Decimal          `json:"effective_image_output_price"`
+	EffectiveAudioInputPrice             decimal.Decimal          `json:"effective_audio_input_price"`
+	EffectiveAudioOutputPrice            decimal.Decimal          `json:"effective_audio_output_price"`
+	EffectiveInputPriceTiers             model.PriceTierList      `json:"effective_input_price_tiers"`
+	EffectiveOutputPriceTiers            model.PriceTierList      `json:"effective_output_price_tiers"`
+	EffectiveCachedInputPriceTiers       model.PriceTierList      `json:"effective_cached_input_price_tiers"`
+	EffectiveCacheWriteInputPriceTiers   model.PriceTierList      `json:"effective_cache_write_input_price_tiers"`
+	EffectiveCacheWrite1hInputPriceTiers model.PriceTierList      `json:"effective_cache_write_1h_input_price_tiers"`
+	EffectiveImageInputPriceTiers        model.PriceTierList      `json:"effective_image_input_price_tiers"`
+	EffectiveImageOutputPriceTiers       model.PriceTierList      `json:"effective_image_output_price_tiers"`
+	EffectiveAudioInputPriceTiers        model.PriceTierList      `json:"effective_audio_input_price_tiers"`
+	EffectiveAudioOutputPriceTiers       model.PriceTierList      `json:"effective_audio_output_price_tiers"`
+	VideoBillingConfig                   model.VideoBillingConfig `json:"video_billing_config"`
+	EffectiveVideoBillingConfig          model.VideoBillingConfig `json:"effective_video_billing_config"`
 }
 
 type publicModelCatalogAggregate struct {
@@ -1366,82 +1370,85 @@ type pricingResponse struct {
 }
 
 type pricingData struct {
-	Unit                            string                             `json:"unit"`
-	ModelRatio                      map[string]decimal.Decimal         `json:"model_ratio"`
-	CompletionRatio                 map[string]decimal.Decimal         `json:"completion_ratio"`
-	InputPrice                      map[string]decimal.Decimal         `json:"input_price"`
-	OutputPrice                     map[string]decimal.Decimal         `json:"output_price"`
-	CachedInputPrice                map[string]decimal.Decimal         `json:"cached_input_price"`
-	CacheReadInputPrice             map[string]decimal.Decimal         `json:"cache_read_input_price"`
-	CacheWriteInputPrice            map[string]decimal.Decimal         `json:"cache_write_input_price"`
-	CacheWrite1hInputPrice          map[string]decimal.Decimal         `json:"cache_write_1h_input_price"`
-	ImageInputPrice                 map[string]decimal.Decimal         `json:"image_input_price"`
-	ImageOutputPrice                map[string]decimal.Decimal         `json:"image_output_price"`
-	AudioInputPrice                 map[string]decimal.Decimal         `json:"audio_input_price"`
-	AudioOutputPrice                map[string]decimal.Decimal         `json:"audio_output_price"`
-	QuotaType                       map[string]int                     `json:"quota_type"`
-	InputPriceTiers                 map[string]model.PriceTierList     `json:"input_price_tiers"`
-	OutputPriceTiers                map[string]model.PriceTierList     `json:"output_price_tiers"`
-	CachedInputPriceTiers           map[string]model.PriceTierList     `json:"cached_input_price_tiers"`
-	CacheReadInputPriceTiers        map[string]model.PriceTierList     `json:"cache_read_input_price_tiers"`
-	CacheWriteInputPriceTiers       map[string]model.PriceTierList     `json:"cache_write_input_price_tiers"`
-	CacheWrite1hInputPriceTiers     map[string]model.PriceTierList     `json:"cache_write_1h_input_price_tiers"`
-	ImageInputPriceTiers            map[string]model.PriceTierList     `json:"image_input_price_tiers"`
-	ImageOutputPriceTiers           map[string]model.PriceTierList     `json:"image_output_price_tiers"`
-	AudioInputPriceTiers            map[string]model.PriceTierList     `json:"audio_input_price_tiers"`
-	AudioOutputPriceTiers           map[string]model.PriceTierList     `json:"audio_output_price_tiers"`
-	BaseInputPrice                  map[string]decimal.Decimal         `json:"base_input_price"`
-	BaseOutputPrice                 map[string]decimal.Decimal         `json:"base_output_price"`
-	BaseCachedInputPrice            map[string]decimal.Decimal         `json:"base_cached_input_price"`
-	BaseCacheReadInputPrice         map[string]decimal.Decimal         `json:"base_cache_read_input_price"`
-	BaseCacheWriteInputPrice        map[string]decimal.Decimal         `json:"base_cache_write_input_price"`
-	BaseCacheWrite1hInputPrice      map[string]decimal.Decimal         `json:"base_cache_write_1h_input_price"`
-	BaseImageInputPrice             map[string]decimal.Decimal         `json:"base_image_input_price"`
-	BaseImageOutputPrice            map[string]decimal.Decimal         `json:"base_image_output_price"`
-	BaseAudioInputPrice             map[string]decimal.Decimal         `json:"base_audio_input_price"`
-	BaseAudioOutputPrice            map[string]decimal.Decimal         `json:"base_audio_output_price"`
-	BaseQuotaType                   map[string]int                     `json:"base_quota_type"`
-	BaseInputPriceTiers             map[string]model.PriceTierList     `json:"base_input_price_tiers"`
-	BaseOutputPriceTiers            map[string]model.PriceTierList     `json:"base_output_price_tiers"`
-	BaseCachedInputPriceTiers       map[string]model.PriceTierList     `json:"base_cached_input_price_tiers"`
-	BaseCacheReadInputPriceTiers    map[string]model.PriceTierList     `json:"base_cache_read_input_price_tiers"`
-	BaseCacheWriteInputPriceTiers   map[string]model.PriceTierList     `json:"base_cache_write_input_price_tiers"`
-	BaseCacheWrite1hInputPriceTiers map[string]model.PriceTierList     `json:"base_cache_write_1h_input_price_tiers"`
-	BaseImageInputPriceTiers        map[string]model.PriceTierList     `json:"base_image_input_price_tiers"`
-	BaseImageOutputPriceTiers       map[string]model.PriceTierList     `json:"base_image_output_price_tiers"`
-	BaseAudioInputPriceTiers        map[string]model.PriceTierList     `json:"base_audio_input_price_tiers"`
-	BaseAudioOutputPriceTiers       map[string]model.PriceTierList     `json:"base_audio_output_price_tiers"`
-	UserChannelPrices               map[string]pricingUserChannelPrice `json:"user_channel_prices"`
+	Unit                            string                              `json:"unit"`
+	ModelRatio                      map[string]decimal.Decimal          `json:"model_ratio"`
+	CompletionRatio                 map[string]decimal.Decimal          `json:"completion_ratio"`
+	InputPrice                      map[string]decimal.Decimal          `json:"input_price"`
+	OutputPrice                     map[string]decimal.Decimal          `json:"output_price"`
+	CachedInputPrice                map[string]decimal.Decimal          `json:"cached_input_price"`
+	CacheReadInputPrice             map[string]decimal.Decimal          `json:"cache_read_input_price"`
+	CacheWriteInputPrice            map[string]decimal.Decimal          `json:"cache_write_input_price"`
+	CacheWrite1hInputPrice          map[string]decimal.Decimal          `json:"cache_write_1h_input_price"`
+	ImageInputPrice                 map[string]decimal.Decimal          `json:"image_input_price"`
+	ImageOutputPrice                map[string]decimal.Decimal          `json:"image_output_price"`
+	AudioInputPrice                 map[string]decimal.Decimal          `json:"audio_input_price"`
+	AudioOutputPrice                map[string]decimal.Decimal          `json:"audio_output_price"`
+	QuotaType                       map[string]int                      `json:"quota_type"`
+	InputPriceTiers                 map[string]model.PriceTierList      `json:"input_price_tiers"`
+	OutputPriceTiers                map[string]model.PriceTierList      `json:"output_price_tiers"`
+	CachedInputPriceTiers           map[string]model.PriceTierList      `json:"cached_input_price_tiers"`
+	CacheReadInputPriceTiers        map[string]model.PriceTierList      `json:"cache_read_input_price_tiers"`
+	CacheWriteInputPriceTiers       map[string]model.PriceTierList      `json:"cache_write_input_price_tiers"`
+	CacheWrite1hInputPriceTiers     map[string]model.PriceTierList      `json:"cache_write_1h_input_price_tiers"`
+	ImageInputPriceTiers            map[string]model.PriceTierList      `json:"image_input_price_tiers"`
+	ImageOutputPriceTiers           map[string]model.PriceTierList      `json:"image_output_price_tiers"`
+	AudioInputPriceTiers            map[string]model.PriceTierList      `json:"audio_input_price_tiers"`
+	AudioOutputPriceTiers           map[string]model.PriceTierList      `json:"audio_output_price_tiers"`
+	VideoBillingConfig              map[string]model.VideoBillingConfig `json:"video_billing_config"`
+	BaseInputPrice                  map[string]decimal.Decimal          `json:"base_input_price"`
+	BaseOutputPrice                 map[string]decimal.Decimal          `json:"base_output_price"`
+	BaseCachedInputPrice            map[string]decimal.Decimal          `json:"base_cached_input_price"`
+	BaseCacheReadInputPrice         map[string]decimal.Decimal          `json:"base_cache_read_input_price"`
+	BaseCacheWriteInputPrice        map[string]decimal.Decimal          `json:"base_cache_write_input_price"`
+	BaseCacheWrite1hInputPrice      map[string]decimal.Decimal          `json:"base_cache_write_1h_input_price"`
+	BaseImageInputPrice             map[string]decimal.Decimal          `json:"base_image_input_price"`
+	BaseImageOutputPrice            map[string]decimal.Decimal          `json:"base_image_output_price"`
+	BaseAudioInputPrice             map[string]decimal.Decimal          `json:"base_audio_input_price"`
+	BaseAudioOutputPrice            map[string]decimal.Decimal          `json:"base_audio_output_price"`
+	BaseQuotaType                   map[string]int                      `json:"base_quota_type"`
+	BaseInputPriceTiers             map[string]model.PriceTierList      `json:"base_input_price_tiers"`
+	BaseOutputPriceTiers            map[string]model.PriceTierList      `json:"base_output_price_tiers"`
+	BaseCachedInputPriceTiers       map[string]model.PriceTierList      `json:"base_cached_input_price_tiers"`
+	BaseCacheReadInputPriceTiers    map[string]model.PriceTierList      `json:"base_cache_read_input_price_tiers"`
+	BaseCacheWriteInputPriceTiers   map[string]model.PriceTierList      `json:"base_cache_write_input_price_tiers"`
+	BaseCacheWrite1hInputPriceTiers map[string]model.PriceTierList      `json:"base_cache_write_1h_input_price_tiers"`
+	BaseImageInputPriceTiers        map[string]model.PriceTierList      `json:"base_image_input_price_tiers"`
+	BaseImageOutputPriceTiers       map[string]model.PriceTierList      `json:"base_image_output_price_tiers"`
+	BaseAudioInputPriceTiers        map[string]model.PriceTierList      `json:"base_audio_input_price_tiers"`
+	BaseAudioOutputPriceTiers       map[string]model.PriceTierList      `json:"base_audio_output_price_tiers"`
+	BaseVideoBillingConfig          map[string]model.VideoBillingConfig `json:"base_video_billing_config"`
+	UserChannelPrices               map[string]pricingUserChannelPrice  `json:"user_channel_prices"`
 }
 
 type pricingUserChannelPrice struct {
-	ID                          uint                           `json:"id"`
-	Name                        string                         `json:"name"`
-	Description                 string                         `json:"description"`
-	Multiplier                  decimal.Decimal                `json:"multiplier"`
-	QuotaType                   map[string]int                 `json:"quota_type"`
-	ModelRatio                  map[string]decimal.Decimal     `json:"model_ratio"`
-	CompletionRatio             map[string]decimal.Decimal     `json:"completion_ratio"`
-	InputPrice                  map[string]decimal.Decimal     `json:"input_price"`
-	OutputPrice                 map[string]decimal.Decimal     `json:"output_price"`
-	CachedInputPrice            map[string]decimal.Decimal     `json:"cached_input_price"`
-	CacheReadInputPrice         map[string]decimal.Decimal     `json:"cache_read_input_price"`
-	CacheWriteInputPrice        map[string]decimal.Decimal     `json:"cache_write_input_price"`
-	CacheWrite1hInputPrice      map[string]decimal.Decimal     `json:"cache_write_1h_input_price"`
-	ImageInputPrice             map[string]decimal.Decimal     `json:"image_input_price"`
-	ImageOutputPrice            map[string]decimal.Decimal     `json:"image_output_price"`
-	AudioInputPrice             map[string]decimal.Decimal     `json:"audio_input_price"`
-	AudioOutputPrice            map[string]decimal.Decimal     `json:"audio_output_price"`
-	InputPriceTiers             map[string]model.PriceTierList `json:"input_price_tiers"`
-	OutputPriceTiers            map[string]model.PriceTierList `json:"output_price_tiers"`
-	CachedInputPriceTiers       map[string]model.PriceTierList `json:"cached_input_price_tiers"`
-	CacheReadInputPriceTiers    map[string]model.PriceTierList `json:"cache_read_input_price_tiers"`
-	CacheWriteInputPriceTiers   map[string]model.PriceTierList `json:"cache_write_input_price_tiers"`
-	CacheWrite1hInputPriceTiers map[string]model.PriceTierList `json:"cache_write_1h_input_price_tiers"`
-	ImageInputPriceTiers        map[string]model.PriceTierList `json:"image_input_price_tiers"`
-	ImageOutputPriceTiers       map[string]model.PriceTierList `json:"image_output_price_tiers"`
-	AudioInputPriceTiers        map[string]model.PriceTierList `json:"audio_input_price_tiers"`
-	AudioOutputPriceTiers       map[string]model.PriceTierList `json:"audio_output_price_tiers"`
+	ID                          uint                                `json:"id"`
+	Name                        string                              `json:"name"`
+	Description                 string                              `json:"description"`
+	Multiplier                  decimal.Decimal                     `json:"multiplier"`
+	QuotaType                   map[string]int                      `json:"quota_type"`
+	ModelRatio                  map[string]decimal.Decimal          `json:"model_ratio"`
+	CompletionRatio             map[string]decimal.Decimal          `json:"completion_ratio"`
+	InputPrice                  map[string]decimal.Decimal          `json:"input_price"`
+	OutputPrice                 map[string]decimal.Decimal          `json:"output_price"`
+	CachedInputPrice            map[string]decimal.Decimal          `json:"cached_input_price"`
+	CacheReadInputPrice         map[string]decimal.Decimal          `json:"cache_read_input_price"`
+	CacheWriteInputPrice        map[string]decimal.Decimal          `json:"cache_write_input_price"`
+	CacheWrite1hInputPrice      map[string]decimal.Decimal          `json:"cache_write_1h_input_price"`
+	ImageInputPrice             map[string]decimal.Decimal          `json:"image_input_price"`
+	ImageOutputPrice            map[string]decimal.Decimal          `json:"image_output_price"`
+	AudioInputPrice             map[string]decimal.Decimal          `json:"audio_input_price"`
+	AudioOutputPrice            map[string]decimal.Decimal          `json:"audio_output_price"`
+	InputPriceTiers             map[string]model.PriceTierList      `json:"input_price_tiers"`
+	OutputPriceTiers            map[string]model.PriceTierList      `json:"output_price_tiers"`
+	CachedInputPriceTiers       map[string]model.PriceTierList      `json:"cached_input_price_tiers"`
+	CacheReadInputPriceTiers    map[string]model.PriceTierList      `json:"cache_read_input_price_tiers"`
+	CacheWriteInputPriceTiers   map[string]model.PriceTierList      `json:"cache_write_input_price_tiers"`
+	CacheWrite1hInputPriceTiers map[string]model.PriceTierList      `json:"cache_write_1h_input_price_tiers"`
+	ImageInputPriceTiers        map[string]model.PriceTierList      `json:"image_input_price_tiers"`
+	ImageOutputPriceTiers       map[string]model.PriceTierList      `json:"image_output_price_tiers"`
+	AudioInputPriceTiers        map[string]model.PriceTierList      `json:"audio_input_price_tiers"`
+	AudioOutputPriceTiers       map[string]model.PriceTierList      `json:"audio_output_price_tiers"`
+	VideoBillingConfig          map[string]model.VideoBillingConfig `json:"video_billing_config"`
 }
 
 func (api *ModelAPI) PublicCatalog(c *gin.Context) {
@@ -1483,6 +1490,7 @@ func (api *ModelAPI) PublicCatalog(c *gin.Context) {
 		imageOutputPriceTiers := model.NormalizePriceTiers(config.Model.ImageOutputPriceTiers)
 		audioInputPriceTiers := model.NormalizePriceTiers(config.Model.AudioInputPriceTiers)
 		audioOutputPriceTiers := model.NormalizePriceTiers(config.Model.AudioOutputPriceTiers)
+		videoBillingConfig := model.NormalizeVideoBillingConfig(config.Model.VideoBillingConfig)
 
 		provider := service.ResolveModelProvider(modelName, config.Model.Provider, config.Model.ProviderIconURL)
 		item, exists := catalog[modelName]
@@ -1512,6 +1520,7 @@ func (api *ModelAPI) PublicCatalog(c *gin.Context) {
 					ImageOutputPriceTiers:       imageOutputPriceTiers,
 					AudioInputPriceTiers:        audioInputPriceTiers,
 					AudioOutputPriceTiers:       audioOutputPriceTiers,
+					VideoBillingConfig:          videoBillingConfig,
 					UserChannels:                []publicModelUserChannel{},
 				},
 				userChannelMap: map[uint]*publicModelUserChannel{},
@@ -1579,6 +1588,7 @@ func (api *ModelAPI) PublicCatalog(c *gin.Context) {
 		effectiveImageOutputTiers := model.MultiplyPriceTiers(imageOutputPriceTiers, userChannel.Multiplier)
 		effectiveAudioInputTiers := model.MultiplyPriceTiers(audioInputPriceTiers, userChannel.Multiplier)
 		effectiveAudioOutputTiers := model.MultiplyPriceTiers(audioOutputPriceTiers, userChannel.Multiplier)
+		effectiveVideoBillingConfig := model.MultiplyVideoBillingConfig(videoBillingConfig, userChannel.Multiplier)
 		channelItem, channelExists := item.userChannelMap[userChannel.ID]
 		if !channelExists {
 			channelItem = &publicModelUserChannel{
@@ -1623,6 +1633,8 @@ func (api *ModelAPI) PublicCatalog(c *gin.Context) {
 				EffectiveImageOutputPriceTiers:       effectiveImageOutputTiers,
 				EffectiveAudioInputPriceTiers:        effectiveAudioInputTiers,
 				EffectiveAudioOutputPriceTiers:       effectiveAudioOutputTiers,
+				VideoBillingConfig:                   videoBillingConfig,
+				EffectiveVideoBillingConfig:          effectiveVideoBillingConfig,
 			}
 			item.userChannelMap[userChannel.ID] = channelItem
 			continue
@@ -1905,6 +1917,7 @@ func (api *ModelAPI) Pricing(c *gin.Context) {
 		ImageOutputPriceTiers:           map[string]model.PriceTierList{},
 		AudioInputPriceTiers:            map[string]model.PriceTierList{},
 		AudioOutputPriceTiers:           map[string]model.PriceTierList{},
+		VideoBillingConfig:              map[string]model.VideoBillingConfig{},
 		BaseInputPrice:                  map[string]decimal.Decimal{},
 		BaseOutputPrice:                 map[string]decimal.Decimal{},
 		BaseCachedInputPrice:            map[string]decimal.Decimal{},
@@ -1926,6 +1939,7 @@ func (api *ModelAPI) Pricing(c *gin.Context) {
 		BaseImageOutputPriceTiers:       map[string]model.PriceTierList{},
 		BaseAudioInputPriceTiers:        map[string]model.PriceTierList{},
 		BaseAudioOutputPriceTiers:       map[string]model.PriceTierList{},
+		BaseVideoBillingConfig:          map[string]model.VideoBillingConfig{},
 		UserChannelPrices:               map[string]pricingUserChannelPrice{},
 	}
 	channelPrices := map[uint]*pricingUserChannelPrice{}
@@ -1953,6 +1967,7 @@ func (api *ModelAPI) Pricing(c *gin.Context) {
 		baseAudioInput := config.Model.AudioInputPrice
 		baseAudioOutput := config.Model.AudioOutputPrice
 		baseQuotaType := config.Model.QuotaType
+		baseVideoBillingConfig := model.NormalizeVideoBillingConfig(config.Model.VideoBillingConfig)
 		baseInputTiers := model.NormalizePriceTiers(config.Model.InputPriceTiers)
 		baseOutputTiers := model.NormalizePriceTiers(config.Model.OutputPriceTiers)
 		baseCachedInputTiers := model.NormalizePriceTiers(config.Model.CachedInputPriceTiers)
@@ -1971,6 +1986,7 @@ func (api *ModelAPI) Pricing(c *gin.Context) {
 		effectiveImageOutput := baseImageOutput.Mul(userChannel.Multiplier)
 		effectiveAudioInput := baseAudioInput.Mul(userChannel.Multiplier)
 		effectiveAudioOutput := baseAudioOutput.Mul(userChannel.Multiplier)
+		effectiveVideoBillingConfig := model.MultiplyVideoBillingConfig(baseVideoBillingConfig, userChannel.Multiplier)
 		effectiveInputTiers := model.MultiplyPriceTiers(baseInputTiers, userChannel.Multiplier)
 		effectiveOutputTiers := model.MultiplyPriceTiers(baseOutputTiers, userChannel.Multiplier)
 		effectiveCachedInputTiers := model.MultiplyPriceTiers(baseCachedInputTiers, userChannel.Multiplier)
@@ -2028,6 +2044,7 @@ func (api *ModelAPI) Pricing(c *gin.Context) {
 		setMinDecimalWithTiers(data.BaseImageOutputPrice, data.BaseImageOutputPriceTiers, modelName, baseImageOutput, baseImageOutputTiers)
 		setMinDecimalWithTiers(data.BaseAudioInputPrice, data.BaseAudioInputPriceTiers, modelName, baseAudioInput, baseAudioInputTiers)
 		setMinDecimalWithTiers(data.BaseAudioOutputPrice, data.BaseAudioOutputPriceTiers, modelName, baseAudioOutput, baseAudioOutputTiers)
+		data.BaseVideoBillingConfig[modelName] = baseVideoBillingConfig
 		data.BaseQuotaType[modelName] = baseQuotaType
 		setMinDecimalWithTiers(data.InputPrice, data.InputPriceTiers, modelName, effectiveInput, effectiveInputTiers)
 		setMinDecimalWithTiers(data.OutputPrice, data.OutputPriceTiers, modelName, effectiveOutput, effectiveOutputTiers)
@@ -2039,6 +2056,7 @@ func (api *ModelAPI) Pricing(c *gin.Context) {
 		setMinDecimalWithTiers(data.ImageOutputPrice, data.ImageOutputPriceTiers, modelName, effectiveImageOutput, effectiveImageOutputTiers)
 		setMinDecimalWithTiers(data.AudioInputPrice, data.AudioInputPriceTiers, modelName, effectiveAudioInput, effectiveAudioInputTiers)
 		setMinDecimalWithTiers(data.AudioOutputPrice, data.AudioOutputPriceTiers, modelName, effectiveAudioOutput, effectiveAudioOutputTiers)
+		data.VideoBillingConfig[modelName] = effectiveVideoBillingConfig
 		data.QuotaType[modelName] = baseQuotaType
 
 		channelPrice, exists := channelPrices[userChannel.ID]
@@ -2071,6 +2089,7 @@ func (api *ModelAPI) Pricing(c *gin.Context) {
 				ImageOutputPriceTiers:       map[string]model.PriceTierList{},
 				AudioInputPriceTiers:        map[string]model.PriceTierList{},
 				AudioOutputPriceTiers:       map[string]model.PriceTierList{},
+				VideoBillingConfig:          map[string]model.VideoBillingConfig{},
 			}
 			channelPrices[userChannel.ID] = channelPrice
 		}
@@ -2084,6 +2103,7 @@ func (api *ModelAPI) Pricing(c *gin.Context) {
 		setMinDecimalWithTiers(channelPrice.ImageOutputPrice, channelPrice.ImageOutputPriceTiers, modelName, effectiveImageOutput, effectiveImageOutputTiers)
 		setMinDecimalWithTiers(channelPrice.AudioInputPrice, channelPrice.AudioInputPriceTiers, modelName, effectiveAudioInput, effectiveAudioInputTiers)
 		setMinDecimalWithTiers(channelPrice.AudioOutputPrice, channelPrice.AudioOutputPriceTiers, modelName, effectiveAudioOutput, effectiveAudioOutputTiers)
+		channelPrice.VideoBillingConfig[modelName] = effectiveVideoBillingConfig
 		channelPrice.QuotaType[modelName] = baseQuotaType
 	}
 
@@ -2116,14 +2136,16 @@ func setMinDecimalWithTiers(values map[string]decimal.Decimal, tiers map[string]
 }
 
 func exposedPricingDecimal(value decimal.Decimal, quotaType int) decimal.Decimal {
-	if normalizeQuotaType(quotaType) == 1 {
+	normalizedQuotaType := normalizeQuotaType(quotaType)
+	if normalizedQuotaType == 1 || normalizedQuotaType == model.QuotaTypeVideoResolutionDuration {
 		return value
 	}
 	return value.Div(decimal.NewFromInt(2))
 }
 
 func exposedPricingTiers(tiers model.PriceTierList, quotaType int) model.PriceTierList {
-	if normalizeQuotaType(quotaType) == 1 {
+	normalizedQuotaType := normalizeQuotaType(quotaType)
+	if normalizedQuotaType == 1 || normalizedQuotaType == model.QuotaTypeVideoResolutionDuration {
 		return model.NormalizePriceTiers(tiers)
 	}
 	return model.MultiplyPriceTiers(tiers, decimal.RequireFromString("0.5"))
@@ -2613,6 +2635,12 @@ func modelFromInput(input modelConfigInput, existing *model.Model) (model.Model,
 	globalModel.ImageOutputPriceTiers = model.NormalizePriceTiers(input.ImageOutputPriceTiers)
 	globalModel.AudioInputPriceTiers = model.NormalizePriceTiers(input.AudioInputPriceTiers)
 	globalModel.AudioOutputPriceTiers = model.NormalizePriceTiers(input.AudioOutputPriceTiers)
+	globalModel.VideoBillingConfig = model.NormalizeVideoBillingConfig(input.VideoBillingConfig)
+	if globalModel.QuotaType == model.QuotaTypeVideoResolutionDuration {
+		if err := validateVideoBillingConfig(globalModel.VideoBillingConfig); err != nil {
+			return model.Model{}, err
+		}
+	}
 	if input.Enabled != nil {
 		globalModel.Enabled = *input.Enabled
 	} else if existing == nil {
@@ -2622,10 +2650,26 @@ func modelFromInput(input modelConfigInput, existing *model.Model) (model.Model,
 }
 
 func normalizeQuotaType(value int) int {
-	if value == 1 {
+	switch value {
+	case 1:
 		return 1
+	case model.QuotaTypeVideoResolutionDuration:
+		return model.QuotaTypeVideoResolutionDuration
 	}
 	return 0
+}
+
+func validateVideoBillingConfig(config model.VideoBillingConfig) error {
+	config = model.NormalizeVideoBillingConfig(config)
+	if len(config.Resolutions) == 0 {
+		return errors.New("Video billing requires at least one resolution price")
+	}
+	for _, resolution := range config.Resolutions {
+		if len(resolution.Durations) == 0 && resolution.DurationUnitPrice.LessThanOrEqual(decimal.Zero) {
+			return errors.New("Video billing requires each resolution to have duration prices or a duration unit price")
+		}
+	}
+	return nil
 }
 
 func modelConfigFromInput(input modelConfigInput, existing *model.ModelConfig) (model.ModelConfig, error) {
@@ -2733,11 +2777,12 @@ func hydrateModelConfigResponse(config *model.ModelConfig) {
 type UserChannelAPI struct{}
 
 type userChannelCatalogItem struct {
-	ID          uint     `json:"id"`
-	Name        string   `json:"name"`
-	Description string   `json:"description"`
-	Enabled     bool     `json:"enabled"`
-	Models      []string `json:"models"`
+	ID                  uint                                `json:"id"`
+	Name                string                              `json:"name"`
+	Description         string                              `json:"description"`
+	Enabled             bool                                `json:"enabled"`
+	Models              []string                            `json:"models"`
+	VideoBillingConfigs map[string]model.VideoBillingConfig `json:"video_billing_configs"`
 }
 
 func (api *UserChannelAPI) List(c *gin.Context) {
@@ -2806,10 +2851,18 @@ func (api *UserChannelAPI) Catalog(c *gin.Context) {
 	response := make([]userChannelCatalogItem, 0, len(channels))
 	for _, channel := range channels {
 		modelSet := map[string]struct{}{}
+		videoBillingConfigs := map[string]model.VideoBillingConfig{}
 		for _, upstream := range channel.Channels {
 			for _, modelConfig := range upstream.Models {
-				if strings.TrimSpace(modelConfig.Model.ModelName) != "" {
-					modelSet[modelConfig.Model.ModelName] = struct{}{}
+				modelName := strings.TrimSpace(modelConfig.Model.ModelName)
+				if modelName != "" {
+					modelSet[modelName] = struct{}{}
+					if modelConfig.Model.QuotaType == model.QuotaTypeVideoResolutionDuration {
+						videoBillingConfigs[modelName] = model.MultiplyVideoBillingConfig(
+							modelConfig.Model.VideoBillingConfig,
+							channel.Multiplier,
+						)
+					}
 				}
 			}
 		}
@@ -2819,11 +2872,12 @@ func (api *UserChannelAPI) Catalog(c *gin.Context) {
 		}
 		sort.Strings(models)
 		response = append(response, userChannelCatalogItem{
-			ID:          channel.ID,
-			Name:        channel.Name,
-			Description: channel.Description,
-			Enabled:     channel.Enabled,
-			Models:      models,
+			ID:                  channel.ID,
+			Name:                channel.Name,
+			Description:         channel.Description,
+			Enabled:             channel.Enabled,
+			Models:              models,
+			VideoBillingConfigs: videoBillingConfigs,
 		})
 	}
 

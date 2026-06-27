@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -119,6 +120,7 @@ type usageTokenCounts struct {
 	ImageOutputTokens       int
 	AudioInputTokens        int
 	AudioOutputTokens       int
+	BillableCost            decimal.Decimal
 }
 
 func (s *ProxyService) ListModels(c *gin.Context) {
@@ -453,7 +455,11 @@ func (s *ProxyService) HandleVideoGeneration(c *gin.Context) {
 	}
 
 	billingModel := target.billingModel()
-	usage := videoUsageTokenCounts(target.ModelName, requestBody, responseData, billingModel.QuotaType)
+	usage, status, message, ok := videoUsageTokenCounts(target.ModelName, requestBody, responseData, billingModel)
+	if !ok {
+		c.JSON(status, gin.H{"error": message, "type": "invalid_request"})
+		return
+	}
 	if status, message, err := s.billUsage(c, target.User, target.APIKey, &target.Channel, &target.ModelConfig, target.billingModelName(), usage, billingModel); err != nil {
 		c.JSON(status, gin.H{"error": message})
 		return
@@ -923,6 +929,12 @@ func (s *ProxyService) billUsage(c *gin.Context, user *model.User, apiKey *model
 }
 
 func calculateModelUsageCost(usage usageTokenCounts, modelConfig model.Model) decimal.Decimal {
+	if modelConfig.QuotaType == model.QuotaTypeVideoResolutionDuration {
+		if usage.BillableCost.LessThan(decimal.Zero) {
+			return decimal.Zero
+		}
+		return usage.BillableCost
+	}
 	if modelConfig.QuotaType == 1 {
 		count := usage.OutputTokens / 1000000
 		if usage.OutputTokens%1000000 != 0 {
@@ -2156,13 +2168,22 @@ func estimateImageUsageTokens(modelName string, requestBody map[string]interface
 	}
 }
 
-func videoUsageTokenCounts(modelName string, requestBody map[string]interface{}, responseData map[string]interface{}, quotaType int) usageTokenCounts {
-	if quotaType != 1 && responseData != nil {
+func videoUsageTokenCounts(modelName string, requestBody map[string]interface{}, responseData map[string]interface{}, billingModel model.Model) (usageTokenCounts, int, string, bool) {
+	if billingModel.QuotaType == model.QuotaTypeVideoResolutionDuration {
+		usage := estimateVideoUsageTokens(modelName, requestBody, responseData)
+		cost, err := calculateVideoBillingCost(requestBody, responseData, billingModel.VideoBillingConfig)
+		if err != nil {
+			return usageTokenCounts{}, http.StatusBadRequest, err.Error(), false
+		}
+		usage.BillableCost = cost
+		return usage, 0, "", true
+	}
+	if billingModel.QuotaType != 1 && responseData != nil {
 		if usage, ok := parseUsageTokens(responseData); ok {
-			return usage
+			return usage, 0, "", true
 		}
 	}
-	return estimateVideoUsageTokens(modelName, requestBody, responseData)
+	return estimateVideoUsageTokens(modelName, requestBody, responseData), 0, "", true
 }
 
 func estimateVideoUsageTokens(modelName string, requestBody map[string]interface{}, responseData map[string]interface{}) usageTokenCounts {
@@ -2171,6 +2192,93 @@ func estimateVideoUsageTokens(modelName string, requestBody map[string]interface
 		InputTokens:  CountTokens(modelName, videoRequestText(requestBody)),
 		OutputTokens: videoCount * 1000000,
 	}
+}
+
+func calculateVideoBillingCost(requestBody map[string]interface{}, responseData map[string]interface{}, config model.VideoBillingConfig) (decimal.Decimal, error) {
+	config = model.NormalizeVideoBillingConfig(config)
+	if len(config.Resolutions) == 0 {
+		return decimal.Zero, errors.New("Video billing resolutions are not configured")
+	}
+
+	resolution := videoResolutionFromPayload(requestBody)
+	resolutionConfig, ok := videoResolutionConfig(config.Resolutions, resolution)
+	if !ok {
+		return decimal.Zero, fmt.Errorf("Video resolution %q is not allowed", resolution)
+	}
+
+	seconds := videoDurationSecondsFromPayload(requestBody)
+	if seconds <= 0 {
+		return decimal.Zero, errors.New("Video duration is required")
+	}
+
+	durationPrice, ok := videoDurationPrice(resolutionConfig, seconds)
+	if !ok {
+		return decimal.Zero, fmt.Errorf("Video duration %d seconds is not allowed", seconds)
+	}
+
+	count := videoCountFromPayloads(requestBody, responseData)
+	if count <= 0 {
+		count = 1
+	}
+	return durationPrice.Mul(decimal.NewFromInt(int64(count))), nil
+}
+
+func videoResolutionConfig(prices []model.VideoResolutionPrice, resolution string) (model.VideoResolutionPrice, bool) {
+	resolution = model.NormalizeVideoResolution(resolution)
+	if resolution == "" {
+		return model.VideoResolutionPrice{}, false
+	}
+	for _, item := range prices {
+		if model.NormalizeVideoResolution(item.Resolution) == resolution {
+			return item, true
+		}
+	}
+	return model.VideoResolutionPrice{}, false
+}
+
+func videoDurationPrice(resolution model.VideoResolutionPrice, seconds int) (decimal.Decimal, bool) {
+	if len(resolution.Durations) > 0 {
+		for _, item := range resolution.Durations {
+			if item.Seconds == seconds {
+				return item.Price, true
+			}
+		}
+		return decimal.Zero, false
+	}
+	if resolution.DurationUnitPrice.LessThan(decimal.Zero) || resolution.DurationUnitPrice.IsZero() {
+		return decimal.Zero, false
+	}
+	return resolution.DurationUnitPrice.Mul(decimal.NewFromInt(int64(seconds))), true
+}
+
+func videoResolutionFromPayload(requestBody map[string]interface{}) string {
+	for _, key := range []string{"size", "resolution", "quality"} {
+		if value, ok := requestBody[key].(string); ok {
+			normalized := model.NormalizeVideoResolution(value)
+			if normalized != "" && normalized != "auto" {
+				return normalized
+			}
+		}
+	}
+	width := intFromRequest(requestBody, "width", "video_width")
+	height := intFromRequest(requestBody, "height", "video_height")
+	if width > 0 && height > 0 {
+		return fmt.Sprintf("%dx%d", width, height)
+	}
+	return ""
+}
+
+func videoDurationSecondsFromPayload(requestBody map[string]interface{}) int {
+	if value := intFromRequest(requestBody, "duration", "duration_seconds", "seconds", "video_duration"); value > 0 {
+		return value
+	}
+	if duration, ok := requestBody["duration"].(string); ok {
+		duration = strings.TrimSpace(strings.TrimSuffix(strings.ToLower(duration), "s"))
+		if parsed, err := strconv.Atoi(duration); err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+	return 0
 }
 
 func videoCountFromPayloads(requestBody map[string]interface{}, responseData map[string]interface{}) int {

@@ -1326,8 +1326,11 @@ func hasEndpointType(endpointTypes []string, want string) bool {
 }
 
 func normalizeQuotaType(value int) int {
-	if value == 1 {
+	switch value {
+	case 1:
 		return 1
+	case model.QuotaTypeVideoResolutionDuration:
+		return model.QuotaTypeVideoResolutionDuration
 	}
 	return 0
 }

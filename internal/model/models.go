@@ -219,33 +219,34 @@ type Channel struct {
 
 // Model represents a global model identity. It is not bound to any upstream channel.
 type Model struct {
-	ID                          uint            `gorm:"primaryKey" json:"id"`
-	ModelName                   string          `gorm:"uniqueIndex;size:100;not null" json:"model_name"`
-	Provider                    string          `gorm:"size:50" json:"provider"` // e.g., openai, deepseek
-	ProviderIconURL             string          `gorm:"size:255" json:"provider_icon_url"`
-	QuotaType                   int             `gorm:"default:0" json:"quota_type"`                             // 0 = per token, 1 = per request/item
-	InputPrice                  decimal.Decimal `gorm:"type:decimal(20,10);default:0" json:"input_price"`        // price per 1M tokens
-	OutputPrice                 decimal.Decimal `gorm:"type:decimal(20,10);default:0" json:"output_price"`       // price per 1M tokens
-	CachedInputPrice            decimal.Decimal `gorm:"type:decimal(20,10);default:0" json:"cached_input_price"` // cached input price per 1M tokens
-	CacheWriteInputPrice        decimal.Decimal `gorm:"type:decimal(20,10);default:0" json:"cache_write_input_price"`
-	CacheWrite1hInputPrice      decimal.Decimal `gorm:"column:cache_write_1h_input_price;type:decimal(20,10);default:0" json:"cache_write_1h_input_price"`
-	ImageInputPrice             decimal.Decimal `gorm:"type:decimal(20,10);default:0" json:"image_input_price"`
-	ImageOutputPrice            decimal.Decimal `gorm:"type:decimal(20,10);default:0" json:"image_output_price"`
-	AudioInputPrice             decimal.Decimal `gorm:"type:decimal(20,10);default:0" json:"audio_input_price"`
-	AudioOutputPrice            decimal.Decimal `gorm:"type:decimal(20,10);default:0" json:"audio_output_price"`
-	InputPriceTiers             PriceTierList   `gorm:"type:text" json:"input_price_tiers"`
-	OutputPriceTiers            PriceTierList   `gorm:"type:text" json:"output_price_tiers"`
-	CachedInputPriceTiers       PriceTierList   `gorm:"type:text" json:"cached_input_price_tiers"`
-	CacheWriteInputPriceTiers   PriceTierList   `gorm:"type:text" json:"cache_write_input_price_tiers"`
-	CacheWrite1hInputPriceTiers PriceTierList   `gorm:"column:cache_write_1h_input_price_tiers;type:text" json:"cache_write_1h_input_price_tiers"`
-	ImageInputPriceTiers        PriceTierList   `gorm:"type:text" json:"image_input_price_tiers"`
-	ImageOutputPriceTiers       PriceTierList   `gorm:"type:text" json:"image_output_price_tiers"`
-	AudioInputPriceTiers        PriceTierList   `gorm:"type:text" json:"audio_input_price_tiers"`
-	AudioOutputPriceTiers       PriceTierList   `gorm:"type:text" json:"audio_output_price_tiers"`
-	Enabled                     bool            `gorm:"default:true" json:"enabled"`
-	CreatedAt                   time.Time       `json:"created_at"`
-	UpdatedAt                   time.Time       `json:"updated_at"`
-	Configs                     []ModelConfig   `gorm:"foreignKey:ModelID" json:"configs,omitempty"`
+	ID                          uint               `gorm:"primaryKey" json:"id"`
+	ModelName                   string             `gorm:"uniqueIndex;size:100;not null" json:"model_name"`
+	Provider                    string             `gorm:"size:50" json:"provider"` // e.g., openai, deepseek
+	ProviderIconURL             string             `gorm:"size:255" json:"provider_icon_url"`
+	QuotaType                   int                `gorm:"default:0" json:"quota_type"`                             // 0 = per token, 1 = per request/item
+	InputPrice                  decimal.Decimal    `gorm:"type:decimal(20,10);default:0" json:"input_price"`        // price per 1M tokens
+	OutputPrice                 decimal.Decimal    `gorm:"type:decimal(20,10);default:0" json:"output_price"`       // price per 1M tokens
+	CachedInputPrice            decimal.Decimal    `gorm:"type:decimal(20,10);default:0" json:"cached_input_price"` // cached input price per 1M tokens
+	CacheWriteInputPrice        decimal.Decimal    `gorm:"type:decimal(20,10);default:0" json:"cache_write_input_price"`
+	CacheWrite1hInputPrice      decimal.Decimal    `gorm:"column:cache_write_1h_input_price;type:decimal(20,10);default:0" json:"cache_write_1h_input_price"`
+	ImageInputPrice             decimal.Decimal    `gorm:"type:decimal(20,10);default:0" json:"image_input_price"`
+	ImageOutputPrice            decimal.Decimal    `gorm:"type:decimal(20,10);default:0" json:"image_output_price"`
+	AudioInputPrice             decimal.Decimal    `gorm:"type:decimal(20,10);default:0" json:"audio_input_price"`
+	AudioOutputPrice            decimal.Decimal    `gorm:"type:decimal(20,10);default:0" json:"audio_output_price"`
+	InputPriceTiers             PriceTierList      `gorm:"type:text" json:"input_price_tiers"`
+	OutputPriceTiers            PriceTierList      `gorm:"type:text" json:"output_price_tiers"`
+	CachedInputPriceTiers       PriceTierList      `gorm:"type:text" json:"cached_input_price_tiers"`
+	CacheWriteInputPriceTiers   PriceTierList      `gorm:"type:text" json:"cache_write_input_price_tiers"`
+	CacheWrite1hInputPriceTiers PriceTierList      `gorm:"column:cache_write_1h_input_price_tiers;type:text" json:"cache_write_1h_input_price_tiers"`
+	ImageInputPriceTiers        PriceTierList      `gorm:"type:text" json:"image_input_price_tiers"`
+	ImageOutputPriceTiers       PriceTierList      `gorm:"type:text" json:"image_output_price_tiers"`
+	AudioInputPriceTiers        PriceTierList      `gorm:"type:text" json:"audio_input_price_tiers"`
+	AudioOutputPriceTiers       PriceTierList      `gorm:"type:text" json:"audio_output_price_tiers"`
+	VideoBillingConfig          VideoBillingConfig `gorm:"type:text" json:"video_billing_config"`
+	Enabled                     bool               `gorm:"default:true" json:"enabled"`
+	CreatedAt                   time.Time          `json:"created_at"`
+	UpdatedAt                   time.Time          `json:"updated_at"`
+	Configs                     []ModelConfig      `gorm:"foreignKey:ModelID" json:"configs,omitempty"`
 }
 
 // ModelConfig represents an upstream channel's configuration for a global model.
