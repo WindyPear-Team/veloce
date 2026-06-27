@@ -109,6 +109,24 @@ func (s *ProxyService) HandleVideoGenerationCompatible(c *gin.Context) {
 	})
 }
 
+func (s *ProxyService) HandleVideoRemix(c *gin.Context) {
+	parentTaskID := strings.TrimSpace(c.Param("id"))
+	if parentTaskID == "" {
+		c.JSON(http.StatusBadRequest, authErrorResponse(http.StatusBadRequest, "Invalid task ID", "invalid_request_error"))
+		return
+	}
+	s.handleCompatibleJSONGeneration(c, compatibleGenerationOptions{
+		Kind:         taskKindVideo,
+		UpstreamPath: "/v1/videos/" + url.PathEscape(parentTaskID) + "/remix",
+		MutateRequest: func(requestBody map[string]interface{}) {
+			requestBody["parent_task_id"] = parentTaskID
+		},
+		EstimateUsage: func(target *proxyTarget, requestBody map[string]interface{}, responseData map[string]interface{}) (usageTokenCounts, int, string, bool) {
+			return videoUsageTokenCounts(target.ModelName, requestBody, responseData, target.billingModel())
+		},
+	})
+}
+
 func (s *ProxyService) HandleMidjourneyCreate(c *gin.Context) {
 	path := c.Request.URL.Path
 	if strings.TrimSpace(path) == "" {
@@ -128,6 +146,7 @@ type compatibleGenerationOptions struct {
 	Kind          string
 	DefaultModel  string
 	UpstreamPath  string
+	MutateRequest func(requestBody map[string]interface{})
 	EstimateUsage func(target *proxyTarget, requestBody map[string]interface{}, responseData map[string]interface{}) (usageTokenCounts, int, string, bool)
 }
 
@@ -144,6 +163,9 @@ func (s *ProxyService) handleCompatibleJSONGeneration(c *gin.Context, opts compa
 	if modelName == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Model not specified"})
 		return
+	}
+	if opts.MutateRequest != nil {
+		opts.MutateRequest(requestBody)
 	}
 
 	target, ok := s.resolveTarget(c, modelName)
