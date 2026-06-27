@@ -55,6 +55,8 @@ const (
 	protocolOpenAI      proxyProtocol = "openai"
 	protocolResponses   proxyProtocol = "responses"
 	protocolOpenAIVideo proxyProtocol = "openai-video"
+	protocolKling       proxyProtocol = "kling"
+	protocolMidjourney  proxyProtocol = "midjourney"
 	protocolClaude      proxyProtocol = "claude"
 	protocolGemini      proxyProtocol = "gemini"
 )
@@ -182,7 +184,8 @@ func (s *ProxyService) ListModels(c *gin.Context) {
 }
 
 func (s *ProxyService) createVideoUpstreamGeneration(c *gin.Context, requestBody map[string]interface{}) (videoGenerationResult, bool) {
-	modelName, ok := requestBody["model"].(string)
+	modelName := videoRequestModelName(requestBody)
+	ok := modelName != ""
 	if !ok || strings.TrimSpace(modelName) == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Model not specified"})
 		return videoGenerationResult{}, false
@@ -201,8 +204,8 @@ func (s *ProxyService) createVideoUpstreamGeneration(c *gin.Context, requestBody
 	}
 
 	upstreamProtocol := channelProtocol(target.Channel.Type)
-	if !supportsOpenAIVideoEndpoint(upstreamProtocol) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Video generation is only supported for OpenAI video upstream channels", "type": "unsupported_upstream"})
+	if !supportsVideoEndpoint(upstreamProtocol) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Video generation is only supported for video upstream channels", "type": "unsupported_upstream"})
 		return videoGenerationResult{}, false
 	}
 
@@ -211,7 +214,7 @@ func (s *ProxyService) createVideoUpstreamGeneration(c *gin.Context, requestBody
 		return videoGenerationResult{}, false
 	}
 
-	prepared, err := prepareOpenAIVideoGenerationRequest(&target.Channel, target.upstreamModelName(), requestBody)
+	prepared, err := prepareVideoGenerationRequest(&target.Channel, upstreamProtocol, target.upstreamModelName(), requestBody)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error(), "type": "invalid_request"})
 		return videoGenerationResult{}, false
@@ -598,11 +601,16 @@ func (s *ProxyService) HandleVideoTaskStatus(c *gin.Context) {
 }
 
 func (s *ProxyService) fetchUpstreamVideoTask(c *gin.Context, channel *model.Channel, upstreamTaskID string) (*http.Response, []byte, map[string]interface{}, bool) {
+	upstreamProtocol := channelProtocol(channel.Type)
+	if !supportsVideoEndpoint(upstreamProtocol) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Video task status is only supported for video upstream channels", "type": "unsupported_upstream"})
+		return nil, nil, nil, false
+	}
 	headers := jsonHeaders()
 	headers.Set("Authorization", "Bearer "+strings.TrimSpace(channel.APIKey))
 	prepared := preparedUpstreamRequest{
 		Method: http.MethodGet,
-		URL:    upstreamURLForRequest(channel.BaseURL, "/v1/video/generations/"+url.PathEscape(upstreamTaskID)),
+		URL:    upstreamURLForRequest(channel.BaseURL, videoTaskStatusPath(upstreamProtocol, upstreamTaskID)),
 		Header: headers,
 	}
 	resp, err := s.doUpstreamRequest(prepared)
@@ -644,6 +652,9 @@ func videoTaskResponse(task model.VideoTask, payload map[string]interface{}) gin
 		if data, exists := payload["data"]; exists {
 			response["data"] = data
 		}
+		if data := videoTaskDataFromPayload(payload); data != nil {
+			response["data"] = data
+		}
 	}
 	return response
 }
@@ -680,7 +691,7 @@ func videoTaskStatusFromPayload(payload map[string]interface{}) string {
 		stringFromValue(payload["taskStatus"]),
 	)))
 	if status != "" {
-		return status
+		return normalizeVideoTaskStatus(status)
 	}
 	if data, ok := payload["data"].(map[string]interface{}); ok {
 		return videoTaskStatusFromPayload(data)
@@ -689,6 +700,80 @@ func videoTaskStatusFromPayload(payload map[string]interface{}) string {
 		return "succeeded"
 	}
 	return ""
+}
+
+func videoTaskDataFromPayload(payload map[string]interface{}) interface{} {
+	if payload == nil {
+		return nil
+	}
+	if data, exists := payload["data"]; exists {
+		if dataMap, ok := data.(map[string]interface{}); ok {
+			if result := klingTaskResultVideos(dataMap); len(result) > 0 {
+				return result
+			}
+		}
+		return data
+	}
+	if result := klingTaskResultVideos(payload); len(result) > 0 {
+		return result
+	}
+	return nil
+}
+
+func klingTaskResultVideos(payload map[string]interface{}) []map[string]interface{} {
+	if payload == nil {
+		return nil
+	}
+	result, ok := payload["task_result"].(map[string]interface{})
+	if !ok {
+		result, ok = payload["taskResult"].(map[string]interface{})
+	}
+	if !ok {
+		return nil
+	}
+	rawVideos, ok := result["videos"].([]interface{})
+	if !ok {
+		return nil
+	}
+	videos := make([]map[string]interface{}, 0, len(rawVideos))
+	for _, raw := range rawVideos {
+		item, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		video := make(map[string]interface{}, len(item)+1)
+		for key, value := range item {
+			video[key] = value
+		}
+		if _, exists := video["url"]; !exists {
+			if urlValue := firstNonEmptyString(
+				stringFromValue(item["url"]),
+				stringFromValue(item["video_url"]),
+				stringFromValue(item["videoUrl"]),
+			); urlValue != "" {
+				video["url"] = urlValue
+			}
+		}
+		videos = append(videos, video)
+	}
+	return videos
+}
+
+func normalizeVideoTaskStatus(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "succeed", "succeeded", "success", "completed", "complete", "done":
+		return "succeeded"
+	case "fail", "failed", "error":
+		return "failed"
+	case "submitted", "created", "pending", "queued":
+		return "queued"
+	case "processing", "running", "in_progress":
+		return "processing"
+	case "cancelled", "canceled":
+		return "cancelled"
+	default:
+		return strings.ToLower(strings.TrimSpace(status))
+	}
 }
 
 func terminalVideoTaskStatus(status string) bool {
@@ -1856,6 +1941,103 @@ func prepareOpenAIVideoGenerationRequest(channel *model.Channel, upstreamModelNa
 	}, nil
 }
 
+func prepareVideoGenerationRequest(channel *model.Channel, protocol proxyProtocol, upstreamModelName string, requestBody map[string]interface{}) (preparedUpstreamRequest, error) {
+	switch protocol {
+	case protocolKling:
+		return prepareKlingImageToVideoRequest(channel, upstreamModelName, requestBody)
+	default:
+		return prepareOpenAIVideoGenerationRequest(channel, upstreamModelName, requestBody)
+	}
+}
+
+func prepareKlingImageToVideoRequest(channel *model.Channel, upstreamModelName string, requestBody map[string]interface{}) (preparedUpstreamRequest, error) {
+	upstreamModelName = strings.TrimSpace(upstreamModelName)
+	if upstreamModelName == "" {
+		return preparedUpstreamRequest{}, errors.New("model is required")
+	}
+
+	payload := make(map[string]interface{}, len(requestBody)+4)
+	for key, value := range requestBody {
+		switch key {
+		case "model", "model_name":
+			continue
+		case "size", "resolution":
+			if _, exists := requestBody["aspect_ratio"]; !exists {
+				if ratio := klingAspectRatioFromValue(value); ratio != "" {
+					payload["aspect_ratio"] = ratio
+				}
+			}
+		case "image_url":
+			if _, exists := requestBody["image"]; !exists {
+				payload["image"] = value
+			}
+		case "n":
+			if _, exists := requestBody["num_videos"]; !exists {
+				payload["num_videos"] = value
+			}
+		default:
+			payload[key] = value
+		}
+	}
+	payload["model_name"] = upstreamModelName
+	if image := firstNonEmptyString(
+		stringFromValue(requestBody["image"]),
+		stringFromValue(requestBody["image_url"]),
+		stringFromValue(requestBody["first_frame_image"]),
+		stringFromValue(requestBody["firstFrameImage"]),
+	); image != "" {
+		payload["image"] = image
+	}
+	if _, exists := payload["duration"]; !exists {
+		if seconds := videoDurationSecondsFromPayload(requestBody); seconds > 0 {
+			payload["duration"] = strconv.Itoa(seconds)
+		}
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return preparedUpstreamRequest{}, err
+	}
+	headers := jsonHeaders()
+	headers.Set("Authorization", "Bearer "+strings.TrimSpace(channel.APIKey))
+	return preparedUpstreamRequest{
+		Method: http.MethodPost,
+		URL:    upstreamURLForRequest(channel.BaseURL, "/v1/videos/image2video"),
+		Body:   body,
+		Header: headers,
+	}, nil
+}
+
+func klingAspectRatioFromValue(value interface{}) string {
+	raw := strings.TrimSpace(stringFromValue(value))
+	if raw == "" || strings.EqualFold(raw, "auto") {
+		return ""
+	}
+	normalized := strings.ToLower(raw)
+	switch normalized {
+	case "16:9", "9:16", "1:1", "4:3", "3:4", "21:9":
+		return normalized
+	case "landscape":
+		return "16:9"
+	case "portrait":
+		return "9:16"
+	case "square":
+		return "1:1"
+	}
+	if strings.Contains(normalized, ":") {
+		return normalized
+	}
+	return raw
+}
+
+func videoTaskStatusPath(protocol proxyProtocol, upstreamTaskID string) string {
+	escaped := url.PathEscape(strings.TrimSpace(upstreamTaskID))
+	if protocol == protocolKling {
+		return "/v1/videos/image2video/" + escaped
+	}
+	return "/v1/video/generations/" + escaped
+}
+
 func jsonHeaders() http.Header {
 	headers := http.Header{}
 	headers.Set("Content-Type", "application/json")
@@ -1886,6 +2068,10 @@ func channelProtocol(channelType string) proxyProtocol {
 		return protocolResponses
 	case "openai-video", "openai_video", "video":
 		return protocolOpenAIVideo
+	case "kling", "klingai", "kling_ai":
+		return protocolKling
+	case "midjourney", "mj":
+		return protocolMidjourney
 	case "claude", "anthropic":
 		return protocolClaude
 	case "gemini", "google":
@@ -1901,6 +2087,18 @@ func supportsOpenAIImageEndpoint(protocol proxyProtocol) bool {
 
 func supportsOpenAIVideoEndpoint(protocol proxyProtocol) bool {
 	return protocol == protocolOpenAIVideo
+}
+
+func supportsVideoEndpoint(protocol proxyProtocol) bool {
+	return protocol == protocolOpenAIVideo || protocol == protocolKling
+}
+
+func videoRequestModelName(requestBody map[string]interface{}) string {
+	return firstNonEmptyString(
+		stringFromValue(requestBody["model"]),
+		stringFromValue(requestBody["model_name"]),
+		stringFromValue(requestBody["modelName"]),
+	)
 }
 
 func normalizeProviderRequest(protocol proxyProtocol, path string, requestBody map[string]interface{}, modelName string) normalizedAIRequest {
@@ -2509,7 +2707,7 @@ func videoDurationPrice(resolution model.VideoResolutionPrice, seconds int) (dec
 }
 
 func videoResolutionFromPayload(requestBody map[string]interface{}) string {
-	for _, key := range []string{"size", "resolution", "quality"} {
+	for _, key := range []string{"size", "resolution", "quality", "aspect_ratio", "aspectRatio"} {
 		if value, ok := requestBody[key].(string); ok {
 			normalized := model.NormalizeVideoResolution(value)
 			if normalized != "" && normalized != "auto" {

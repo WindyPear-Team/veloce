@@ -161,6 +161,53 @@ func TestPrepareOpenAIVideoGenerationRequestRewritesModel(t *testing.T) {
 	}
 }
 
+func TestPrepareKlingImageToVideoRequestRewritesModel(t *testing.T) {
+	channel := &model.Channel{BaseURL: "https://example.com", APIKey: "upstream-key"}
+	requestBody := map[string]interface{}{
+		"model_name":      "client-video-model",
+		"prompt":          "make a pear video",
+		"image_url":       "https://example.com/input.png",
+		"size":            "16:9",
+		"duration":        float64(5),
+		"n":               float64(2),
+		"negative_prompt": "low quality",
+	}
+
+	request, err := prepareKlingImageToVideoRequest(channel, "kling-v3-turbo", requestBody)
+	if err != nil {
+		t.Fatalf("prepareKlingImageToVideoRequest returned error: %v", err)
+	}
+	if request.URL != "https://example.com/v1/videos/image2video" {
+		t.Fatalf("kling image-to-video URL = %q", request.URL)
+	}
+	if request.Header.Get("Authorization") != "Bearer upstream-key" {
+		t.Fatalf("Authorization was not set from channel key")
+	}
+	if requestBody["model_name"] != "client-video-model" {
+		t.Fatalf("original request body was mutated")
+	}
+
+	var payload map[string]interface{}
+	if err := json.Unmarshal(request.Body, &payload); err != nil {
+		t.Fatalf("failed to decode prepared body: %v", err)
+	}
+	if payload["model_name"] != "kling-v3-turbo" {
+		t.Fatalf("prepared model_name = %q, want upstream model", payload["model_name"])
+	}
+	if payload["image"] != "https://example.com/input.png" {
+		t.Fatalf("prepared image = %q", payload["image"])
+	}
+	if payload["aspect_ratio"] != "16:9" {
+		t.Fatalf("prepared aspect_ratio = %q", payload["aspect_ratio"])
+	}
+	if payload["num_videos"] != float64(2) {
+		t.Fatalf("prepared num_videos = %v", payload["num_videos"])
+	}
+	if _, exists := payload["model"]; exists {
+		t.Fatalf("prepared payload should not include OpenAI model field")
+	}
+}
+
 func TestEstimateImageUsageUsesResponseImageCount(t *testing.T) {
 	requestBody := map[string]interface{}{
 		"model":  "gpt-image-1",
@@ -282,6 +329,33 @@ func TestVideoTaskPayloadHelpers(t *testing.T) {
 	}
 	if got := videoTaskStatusFromPayload(payload); got != "processing" {
 		t.Fatalf("videoTaskStatusFromPayload() = %q", got)
+	}
+}
+
+func TestKlingVideoTaskPayloadHelpers(t *testing.T) {
+	payload := map[string]interface{}{
+		"data": map[string]interface{}{
+			"task_id":     "kling-task-123",
+			"task_status": "succeed",
+			"task_result": map[string]interface{}{
+				"videos": []interface{}{
+					map[string]interface{}{"id": "video-1", "url": "https://example.com/video.mp4"},
+				},
+			},
+		},
+	}
+	if got := upstreamTaskIDFromPayload(payload); got != "kling-task-123" {
+		t.Fatalf("upstreamTaskIDFromPayload() = %q", got)
+	}
+	if got := videoTaskStatusFromPayload(payload); got != "succeeded" {
+		t.Fatalf("videoTaskStatusFromPayload() = %q", got)
+	}
+	data, ok := videoTaskDataFromPayload(payload).([]map[string]interface{})
+	if !ok || len(data) != 1 || data[0]["url"] != "https://example.com/video.mp4" {
+		t.Fatalf("videoTaskDataFromPayload() = %#v", videoTaskDataFromPayload(payload))
+	}
+	if got := videoTaskStatusPath(protocolKling, "task/123"); got != "/v1/videos/image2video/task%2F123" {
+		t.Fatalf("videoTaskStatusPath() = %q", got)
 	}
 }
 

@@ -285,22 +285,46 @@ func Run() error {
 	}
 
 	// AI Gateway routes (Proxy)
+	rootGateway := r.Group("")
+	rootGateway.Use(middleware.AuthMiddleware(authService), rateLimiter.Middleware())
+	{
+		rootGateway.GET("/balance", proxyService.HandleTokenBalance)
+		rootGateway.GET("/user/balance", proxyService.HandleUserBalance)
+	}
+
 	gateway := r.Group("/v1")
 	gateway.Use(middleware.AuthMiddleware(authService), rateLimiter.Middleware())
 	{
 		gateway.GET("/models", proxyService.ListModels)
+		gateway.GET("/balance", proxyService.HandleTokenBalance)
+		gateway.GET("/user/balance", proxyService.HandleUserBalance)
+		gateway.GET("/tasks/:id", proxyService.HandleUnifiedTaskStatus)
+		gateway.POST("/uploads/images", proxyService.HandleUploadImage)
+		gateway.POST("/audio/speech", proxyService.HandleAudioSpeech)
+		gateway.POST("/audio/transcriptions", proxyService.HandleAudioTranscription)
+		gateway.POST("/moderations", proxyService.HandleModeration)
 		gateway.POST("/chat/completions", proxyService.HandleRequest)
 		gateway.POST("/completions", proxyService.HandleRequest)
 		gateway.POST("/responses", proxyService.HandleRequest)
-		gateway.POST("/images/generations", proxyService.HandleImageGeneration)
+		gateway.POST("/images/generations", proxyService.HandleImageGenerationCompatible)
+		gateway.GET("/images/generations/:id", proxyService.HandleImageGenerationTaskStatus)
 		gateway.POST("/images/edits", proxyService.HandleImageEdit)
-		gateway.POST("/videos/generations", proxyService.HandleVideoGeneration)
+		gateway.POST("/videos/generations", proxyService.HandleVideoGenerationCompatible)
+		gateway.GET("/videos/generations/:id", proxyService.HandleUnifiedTaskStatus)
 		gateway.POST("/video/generations", proxyService.HandleVideoTaskCreate)
 		gateway.GET("/video/generations/:id", proxyService.HandleVideoTaskStatus)
+		gateway.POST("/videos/image2video", proxyService.HandleVideoTaskCreate)
+		gateway.GET("/videos/image2video/:id", proxyService.HandleVideoTaskStatus)
 		gateway.POST("/video/tasks", proxyService.HandleVideoTaskCreate)
 		gateway.GET("/video/tasks/:id", proxyService.HandleVideoTaskStatus)
 		gateway.POST("/videos/tasks", proxyService.HandleVideoTaskCreate)
 		gateway.GET("/videos/tasks/:id", proxyService.HandleVideoTaskStatus)
+		gateway.POST("/midjourney/generations", proxyService.HandleMidjourneyCreate)
+		gateway.POST("/midjourney/generations/imagine", proxyService.HandleMidjourneyCreate)
+		for _, action := range []string{"blend", "describe", "edits", "high-variation", "inpaint", "low-variation", "modal", "pan", "reroll", "upscale", "variation", "video", "zoom", "remix"} {
+			gateway.POST("/midjourney/generations/"+action, proxyService.HandleMidjourneyCreate)
+		}
+		gateway.GET("/midjourney/:id", proxyService.HandleMidjourneyStatus)
 		gateway.POST("/messages", proxyService.HandleClaudeMessages)
 		gateway.POST("/models/:modelAction", proxyService.HandleGeminiGenerateContent)
 	}
