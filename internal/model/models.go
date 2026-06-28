@@ -371,3 +371,24 @@ type TokenLog struct {
 	UserAgent               string          `json:"user_agent"`
 	CreatedAt               time.Time       `json:"created_at"`
 }
+
+// AuditLog records API access, login attempts, admin changes, and background system events.
+type AuditLog struct {
+	ID         uint      `gorm:"primaryKey" json:"id"`
+	LogType    string    `gorm:"index;size:32;not null" json:"log_type"`
+	Action     string    `gorm:"index;size:100;not null" json:"action"`
+	Resource   string    `gorm:"index;size:255" json:"resource"`
+	UserID     *uint     `gorm:"index" json:"user_id,omitempty"`
+	User       User      `gorm:"foreignKey:UserID" json:"user,omitempty"`
+	APIKeyID   *uint     `gorm:"index" json:"api_key_id,omitempty"`
+	Method     string    `gorm:"size:12" json:"method"`
+	Path       string    `gorm:"index;size:255" json:"path"`
+	Query      string    `gorm:"size:1000" json:"query,omitempty"`
+	StatusCode int       `gorm:"index" json:"status_code"`
+	IPAddress  string    `gorm:"size:45" json:"ip_address"`
+	UserAgent  string    `gorm:"size:500" json:"user_agent"`
+	Message    string    `gorm:"size:1000" json:"message"`
+	Metadata   string    `gorm:"type:text" json:"metadata,omitempty"`
+	DurationMs int64     `json:"duration_ms"`
+	CreatedAt  time.Time `gorm:"index" json:"created_at"`
+}

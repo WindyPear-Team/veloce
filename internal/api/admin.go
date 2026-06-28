@@ -97,6 +97,12 @@ type systemSettingsResponse struct {
 	ReliabilityAutoDetectTimeoutSeconds  string `json:"reliability_auto_detect_timeout_seconds"`
 	ReliabilityAutoRecoverEnabled        bool   `json:"reliability_auto_recover_enabled"`
 	ReliabilityRecoveryAfterSeconds      string `json:"reliability_recovery_after_seconds"`
+	LogRetentionAPIDays                  string `json:"log_retention_api_days"`
+	LogRetentionLoginDays                string `json:"log_retention_login_days"`
+	LogRetentionAdminDays                string `json:"log_retention_admin_days"`
+	LogRetentionSystemDays               string `json:"log_retention_system_days"`
+	LogRetentionTokenDays                string `json:"log_retention_token_days"`
+	LogRetentionCleanupIntervalHours     string `json:"log_retention_cleanup_interval_hours"`
 	CheckInEnabled                       bool   `json:"checkin_enabled"`
 	CheckInDailyReward                   string `json:"checkin_daily_reward"`
 	CheckInTimezone                      string `json:"checkin_timezone"`
@@ -222,6 +228,12 @@ type systemSettingsInput struct {
 	ReliabilityAutoDetectTimeoutSeconds  *string `json:"reliability_auto_detect_timeout_seconds"`
 	ReliabilityAutoRecoverEnabled        *bool   `json:"reliability_auto_recover_enabled"`
 	ReliabilityRecoveryAfterSeconds      *string `json:"reliability_recovery_after_seconds"`
+	LogRetentionAPIDays                  *string `json:"log_retention_api_days"`
+	LogRetentionLoginDays                *string `json:"log_retention_login_days"`
+	LogRetentionAdminDays                *string `json:"log_retention_admin_days"`
+	LogRetentionSystemDays               *string `json:"log_retention_system_days"`
+	LogRetentionTokenDays                *string `json:"log_retention_token_days"`
+	LogRetentionCleanupIntervalHours     *string `json:"log_retention_cleanup_interval_hours"`
 	CheckInEnabled                       *bool   `json:"checkin_enabled"`
 	CheckInDailyReward                   *string `json:"checkin_daily_reward"`
 	CheckInTimezone                      *string `json:"checkin_timezone"`
@@ -395,6 +407,12 @@ func (api *SystemAPI) UpdateSettings(c *gin.Context) {
 		"reliability_auto_detect_interval_seconds": input.ReliabilityAutoDetectIntervalSeconds,
 		"reliability_auto_detect_timeout_seconds":  input.ReliabilityAutoDetectTimeoutSeconds,
 		"reliability_recovery_after_seconds":       input.ReliabilityRecoveryAfterSeconds,
+		"log_retention_api_days":                   input.LogRetentionAPIDays,
+		"log_retention_login_days":                 input.LogRetentionLoginDays,
+		"log_retention_admin_days":                 input.LogRetentionAdminDays,
+		"log_retention_system_days":                input.LogRetentionSystemDays,
+		"log_retention_token_days":                 input.LogRetentionTokenDays,
+		"log_retention_cleanup_interval_hours":     input.LogRetentionCleanupIntervalHours,
 		"checkin_daily_reward":                     input.CheckInDailyReward,
 		"checkin_timezone":                         input.CheckInTimezone,
 		"checkin_streak_cycle_days":                input.CheckInStreakCycleDays,
@@ -573,6 +591,12 @@ func currentPublicSystemSettings() systemSettingsResponse {
 		ReliabilityAutoDetectTimeoutSeconds:  settingString("reliability_auto_detect_timeout_seconds", "10"),
 		ReliabilityAutoRecoverEnabled:        settingBool("reliability_auto_recover_enabled", false),
 		ReliabilityRecoveryAfterSeconds:      settingString("reliability_recovery_after_seconds", "1800"),
+		LogRetentionAPIDays:                  settingString("log_retention_api_days", "0"),
+		LogRetentionLoginDays:                settingString("log_retention_login_days", "0"),
+		LogRetentionAdminDays:                settingString("log_retention_admin_days", "0"),
+		LogRetentionSystemDays:               settingString("log_retention_system_days", "0"),
+		LogRetentionTokenDays:                settingString("log_retention_token_days", "0"),
+		LogRetentionCleanupIntervalHours:     settingString("log_retention_cleanup_interval_hours", "24"),
 		CheckInEnabled:                       settingBool("checkin_enabled", false),
 		CheckInDailyReward:                   settingString("checkin_daily_reward", "0"),
 		CheckInTimezone:                      settingString("checkin_timezone", "Asia/Shanghai"),
@@ -3666,6 +3690,107 @@ func (api *StatsAPI) GetLogs(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, paginatedResponse{Items: logs, Total: total, Page: page, PageSize: pageSize})
+}
+
+type auditLogUserResponse struct {
+	ID       uint   `json:"id"`
+	Username string `json:"username"`
+	Email    string `json:"email"`
+}
+
+type auditLogResponse struct {
+	ID         uint                  `json:"id"`
+	LogType    string                `json:"log_type"`
+	Action     string                `json:"action"`
+	Resource   string                `json:"resource"`
+	UserID     *uint                 `json:"user_id,omitempty"`
+	User       *auditLogUserResponse `json:"user,omitempty"`
+	APIKeyID   *uint                 `json:"api_key_id,omitempty"`
+	Method     string                `json:"method"`
+	Path       string                `json:"path"`
+	Query      string                `json:"query,omitempty"`
+	StatusCode int                   `json:"status_code"`
+	IPAddress  string                `json:"ip_address"`
+	UserAgent  string                `json:"user_agent"`
+	Message    string                `json:"message"`
+	Metadata   string                `json:"metadata,omitempty"`
+	DurationMs int64                 `json:"duration_ms"`
+	CreatedAt  time.Time             `json:"created_at"`
+}
+
+func (api *StatsAPI) GetAuditLogs(c *gin.Context) {
+	var logs []model.AuditLog
+	query := model.DB.Model(&model.AuditLog{}).Preload("User")
+	query = applyAuditLogFilters(query, c)
+	var err error
+	query, err = applyCreatedAtRange(query, c, "created_at")
+	if writePaginationError(c, err) {
+		return
+	}
+
+	page, pageSize := parsePagination(c)
+	var total int64
+	if err := query.Count(&total).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to count audit logs"})
+		return
+	}
+	if err := query.Order("created_at DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&logs).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load audit logs"})
+		return
+	}
+	items := make([]auditLogResponse, 0, len(logs))
+	for _, logItem := range logs {
+		items = append(items, auditLogToResponse(logItem))
+	}
+	c.JSON(http.StatusOK, paginatedResponse{Items: items, Total: total, Page: page, PageSize: pageSize})
+}
+
+func applyAuditLogFilters(query *gorm.DB, c *gin.Context) *gorm.DB {
+	if logType := strings.TrimSpace(c.Query("log_type")); logType != "" {
+		query = query.Where("log_type = ?", strings.ToLower(logType))
+	}
+	if action := strings.TrimSpace(c.Query("action")); action != "" {
+		query = query.Where("LOWER(action) LIKE ?", "%"+strings.ToLower(action)+"%")
+	}
+	if path := strings.TrimSpace(c.Query("path")); path != "" {
+		query = query.Where("LOWER(path) LIKE ?", "%"+strings.ToLower(path)+"%")
+	}
+	if userID := positiveIntQuery(c, "user_id", 0); userID > 0 {
+		query = query.Where("user_id = ?", userID)
+	}
+	if statusCode := positiveIntQuery(c, "status_code", 0); statusCode > 0 {
+		query = query.Where("status_code = ?", statusCode)
+	}
+	return query
+}
+
+func auditLogToResponse(logItem model.AuditLog) auditLogResponse {
+	item := auditLogResponse{
+		ID:         logItem.ID,
+		LogType:    logItem.LogType,
+		Action:     logItem.Action,
+		Resource:   logItem.Resource,
+		UserID:     logItem.UserID,
+		APIKeyID:   logItem.APIKeyID,
+		Method:     logItem.Method,
+		Path:       logItem.Path,
+		Query:      logItem.Query,
+		StatusCode: logItem.StatusCode,
+		IPAddress:  logItem.IPAddress,
+		UserAgent:  logItem.UserAgent,
+		Message:    logItem.Message,
+		Metadata:   logItem.Metadata,
+		DurationMs: logItem.DurationMs,
+		CreatedAt:  logItem.CreatedAt,
+	}
+	if logItem.UserID != nil && logItem.User.ID != 0 {
+		item.User = &auditLogUserResponse{
+			ID:       logItem.User.ID,
+			Username: logItem.User.Username,
+			Email:    logItem.User.Email,
+		}
+	}
+	return item
 }
 
 func (api *StatsAPI) GetChannelUsage(c *gin.Context) {

@@ -40,16 +40,19 @@ func Run() error {
 	syncService := service.NewSyncService()
 	statusService := service.NewStatusService()
 	reliabilityService := service.NewReliabilityService()
+	logCleanupService := service.NewLogCleanupService()
 	rateLimiter := middleware.NewRateLimiter()
 
 	// Start sync loop
 	syncService.StartSyncLoop()
 	statusService.Start()
 	reliabilityService.Start()
+	logCleanupService.Start()
 
 	// Initialize Gin
 	r := gin.Default()
 	r.Use(requestBodyLimit(maxRequestBodyBytes))
+	r.Use(middleware.AuditMiddleware())
 	frontendFS, err := webui.DistFS()
 	if err != nil {
 		return err
@@ -113,6 +116,17 @@ func Run() error {
 			Password: input.Password,
 		})
 		if err != nil {
+			service.RecordAuditLog(service.AuditLogInput{
+				LogType:    service.AuditLogTypeLogin,
+				Action:     "setup_failed",
+				Resource:   "initial_setup",
+				Method:     c.Request.Method,
+				Path:       c.Request.URL.Path,
+				StatusCode: http.StatusInternalServerError,
+				IPAddress:  c.ClientIP(),
+				UserAgent:  c.Request.UserAgent(),
+				Message:    err.Error(),
+			})
 			switch {
 			case errors.Is(err, service.ErrInitialSetupComplete):
 				c.JSON(http.StatusConflict, gin.H{"error": "Initial setup is already complete"})
@@ -123,6 +137,17 @@ func Run() error {
 			}
 			return
 		}
+		service.RecordAuditLog(service.AuditLogInput{
+			LogType:    service.AuditLogTypeLogin,
+			Action:     "setup_success",
+			Resource:   "initial_setup",
+			UserID:     uintPtr(user.ID),
+			Method:     c.Request.Method,
+			Path:       c.Request.URL.Path,
+			StatusCode: http.StatusOK,
+			IPAddress:  c.ClientIP(),
+			UserAgent:  c.Request.UserAgent(),
+		})
 		c.JSON(http.StatusOK, gin.H{"token": token, "user": user})
 	})
 
@@ -150,9 +175,31 @@ func Run() error {
 				CaptchaToken: input.CaptchaToken,
 			})
 			if err != nil {
+				service.RecordAuditLog(service.AuditLogInput{
+					LogType:    service.AuditLogTypeLogin,
+					Action:     "password_login_failed",
+					Resource:   "password_login",
+					Method:     c.Request.Method,
+					Path:       c.Request.URL.Path,
+					StatusCode: http.StatusUnauthorized,
+					IPAddress:  c.ClientIP(),
+					UserAgent:  c.Request.UserAgent(),
+					Message:    err.Error(),
+				})
 				writeAuthError(c, err)
 				return
 			}
+			service.RecordAuditLog(service.AuditLogInput{
+				LogType:    service.AuditLogTypeLogin,
+				Action:     "password_login_success",
+				Resource:   "password_login",
+				UserID:     uintPtr(user.ID),
+				Method:     c.Request.Method,
+				Path:       c.Request.URL.Path,
+				StatusCode: http.StatusOK,
+				IPAddress:  c.ClientIP(),
+				UserAgent:  c.Request.UserAgent(),
+			})
 			c.JSON(http.StatusOK, gin.H{"token": token, "user": user})
 		})
 		auth.POST("/password/register", func(c *gin.Context) {
@@ -185,9 +232,31 @@ func Run() error {
 				ReferralCode: input.ReferralCode,
 			})
 			if err != nil {
+				service.RecordAuditLog(service.AuditLogInput{
+					LogType:    service.AuditLogTypeLogin,
+					Action:     "password_register_failed",
+					Resource:   "password_register",
+					Method:     c.Request.Method,
+					Path:       c.Request.URL.Path,
+					StatusCode: http.StatusBadRequest,
+					IPAddress:  c.ClientIP(),
+					UserAgent:  c.Request.UserAgent(),
+					Message:    err.Error(),
+				})
 				writeAuthError(c, err)
 				return
 			}
+			service.RecordAuditLog(service.AuditLogInput{
+				LogType:    service.AuditLogTypeLogin,
+				Action:     "password_register_success",
+				Resource:   "password_register",
+				UserID:     uintPtr(user.ID),
+				Method:     c.Request.Method,
+				Path:       c.Request.URL.Path,
+				StatusCode: http.StatusOK,
+				IPAddress:  c.ClientIP(),
+				UserAgent:  c.Request.UserAgent(),
+			})
 			clearReferralCookie(c)
 			c.JSON(http.StatusOK, gin.H{"token": token, "user": user})
 		})
@@ -297,11 +366,12 @@ func Run() error {
 			referralCode := getReferralCookie(c)
 			clearReferralCookie(c)
 			var token string
+			var loginUser *model.User
 			if _, ok, err := authService.OIDCBindRequest(state); err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load OIDC bind request"})
 				return
 			} else if ok {
-				_, token, err = authService.HandleOIDCBindCallback(c.Request.Context(), code, state)
+				loginUser, token, err = authService.HandleOIDCBindCallback(c.Request.Context(), code, state)
 			} else {
 				if required, setupErr := authService.InitialSetupRequired(); setupErr != nil {
 					c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load setup status"})
@@ -310,12 +380,34 @@ func Run() error {
 					c.JSON(http.StatusConflict, gin.H{"error": "Initial setup is required"})
 					return
 				}
-				_, token, err = authService.HandleCallback(c.Request.Context(), code, referralCode)
+				loginUser, token, err = authService.HandleCallback(c.Request.Context(), code, referralCode)
 			}
 			if err != nil {
+				service.RecordAuditLog(service.AuditLogInput{
+					LogType:    service.AuditLogTypeLogin,
+					Action:     "oidc_login_failed",
+					Resource:   "oidc_callback",
+					Method:     c.Request.Method,
+					Path:       c.Request.URL.Path,
+					StatusCode: http.StatusInternalServerError,
+					IPAddress:  c.ClientIP(),
+					UserAgent:  c.Request.UserAgent(),
+					Message:    err.Error(),
+				})
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
 			}
+			service.RecordAuditLog(service.AuditLogInput{
+				LogType:    service.AuditLogTypeLogin,
+				Action:     "oidc_login_success",
+				Resource:   "oidc_callback",
+				UserID:     userIDPtr(loginUser),
+				Method:     c.Request.Method,
+				Path:       c.Request.URL.Path,
+				StatusCode: http.StatusFound,
+				IPAddress:  c.ClientIP(),
+				UserAgent:  c.Request.UserAgent(),
+			})
 			// Redirect back to frontend with token in fragment to avoid server logs.
 			c.Redirect(http.StatusFound, frontendTokenRedirectURL(returnTo, token))
 		})
@@ -344,11 +436,33 @@ func Run() error {
 			}
 			referralCode := getReferralCookie(c)
 			clearReferralCookie(c)
-			_, token, err := authService.HandleOAuthCallback(c.Request.Context(), c.Param("provider"), code, referralCode)
+			loginUser, token, err := authService.HandleOAuthCallback(c.Request.Context(), c.Param("provider"), code, referralCode)
 			if err != nil {
+				service.RecordAuditLog(service.AuditLogInput{
+					LogType:    service.AuditLogTypeLogin,
+					Action:     "oauth_login_failed",
+					Resource:   "oauth_callback:" + c.Param("provider"),
+					Method:     c.Request.Method,
+					Path:       c.Request.URL.Path,
+					StatusCode: http.StatusInternalServerError,
+					IPAddress:  c.ClientIP(),
+					UserAgent:  c.Request.UserAgent(),
+					Message:    err.Error(),
+				})
 				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 				return
 			}
+			service.RecordAuditLog(service.AuditLogInput{
+				LogType:    service.AuditLogTypeLogin,
+				Action:     "oauth_login_success",
+				Resource:   "oauth_callback:" + c.Param("provider"),
+				UserID:     userIDPtr(loginUser),
+				Method:     c.Request.Method,
+				Path:       c.Request.URL.Path,
+				StatusCode: http.StatusFound,
+				IPAddress:  c.ClientIP(),
+				UserAgent:  c.Request.UserAgent(),
+			})
 			c.Redirect(http.StatusFound, frontendTokenRedirectURL(returnTo, token))
 		})
 	}
@@ -469,6 +583,7 @@ func Run() error {
 
 		// Stats
 		admin.GET("/logs", statsAPI.GetLogs)
+		admin.GET("/audit-logs", statsAPI.GetAuditLogs)
 		admin.GET("/stats", statsAPI.GetDashboardStats)
 		admin.GET("/channel-usage", statsAPI.GetChannelUsage)
 		service.ApplyAdminRouteHooks(admin)
@@ -731,4 +846,15 @@ func originFromURL(rawURL string) string {
 
 func hasRoutePrefix(path, prefix string) bool {
 	return path == prefix || strings.HasPrefix(path, prefix+"/")
+}
+
+func uintPtr(value uint) *uint {
+	return &value
+}
+
+func userIDPtr(user *model.User) *uint {
+	if user == nil || user.ID == 0 {
+		return nil
+	}
+	return uintPtr(user.ID)
 }

@@ -49,6 +49,7 @@ func InitDB() {
 		&SystemSetting{},
 		&VideoTask{},
 		&TokenLog{},
+		&AuditLog{},
 	)
 	if err != nil {
 		log.Fatalf("failed to migrate database: %v", err)
@@ -369,6 +370,12 @@ func EnsureDefaultSystemSettings() error {
 		"reliability_auto_detect_timeout_seconds":  "10",
 		"reliability_auto_recover_enabled":         "false",
 		"reliability_recovery_after_seconds":       "1800",
+		"log_retention_api_days":                   "0",
+		"log_retention_login_days":                 "0",
+		"log_retention_admin_days":                 "0",
+		"log_retention_system_days":                "0",
+		"log_retention_token_days":                 "0",
+		"log_retention_cleanup_interval_hours":     "24",
 		"checkin_enabled":                          "false",
 		"checkin_daily_reward":                     "0",
 		"checkin_timezone":                         "Asia/Shanghai",

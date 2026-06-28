@@ -63,9 +63,31 @@ func (api *PasskeyAPI) CompleteLogin(c *gin.Context) {
 	}
 	user, token, err := api.AuthService.FinishPasskeyLogin(input)
 	if err != nil {
+		service.RecordAuditLog(service.AuditLogInput{
+			LogType:    service.AuditLogTypeLogin,
+			Action:     "passkey_login_failed",
+			Resource:   "passkey_login",
+			Method:     c.Request.Method,
+			Path:       c.Request.URL.Path,
+			StatusCode: http.StatusUnauthorized,
+			IPAddress:  c.ClientIP(),
+			UserAgent:  c.Request.UserAgent(),
+			Message:    err.Error(),
+		})
 		writePasskeyError(c, err)
 		return
 	}
+	service.RecordAuditLog(service.AuditLogInput{
+		LogType:    service.AuditLogTypeLogin,
+		Action:     "passkey_login_success",
+		Resource:   "passkey_login",
+		UserID:     &user.ID,
+		Method:     c.Request.Method,
+		Path:       c.Request.URL.Path,
+		StatusCode: http.StatusOK,
+		IPAddress:  c.ClientIP(),
+		UserAgent:  c.Request.UserAgent(),
+	})
 	c.JSON(http.StatusOK, gin.H{"token": token, "user": user})
 }
 
