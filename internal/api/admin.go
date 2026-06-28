@@ -143,6 +143,7 @@ type systemSettingsResponse struct {
 	OIDCClientID                  string `json:"oidc_client_id,omitempty"`
 	OIDCClientSecret              string `json:"oidc_client_secret,omitempty"`
 	OIDCRedirectURL               string `json:"oidc_redirect_url,omitempty"`
+	OAuthProviders                string `json:"oauth_providers,omitempty"`
 }
 
 type systemSettingsInput struct {
@@ -260,6 +261,7 @@ type systemSettingsInput struct {
 	OIDCClientID                  *string `json:"oidc_client_id"`
 	OIDCClientSecret              *string `json:"oidc_client_secret"`
 	OIDCRedirectURL               *string `json:"oidc_redirect_url"`
+	OAuthProviders                *string `json:"oauth_providers"`
 }
 
 func (api *SystemAPI) PublicSettings(c *gin.Context) {
@@ -301,6 +303,16 @@ func (api *SystemAPI) UpdateSettings(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid auth agreement mode"})
 			return
 		}
+	}
+
+	var oauthProvidersValue *string
+	if input.OAuthProviders != nil {
+		normalized, err := service.NormalizeOAuthProvidersJSON(*input.OAuthProviders)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		oauthProvidersValue = &normalized
 	}
 
 	if input.SiteName != nil {
@@ -362,6 +374,7 @@ func (api *SystemAPI) UpdateSettings(c *gin.Context) {
 		"oidc_client_id":                   input.OIDCClientID,
 		"oidc_client_secret":               input.OIDCClientSecret,
 		"oidc_redirect_url":                input.OIDCRedirectURL,
+		"oauth_providers":                  oauthProvidersValue,
 		"referral_commission_rate":         input.ReferralCommissionRate,
 		"group_multiplier_mode":            input.GroupMultiplierMode,
 		"checkin_daily_reward":             input.CheckInDailyReward,
@@ -556,6 +569,7 @@ func currentPublicSystemSettings() systemSettingsResponse {
 		SSRFProtectionEnabled:         settingBool("ssrf_protection_enabled", true),
 		SSRFAllowPrivateNetworks:      settingBool("ssrf_allow_private_networks", false),
 		OIDCEnabled:                   settingBool("oidc_enabled", false),
+		OAuthProviders:                publicOAuthProvidersJSON(),
 		PasskeyEnabled:                settingBool("passkey_enabled", false),
 		PasswordLoginEnabled:          settingBool("password_login_enabled", true),
 		PasswordRegistrationEnabled:   settingBool("password_registration_enabled", true),
@@ -571,6 +585,7 @@ func currentAdminSystemSettings() systemSettingsResponse {
 	settings.OIDCClientID = settingString("oidc_client_id", "")
 	settings.OIDCClientSecret = settingString("oidc_client_secret", "")
 	settings.OIDCRedirectURL = settingString("oidc_redirect_url", "")
+	settings.OAuthProviders = settingString("oauth_providers", "[]")
 	settings.HCaptchaSecret = settingString("hcaptcha_secret", "")
 	settings.SMTPHost = settingString("smtp_host", "")
 	settings.SMTPPort = settingString("smtp_port", "587")
@@ -591,6 +606,34 @@ func currentAdminSystemSettings() systemSettingsResponse {
 	settings.PaymentOpenPaymentNotifyURL = callbackURLFromBaseURL(settings.BaseURL, "/api/payment/openpayment/notify")
 	settings.PaymentOpenPaymentReturnURL = callbackURLFromBaseURL(settings.BaseURL, "/api/payment/openpayment/return")
 	return settings
+}
+
+type publicOAuthProvider struct {
+	Key         string `json:"key"`
+	Name        string `json:"name"`
+	LoginURL    string `json:"login_url"`
+	CallbackURL string `json:"callback_url"`
+}
+
+func publicOAuthProvidersJSON() string {
+	providers := service.EnabledOAuthProviderConfigs()
+	publicProviders := make([]publicOAuthProvider, 0, len(providers))
+	for _, provider := range providers {
+		if provider.Key == "" || provider.Name == "" {
+			continue
+		}
+		publicProviders = append(publicProviders, publicOAuthProvider{
+			Key:         provider.Key,
+			Name:        provider.Name,
+			LoginURL:    "/auth/oauth/" + provider.Key + "/login",
+			CallbackURL: service.OAuthCallbackURL(provider),
+		})
+	}
+	body, err := json.Marshal(publicProviders)
+	if err != nil {
+		return "[]"
+	}
+	return string(body)
 }
 
 func currentChatPageMode() string {

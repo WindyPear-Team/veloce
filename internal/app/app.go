@@ -241,6 +241,41 @@ func Run() error {
 			setOIDCReturnCookie(c, authReturnURL(c), 600)
 			c.Redirect(http.StatusFound, authURL)
 		})
+		auth.GET("/oauth/:provider/login", func(c *gin.Context) {
+			if required, err := authService.InitialSetupRequired(); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load setup status"})
+				return
+			} else if required {
+				c.JSON(http.StatusConflict, gin.H{"error": "Initial setup is required"})
+				return
+			}
+			if referralCode := model.NormalizeReferralCode(c.Query("ref")); referralCode != "" {
+				setReferralCookie(c, referralCode, 30*24*60*60)
+			}
+			if err := api.RequireAuthAgreementAccepted(api.ParseAgreementAccepted(c.Query("agreement_accepted"))); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+			state, err := newOIDCState()
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to initialize login"})
+				return
+			}
+
+			authURL, err := authService.GetOAuthAuthURL(c.Request.Context(), c.Param("provider"), state)
+			if err != nil {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error()})
+				return
+			}
+			if authURL == "" {
+				c.JSON(http.StatusServiceUnavailable, gin.H{"error": "OAuth provider is not configured"})
+				return
+			}
+
+			setOIDCStateCookie(c, state, 600)
+			setOIDCReturnCookie(c, authReturnURL(c), 600)
+			c.Redirect(http.StatusFound, authURL)
+		})
 		auth.GET("/callback", func(c *gin.Context) {
 			code := c.Query("code")
 			state := c.Query("state")
@@ -280,6 +315,38 @@ func Run() error {
 				return
 			}
 			// Redirect back to frontend with token in fragment to avoid server logs.
+			c.Redirect(http.StatusFound, frontendTokenRedirectURL(returnTo, token))
+		})
+		auth.GET("/oauth/:provider/callback", func(c *gin.Context) {
+			code := c.Query("code")
+			state := c.Query("state")
+			expectedState, err := c.Cookie(oidcStateCookie)
+			returnTo := getOIDCReturnURL(c)
+			clearOIDCStateCookie(c)
+			clearOIDCReturnCookie(c)
+			if err != nil || state == "" || state != expectedState {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid OAuth state"})
+				return
+			}
+			if code == "" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Missing authorization code"})
+				return
+			}
+
+			if required, setupErr := authService.InitialSetupRequired(); setupErr != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load setup status"})
+				return
+			} else if required {
+				c.JSON(http.StatusConflict, gin.H{"error": "Initial setup is required"})
+				return
+			}
+			referralCode := getReferralCookie(c)
+			clearReferralCookie(c)
+			_, token, err := authService.HandleOAuthCallback(c.Request.Context(), c.Param("provider"), code, referralCode)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+				return
+			}
 			c.Redirect(http.StatusFound, frontendTokenRedirectURL(returnTo, token))
 		})
 	}

@@ -2,10 +2,13 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"math"
+	"net/http"
 	"strconv"
 	"strings"
 	"sync"
@@ -33,9 +36,29 @@ type oidcRuntimeConfig struct {
 	RedirectURL  string
 }
 
+type OAuthProviderConfig struct {
+	Key          string `json:"key"`
+	Name         string `json:"name"`
+	Enabled      bool   `json:"enabled"`
+	Issuer       string `json:"issuer"`
+	ClientID     string `json:"client_id"`
+	ClientSecret string `json:"client_secret"`
+	AuthURL      string `json:"auth_url"`
+	TokenURL     string `json:"token_url"`
+	UserInfoURL  string `json:"userinfo_url"`
+	Scope        string `json:"scope"`
+	RedirectURL  string `json:"redirect_url"`
+	SubjectKey   string `json:"subject_key"`
+	EmailKey     string `json:"email_key"`
+	NameKey      string `json:"name_key"`
+	AvatarKey    string `json:"avatar_key"`
+}
+
 type oidcRuntimeClient struct {
 	oauth2Config oauth2.Config
 	verifier     *oidc.IDTokenVerifier
+	provider     OAuthProviderConfig
+	legacyOIDC   bool
 }
 
 type oidcClaims struct {
@@ -61,11 +84,27 @@ func (s *AuthService) GetAuthURL(ctx context.Context, state string) (string, err
 	return client.oauth2Config.AuthCodeURL(state), nil
 }
 
+func (s *AuthService) GetOAuthAuthURL(ctx context.Context, providerKey string, state string) (string, error) {
+	client, err := s.loadOAuthClient(ctx, providerKey)
+	if err != nil {
+		return "", err
+	}
+	return client.oauth2Config.AuthCodeURL(state), nil
+}
+
 func (s *AuthService) HandleCallback(ctx context.Context, code string, referralCode string) (*model.User, string, error) {
+	return s.handleOAuthCallback(ctx, "oidc", code, referralCode)
+}
+
+func (s *AuthService) HandleOAuthCallback(ctx context.Context, providerKey string, code string, referralCode string) (*model.User, string, error) {
+	return s.handleOAuthCallback(ctx, providerKey, code, referralCode)
+}
+
+func (s *AuthService) handleOAuthCallback(ctx context.Context, providerKey string, code string, referralCode string) (*model.User, string, error) {
 	if code == "" {
 		return nil, "", errors.New("missing authorization code")
 	}
-	claims, err := s.verifyOIDCClaims(ctx, code)
+	claims, err := s.verifyOAuthClaims(ctx, providerKey, code)
 	if err != nil {
 		return nil, "", err
 	}
@@ -159,7 +198,11 @@ func (s *AuthService) HandleCallback(ctx context.Context, code string, referralC
 }
 
 func (s *AuthService) verifyOIDCClaims(ctx context.Context, code string) (oidcClaims, error) {
-	client, err := s.loadOIDCClient(ctx)
+	return s.verifyOAuthClaims(ctx, "oidc", code)
+}
+
+func (s *AuthService) verifyOAuthClaims(ctx context.Context, providerKey string, code string) (oidcClaims, error) {
+	client, err := s.loadOAuthClient(ctx, providerKey)
 	if err != nil {
 		return oidcClaims{}, err
 	}
@@ -169,23 +212,35 @@ func (s *AuthService) verifyOIDCClaims(ctx context.Context, code string) (oidcCl
 		return oidcClaims{}, fmt.Errorf("failed to exchange token: %v", err)
 	}
 
-	rawIDToken, ok := oauth2Token.Extra("id_token").(string)
-	if !ok {
-		return oidcClaims{}, errors.New("no id_token in oauth2 token")
-	}
-
-	idToken, err := client.verifier.Verify(ctx, rawIDToken)
-	if err != nil {
-		return oidcClaims{}, fmt.Errorf("failed to verify ID token: %v", err)
-	}
-
 	var claims oidcClaims
-	if err := idToken.Claims(&claims); err != nil {
-		return oidcClaims{}, fmt.Errorf("failed to parse claims: %v", err)
+	if client.verifier != nil {
+		rawIDToken, ok := oauth2Token.Extra("id_token").(string)
+		if ok {
+			idToken, err := client.verifier.Verify(ctx, rawIDToken)
+			if err != nil {
+				return oidcClaims{}, fmt.Errorf("failed to verify ID token: %v", err)
+			}
+			if err := idToken.Claims(&claims); err != nil {
+				return oidcClaims{}, fmt.Errorf("failed to parse claims: %v", err)
+			}
+		}
+	}
+	if client.provider.UserInfoURL != "" {
+		userInfoClaims, err := fetchOAuthUserInfo(ctx, client, oauth2Token.AccessToken)
+		if err != nil {
+			return oidcClaims{}, err
+		}
+		claims = mergeOAuthClaims(claims, userInfoClaims)
 	}
 	if claims.Subject == "" {
-		return oidcClaims{}, errors.New("OIDC subject is missing")
+		return oidcClaims{}, errors.New("OAuth subject is missing")
 	}
+	if !client.legacyOIDC {
+		claims.Subject = oauthStoredSubject(client.provider.Key, claims.Subject)
+	}
+	claims.Email = strings.TrimSpace(claims.Email)
+	claims.Name = strings.TrimSpace(claims.Name)
+	claims.Picture = strings.TrimSpace(claims.Picture)
 	return claims, nil
 }
 
@@ -251,15 +306,28 @@ func settingBool(key string, fallback bool) bool {
 }
 
 func (s *AuthService) loadOIDCClient(ctx context.Context) (*oidcRuntimeClient, error) {
+	return s.loadOAuthClient(ctx, "oidc")
+}
+
+func (s *AuthService) loadOAuthClient(ctx context.Context, providerKey string) (*oidcRuntimeClient, error) {
 	if !settingBool("oidc_enabled", false) {
-		return nil, errors.New("OIDC is disabled")
+		return nil, errors.New("OAuth login is disabled")
 	}
-	cfg := currentOIDCConfig()
-	if cfg.Issuer == "" || cfg.ClientID == "" || cfg.ClientSecret == "" {
-		return nil, errors.New("OIDC not configured")
+	provider, legacyOIDC := oauthProviderConfig(providerKey)
+	if provider.Key == "" {
+		return nil, errors.New("OAuth provider is not configured")
+	}
+	if !provider.Enabled {
+		return nil, errors.New("OAuth provider is disabled")
+	}
+	if provider.ClientID == "" || provider.ClientSecret == "" {
+		return nil, errors.New("OAuth provider client is not configured")
+	}
+	if provider.RedirectURL == "" {
+		return nil, errors.New("OAuth provider redirect URL is not configured")
 	}
 
-	cacheKey := cfg.cacheKey()
+	cacheKey := oauthCacheKey(provider, legacyOIDC)
 	s.oidcMu.Lock()
 	if s.oidcClient != nil && s.oidcCacheKey == cacheKey {
 		client := s.oidcClient
@@ -268,25 +336,38 @@ func (s *AuthService) loadOIDCClient(ctx context.Context) (*oidcRuntimeClient, e
 	}
 	s.oidcMu.Unlock()
 
-	provider, err := oidc.NewProvider(ctx, cfg.Issuer)
-	if err != nil {
-		if config.IsDevelopmentLike(config.Environment) {
-			log.Printf("OIDC provider initialization failed; dashboard login is disabled until configuration or provider availability is fixed: %v", err)
+	var verifier *oidc.IDTokenVerifier
+	endpoint := oauth2.Endpoint{
+		AuthURL:  provider.AuthURL,
+		TokenURL: provider.TokenURL,
+	}
+	if provider.Issuer != "" && (provider.AuthURL == "" || provider.TokenURL == "") {
+		oidcProvider, err := oidc.NewProvider(ctx, provider.Issuer)
+		if err != nil {
+			if config.IsDevelopmentLike(config.Environment) {
+				log.Printf("OIDC provider initialization failed; dashboard login is disabled until configuration or provider availability is fixed: %v", err)
+			}
+			return nil, fmt.Errorf("initialize OIDC provider %q: %w", provider.Issuer, err)
 		}
-		return nil, fmt.Errorf("initialize OIDC provider %q: %w", cfg.Issuer, err)
+		verifier = oidcProvider.Verifier(&oidc.Config{ClientID: provider.ClientID})
+		endpoint = oidcProvider.Endpoint()
+	}
+	if endpoint.AuthURL == "" || endpoint.TokenURL == "" {
+		return nil, errors.New("OAuth provider endpoints are not configured")
 	}
 
-	verifier := provider.Verifier(&oidc.Config{ClientID: cfg.ClientID})
 	oauthConfig := oauth2.Config{
-		ClientID:     cfg.ClientID,
-		ClientSecret: cfg.ClientSecret,
-		Endpoint:     provider.Endpoint(),
-		RedirectURL:  cfg.RedirectURL,
-		Scopes:       []string{oidc.ScopeOpenID, "profile", "email"},
+		ClientID:     provider.ClientID,
+		ClientSecret: provider.ClientSecret,
+		Endpoint:     endpoint,
+		RedirectURL:  provider.RedirectURL,
+		Scopes:       oauthScopes(provider.Scope, provider.Issuer != ""),
 	}
 	client := &oidcRuntimeClient{
 		oauth2Config: oauthConfig,
 		verifier:     verifier,
+		provider:     provider,
+		legacyOIDC:   legacyOIDC,
 	}
 
 	s.oidcMu.Lock()
@@ -295,6 +376,283 @@ func (s *AuthService) loadOIDCClient(ctx context.Context) (*oidcRuntimeClient, e
 	s.oidcMu.Unlock()
 
 	return client, nil
+}
+
+func fetchOAuthUserInfo(ctx context.Context, client *oidcRuntimeClient, accessToken string) (oidcClaims, error) {
+	if strings.TrimSpace(accessToken) == "" {
+		return oidcClaims{}, errors.New("OAuth access token is missing")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, client.provider.UserInfoURL, nil)
+	if err != nil {
+		return oidcClaims{}, err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Accept", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return oidcClaims{}, fmt.Errorf("failed to fetch OAuth user info: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return oidcClaims{}, fmt.Errorf("OAuth user info returned status %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return oidcClaims{}, err
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return oidcClaims{}, fmt.Errorf("failed to parse OAuth user info: %w", err)
+	}
+	return oidcClaims{
+		Subject: stringFromJSONPath(payload, firstNonEmpty(client.provider.SubjectKey, "sub", "id")),
+		Email:   stringFromJSONPath(payload, firstNonEmpty(client.provider.EmailKey, "email")),
+		Name:    stringFromJSONPath(payload, firstNonEmpty(client.provider.NameKey, "name", "login", "username")),
+		Picture: stringFromJSONPath(payload, firstNonEmpty(client.provider.AvatarKey, "picture", "avatar_url")),
+	}, nil
+}
+
+func OAuthProviderConfigs() []OAuthProviderConfig {
+	configs := parseOAuthProviders(model.GetSystemSetting("oauth_providers", "[]"))
+	legacy := legacyOIDCProviderConfig()
+	if legacy.Key != "" {
+		found := false
+		for _, provider := range configs {
+			if provider.Key == legacy.Key {
+				found = true
+				break
+			}
+		}
+		if !found {
+			configs = append([]OAuthProviderConfig{legacy}, configs...)
+		}
+	}
+	return configs
+}
+
+func EnabledOAuthProviderConfigs() []OAuthProviderConfig {
+	configs := OAuthProviderConfigs()
+	enabled := make([]OAuthProviderConfig, 0, len(configs))
+	for _, provider := range configs {
+		if provider.Enabled && provider.Key != "" {
+			enabled = append(enabled, provider)
+		}
+	}
+	return enabled
+}
+
+func NormalizeOAuthProvidersJSON(raw string) (string, error) {
+	var configs []OAuthProviderConfig
+	if strings.TrimSpace(raw) != "" {
+		if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &configs); err != nil {
+			return "", errors.New("OAuth providers must be valid JSON")
+		}
+	}
+	seen := map[string]bool{}
+	normalized := make([]OAuthProviderConfig, 0, len(configs))
+	for _, provider := range configs {
+		provider = normalizeOAuthProvider(provider)
+		if provider.Key == "" && provider.Name == "" && provider.ClientID == "" && provider.AuthURL == "" && provider.TokenURL == "" {
+			continue
+		}
+		if provider.Key == "" {
+			return "", errors.New("OAuth provider key is required")
+		}
+		if seen[provider.Key] {
+			return "", errors.New("OAuth provider key must be unique")
+		}
+		seen[provider.Key] = true
+		normalized = append(normalized, provider)
+	}
+	body, err := json.Marshal(normalized)
+	if err != nil {
+		return "", err
+	}
+	return string(body), nil
+}
+
+func OAuthCallbackPath(providerKey string) string {
+	key := normalizeOAuthProviderKey(providerKey)
+	if key == "" {
+		return ""
+	}
+	return "/auth/oauth/" + key + "/callback"
+}
+
+func OAuthCallbackURL(provider OAuthProviderConfig) string {
+	if strings.TrimSpace(provider.RedirectURL) != "" {
+		return strings.TrimSpace(provider.RedirectURL)
+	}
+	baseURL := strings.TrimRight(strings.TrimSpace(model.GetSystemSetting("base_url", "")), "/")
+	if baseURL == "" {
+		return ""
+	}
+	return baseURL + OAuthCallbackPath(provider.Key)
+}
+
+func oauthProviderConfig(providerKey string) (OAuthProviderConfig, bool) {
+	key := normalizeOAuthProviderKey(providerKey)
+	if key == "" {
+		key = "oidc"
+	}
+	for _, provider := range parseOAuthProviders(model.GetSystemSetting("oauth_providers", "[]")) {
+		provider = normalizeOAuthProvider(provider)
+		if provider.Key == key {
+			provider.RedirectURL = OAuthCallbackURL(provider)
+			return provider, false
+		}
+	}
+	if key == "oidc" {
+		provider := legacyOIDCProviderConfig()
+		provider.RedirectURL = OAuthCallbackURL(provider)
+		return provider, true
+	}
+	return OAuthProviderConfig{}, false
+}
+
+func legacyOIDCProviderConfig() OAuthProviderConfig {
+	cfg := currentOIDCConfig()
+	if cfg.Issuer == "" && cfg.ClientID == "" && cfg.ClientSecret == "" && cfg.RedirectURL == "" {
+		return OAuthProviderConfig{}
+	}
+	return OAuthProviderConfig{
+		Key:          "oidc",
+		Name:         "OIDC",
+		Enabled:      true,
+		Issuer:       cfg.Issuer,
+		ClientID:     cfg.ClientID,
+		ClientSecret: cfg.ClientSecret,
+		RedirectURL:  cfg.RedirectURL,
+		SubjectKey:   "sub",
+		EmailKey:     "email",
+		NameKey:      "name",
+		AvatarKey:    "picture",
+	}
+}
+
+func parseOAuthProviders(raw string) []OAuthProviderConfig {
+	var providers []OAuthProviderConfig
+	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &providers); err != nil {
+		return nil
+	}
+	for index := range providers {
+		providers[index] = normalizeOAuthProvider(providers[index])
+	}
+	return providers
+}
+
+func normalizeOAuthProvider(provider OAuthProviderConfig) OAuthProviderConfig {
+	provider.Key = normalizeOAuthProviderKey(provider.Key)
+	provider.Name = strings.TrimSpace(provider.Name)
+	provider.Issuer = strings.TrimSpace(provider.Issuer)
+	provider.ClientID = strings.TrimSpace(provider.ClientID)
+	provider.ClientSecret = strings.TrimSpace(provider.ClientSecret)
+	provider.AuthURL = strings.TrimSpace(provider.AuthURL)
+	provider.TokenURL = strings.TrimSpace(provider.TokenURL)
+	provider.UserInfoURL = strings.TrimSpace(provider.UserInfoURL)
+	provider.Scope = strings.TrimSpace(provider.Scope)
+	provider.RedirectURL = strings.TrimSpace(provider.RedirectURL)
+	provider.SubjectKey = firstNonEmpty(strings.TrimSpace(provider.SubjectKey), "sub")
+	provider.EmailKey = firstNonEmpty(strings.TrimSpace(provider.EmailKey), "email")
+	provider.NameKey = firstNonEmpty(strings.TrimSpace(provider.NameKey), "name")
+	provider.AvatarKey = firstNonEmpty(strings.TrimSpace(provider.AvatarKey), "picture")
+	if provider.Name == "" && provider.Key != "" {
+		provider.Name = provider.Key
+	}
+	return provider
+}
+
+func normalizeOAuthProviderKey(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	var builder strings.Builder
+	lastDash := false
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			builder.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if r == '-' || r == '_' || r == ' ' {
+			if !lastDash && builder.Len() > 0 {
+				builder.WriteByte('-')
+				lastDash = true
+			}
+		}
+	}
+	return strings.Trim(builder.String(), "-")
+}
+
+func oauthScopes(raw string, oidcProvider bool) []string {
+	fields := strings.Fields(strings.ReplaceAll(raw, ",", " "))
+	if len(fields) == 0 && oidcProvider {
+		return []string{oidc.ScopeOpenID, "profile", "email"}
+	}
+	return fields
+}
+
+func oauthCacheKey(provider OAuthProviderConfig, legacyOIDC bool) string {
+	values := []string{
+		provider.Key,
+		provider.Issuer,
+		provider.ClientID,
+		provider.ClientSecret,
+		provider.AuthURL,
+		provider.TokenURL,
+		provider.UserInfoURL,
+		provider.Scope,
+		provider.RedirectURL,
+		strconv.FormatBool(legacyOIDC),
+	}
+	return strings.Join(values, "\x00")
+}
+
+func oauthStoredSubject(providerKey, subject string) string {
+	return "oauth:" + normalizeOAuthProviderKey(providerKey) + ":" + strings.TrimSpace(subject)
+}
+
+func mergeOAuthClaims(base, next oidcClaims) oidcClaims {
+	if next.Subject != "" {
+		base.Subject = next.Subject
+	}
+	if next.Email != "" {
+		base.Email = next.Email
+	}
+	if next.Name != "" {
+		base.Name = next.Name
+	}
+	if next.Picture != "" {
+		base.Picture = next.Picture
+	}
+	return base
+}
+
+func stringFromJSONPath(payload map[string]interface{}, path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	var current interface{} = payload
+	for _, part := range strings.Split(path, ".") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			return ""
+		}
+		object, ok := current.(map[string]interface{})
+		if !ok {
+			return ""
+		}
+		current = object[part]
+	}
+	switch value := current.(type) {
+	case string:
+		return strings.TrimSpace(value)
+	case float64:
+		return strconv.FormatFloat(value, 'f', -1, 64)
+	case bool:
+		return strconv.FormatBool(value)
+	default:
+		return ""
+	}
 }
 
 func currentOIDCConfig() oidcRuntimeConfig {

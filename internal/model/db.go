@@ -415,6 +415,7 @@ func EnsureDefaultSystemSettings() error {
 		"oidc_client_id":                   "",
 		"oidc_client_secret":               "",
 		"oidc_redirect_url":                "",
+		"oauth_providers":                  "[]",
 	}
 	for key, value := range defaults {
 		setting := SystemSetting{Key: key}
