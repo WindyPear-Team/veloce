@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/WindyPear-Team/flai/internal/model"
@@ -22,6 +23,26 @@ func InitCommunityAdvancedChatFeatures() error {
 		&AdvancedChatConnectorDevice{},
 		&AdvancedChatConnectorTask{},
 	)
+}
+
+func InitAdvancedChatFeatures() error {
+	return initAdvancedChatFeatures()
+}
+
+func RegisterAdvancedChatAdminRoutes(group *gin.RouterGroup) {
+	registerAdvancedChatAdminRoutes(group)
+}
+
+func RegisterAdvancedChatUserRoutes(group *gin.RouterGroup) {
+	registerAdvancedChatUserRoutes(group)
+}
+
+func RegisterAdvancedChatPublicRoutes(group *gin.RouterGroup) {
+	registerAdvancedChatConnectorRoutes(group)
+}
+
+func ApplyAdvancedChatGeneratedAssetHook(ctx context.Context, input GeneratedAssetInput) {
+	autoSaveAdvancedChatGeneratedAsset(ctx, input)
 }
 
 func RegisterCommunityAdvancedChatAdminRoutes(group *gin.RouterGroup) {
