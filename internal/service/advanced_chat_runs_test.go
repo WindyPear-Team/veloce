@@ -132,3 +132,23 @@ func TestAgentStudioDeltaLogVirtualRead(t *testing.T) {
 		t.Fatalf("virtual read should apply deferred write last, got %q", got)
 	}
 }
+
+func TestNormalizeAdvancedChatGroupAgentsPreservesMemberTools(t *testing.T) {
+	agents := normalizeAdvancedChatGroupAgents([]advancedChatGroupAgent{{
+		ID:           "worker",
+		Name:         "Worker",
+		Type:         "worker",
+		ChatAgentID:  "1",
+		SkillIDs:     []string{"skill-a", "skill-a", "skill-b"},
+		MCPServerIDs: []string{"mcp-a", "", "mcp-b", "mcp-a"},
+	}})
+	if len(agents) != 1 {
+		t.Fatalf("expected one normalized agent, got %d", len(agents))
+	}
+	if got := strings.Join(agents[0].SkillIDs, ","); got != "skill-a,skill-b" {
+		t.Fatalf("skill ids were not preserved and deduplicated, got %q", got)
+	}
+	if got := strings.Join(agents[0].MCPServerIDs, ","); got != "mcp-a,mcp-b" {
+		t.Fatalf("mcp server ids were not preserved and deduplicated, got %q", got)
+	}
+}

@@ -68,6 +68,7 @@ func RegisterCommunityAdvancedChatUserRoutes(group *gin.RouterGroup) {
 	group.DELETE("/advanced-chat/sessions/:id", api.deleteSession)
 	group.GET("/advanced-chat/runs/:id", api.getRun)
 	group.GET("/advanced-chat/runs/:id/events", api.listRunEvents)
+	group.GET("/advanced-chat/runs/:id/agent-work", api.getRunAgentWork)
 	group.POST("/advanced-chat/runs/:id/stop", api.stopRun)
 	group.GET("/advanced-chat/agent-tasks", api.listAgentTasks)
 	group.GET("/advanced-chat/runs/:id/connector-tasks/pending", api.listPendingConnectorTasks)

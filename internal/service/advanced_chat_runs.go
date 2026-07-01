@@ -169,6 +169,34 @@ type advancedChatAgentTaskListItem struct {
 	Events        []advancedChatRunEventResponse `json:"events"`
 }
 
+type advancedChatAgentWorkResponse struct {
+	RunID     string                        `json:"run_id"`
+	SessionID string                        `json:"session_id"`
+	GroupID   string                        `json:"group_id"`
+	GroupName string                        `json:"group_name"`
+	Agents    []advancedChatAgentWorkStatus `json:"agents"`
+}
+
+type advancedChatAgentWorkStatus struct {
+	AgentID   string                         `json:"agent_id"`
+	AgentName string                         `json:"agent_name"`
+	AgentType string                         `json:"agent_type"`
+	GroupID   string                         `json:"group_id"`
+	GroupName string                         `json:"group_name"`
+	Status    string                         `json:"status"`
+	Working   bool                           `json:"working"`
+	UpdatedAt *time.Time                     `json:"updated_at,omitempty"`
+	Messages  []advancedChatAgentWorkMessage `json:"messages"`
+}
+
+type advancedChatAgentWorkMessage struct {
+	Role      string     `json:"role"`
+	Content   string     `json:"content"`
+	Status    string     `json:"status,omitempty"`
+	Tool      string     `json:"tool,omitempty"`
+	CreatedAt *time.Time `json:"created_at,omitempty"`
+}
+
 type advancedChatSessionInput struct {
 	ID                       string                            `json:"id"`
 	Title                    string                            `json:"title"`
@@ -375,6 +403,20 @@ func (api *advancedChatAPI) listRunEvents(c *gin.Context) {
 	c.JSON(http.StatusOK, result)
 }
 
+func (api *advancedChatAPI) getRunAgentWork(c *gin.Context) {
+	user, ok := currentAdvancedChatUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+	response, status, message, err := advancedChatAgentWorkForRun(c.Request.Context(), user.ID, c.Param("id"))
+	if err != nil {
+		c.JSON(status, gin.H{"error": message})
+		return
+	}
+	c.JSON(http.StatusOK, response)
+}
+
 func (api *advancedChatAPI) listAgentTasks(c *gin.Context) {
 	user, ok := currentAdvancedChatUser(c)
 	if !ok {
@@ -443,6 +485,210 @@ func (api *advancedChatAPI) listAgentTasks(c *gin.Context) {
 		})
 	}
 	c.JSON(http.StatusOK, result)
+}
+
+func advancedChatAgentWorkForRun(ctx context.Context, userID uint, rawRunID string) (advancedChatAgentWorkResponse, int, string, error) {
+	runID := strings.TrimSpace(rawRunID)
+	var run AdvancedChatRun
+	if err := model.DB.WithContext(ctx).Where("id = ? AND user_id = ?", runID, userID).First(&run).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return advancedChatAgentWorkResponse{}, http.StatusNotFound, "Run not found", err
+		}
+		return advancedChatAgentWorkResponse{}, http.StatusInternalServerError, "Failed to load run", err
+	}
+	if normalizeAdvancedChatCompletionMode(run.Mode) != advancedChatModeAgentGroup {
+		return advancedChatAgentWorkResponse{}, http.StatusBadRequest, "Run is not an Agent Studio run", errors.New("run is not an agent studio run")
+	}
+	var session AdvancedChatSession
+	if err := model.DB.WithContext(ctx).Where("id = ? AND user_id = ?", run.SessionID, userID).First(&session).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return advancedChatAgentWorkResponse{}, http.StatusNotFound, "Session not found", err
+		}
+		return advancedChatAgentWorkResponse{}, http.StatusInternalServerError, "Failed to load session", err
+	}
+	group, err := readAdvancedChatAgentGroup(ctx, userID, nil, session.AgentGroupID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return advancedChatAgentWorkResponse{}, http.StatusNotFound, "Studio not found", err
+		}
+		return advancedChatAgentWorkResponse{}, http.StatusInternalServerError, "Failed to load studio", err
+	}
+	var messages []AdvancedChatMessage
+	if err := model.DB.WithContext(ctx).
+		Where("session_id = ? AND user_id = ?", session.ID, userID).
+		Order("sort_order ASC, created_at ASC").
+		Find(&messages).Error; err != nil {
+		return advancedChatAgentWorkResponse{}, http.StatusInternalServerError, "Failed to load messages", err
+	}
+
+	response := advancedChatAgentWorkResponse{
+		RunID:     run.ID,
+		SessionID: run.SessionID,
+		GroupID:   group.ID,
+		GroupName: group.Name,
+		Agents:    make([]advancedChatAgentWorkStatus, 0, len(group.Agents)),
+	}
+	indexByAgentID := map[string]int{}
+	for _, agent := range group.Agents {
+		status := advancedChatAgentWorkStatus{
+			AgentID:   agent.ID,
+			AgentName: agent.Name,
+			AgentType: normalizeAdvancedChatAgentType(agent.Type),
+			GroupID:   group.ID,
+			GroupName: group.Name,
+			Status:    "idle",
+			Working:   false,
+			Messages:  []advancedChatAgentWorkMessage{},
+		}
+		indexByAgentID[agent.ID] = len(response.Agents)
+		response.Agents = append(response.Agents, status)
+	}
+
+	if target, ok := advancedChatTopLevelAgentForWork(group, messages); ok {
+		if index, exists := indexByAgentID[target.ID]; exists {
+			response.Agents[index].Status = strings.TrimSpace(run.Status)
+			if response.Agents[index].Status == "" {
+				response.Agents[index].Status = "idle"
+			}
+			response.Agents[index].Working = advancedChatRunIsActive(run.Status)
+			response.Agents[index].UpdatedAt = &run.UpdatedAt
+			for _, message := range messages {
+				if strings.TrimSpace(message.Content) == "" {
+					continue
+				}
+				createdAt := message.CreatedAt
+				response.Agents[index].Messages = append(response.Agents[index].Messages, advancedChatAgentWorkMessage{
+					Role:      message.Role,
+					Content:   truncateToolResult(message.Content),
+					CreatedAt: &createdAt,
+				})
+			}
+		}
+	}
+
+	var events []AdvancedChatRunEvent
+	if err := model.DB.WithContext(ctx).
+		Where("run_id = ? AND user_id = ? AND event IN ?", run.ID, userID, []string{"agent_task", "agent_message"}).
+		Order("seq ASC").
+		Limit(2000).
+		Find(&events).Error; err != nil {
+		return advancedChatAgentWorkResponse{}, http.StatusInternalServerError, "Failed to load agent work events", err
+	}
+	for _, event := range events {
+		payload := map[string]interface{}{}
+		if strings.TrimSpace(event.Payload) != "" {
+			_ = json.Unmarshal([]byte(event.Payload), &payload)
+		}
+		switch event.Event {
+		case "agent_task":
+			if strings.EqualFold(strings.TrimSpace(stringFromMap(payload, "kind")), "split") {
+				continue
+			}
+			agentID := strings.TrimSpace(stringFromMap(payload, "agent_id"))
+			index, exists := indexByAgentID[agentID]
+			if agentID == "" || !exists {
+				continue
+			}
+			createdAt := event.CreatedAt
+			status := strings.TrimSpace(stringFromMap(payload, "status"))
+			if status != "" {
+				response.Agents[index].Status = status
+				response.Agents[index].Working = status == "running" || status == "approval_required"
+				response.Agents[index].UpdatedAt = &createdAt
+			}
+			if strings.EqualFold(status, "running") {
+				goal := strings.TrimSpace(stringFromMap(payload, "goal"))
+				if goal != "" {
+					contextText := strings.TrimSpace(stringFromMap(payload, "context"))
+					content := "Delegated goal:\n" + goal
+					if contextText != "" {
+						content += "\n\nContext:\n" + contextText
+					}
+					response.Agents[index].Messages = append(response.Agents[index].Messages, advancedChatAgentWorkMessage{
+						Role:      "user",
+						Content:   truncateToolResult(content),
+						Status:    status,
+						CreatedAt: &createdAt,
+					})
+				}
+			}
+			if result := strings.TrimSpace(stringFromMap(payload, "result")); result != "" {
+				response.Agents[index].Messages = append(response.Agents[index].Messages, advancedChatAgentWorkMessage{
+					Role:      "assistant",
+					Content:   truncateToolResult(result),
+					Status:    status,
+					CreatedAt: &createdAt,
+				})
+			}
+			if errorText := strings.TrimSpace(stringFromMap(payload, "error")); errorText != "" {
+				response.Agents[index].Messages = append(response.Agents[index].Messages, advancedChatAgentWorkMessage{
+					Role:      "system",
+					Content:   truncateToolResult(errorText),
+					Status:    "error",
+					CreatedAt: &createdAt,
+				})
+			}
+		case "agent_message":
+			if strings.TrimSpace(stringFromMap(payload, "group_id")) != group.ID {
+				continue
+			}
+			agentID := strings.TrimSpace(stringFromMap(payload, "agent_id"))
+			index, exists := indexByAgentID[agentID]
+			if agentID == "" || !exists {
+				continue
+			}
+			content := strings.TrimSpace(stringFromMap(payload, "content"))
+			if content == "" {
+				continue
+			}
+			createdAt := event.CreatedAt
+			status := strings.TrimSpace(stringFromMap(payload, "status"))
+			response.Agents[index].Messages = append(response.Agents[index].Messages, advancedChatAgentWorkMessage{
+				Role:      normalizedAdvancedChatAgentWorkMessageRole(stringFromMap(payload, "role")),
+				Content:   truncateToolResult(content),
+				Status:    status,
+				Tool:      strings.TrimSpace(stringFromMap(payload, "tool")),
+				CreatedAt: &createdAt,
+			})
+			if status != "" {
+				response.Agents[index].Status = status
+				response.Agents[index].Working = status == "running" || status == "approval_required"
+				response.Agents[index].UpdatedAt = &createdAt
+			}
+		}
+	}
+	return response, http.StatusOK, "", nil
+}
+
+func advancedChatTopLevelAgentForWork(group advancedChatAgentGroup, messages []AdvancedChatMessage) (advancedChatGroupAgent, bool) {
+	completionMessages := make([]advancedChatCompletionMessage, 0, len(messages))
+	for _, message := range messages {
+		completionMessages = append(completionMessages, advancedChatCompletionMessage{
+			Role:    message.Role,
+			Content: message.Content,
+		})
+	}
+	if agent, ok := findAdvancedChatMentionedGroupAgentInMessages(group, completionMessages); ok {
+		return agent, true
+	}
+	for _, agent := range group.Agents {
+		if normalizeAdvancedChatAgentType(agent.Type) == "chief" {
+			return agent, true
+		}
+	}
+	if len(group.Agents) > 0 {
+		return group.Agents[0], true
+	}
+	return advancedChatGroupAgent{}, false
+}
+
+func normalizedAdvancedChatAgentWorkMessageRole(role string) string {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "user", "assistant", "tool", "system":
+		return strings.ToLower(strings.TrimSpace(role))
+	default:
+		return "system"
+	}
 }
 
 func stopAdvancedChatRun(rawRunID string, userID uint) (AdvancedChatRun, int, string, error) {
@@ -691,6 +937,8 @@ func prepareAdvancedChatAssistantRun(ctx context.Context, userID uint, input adv
 			skillIDs = uniqueStringsLocal(decodeStringList(agent.SkillIDs))
 			mcpServerIDs = uniqueStringsLocal(decodeStringList(agent.MCPServerIDs))
 		}
+		skillIDs = uniqueStringsLocal(append(skillIDs, target.SkillIDs...))
+		mcpServerIDs = uniqueStringsLocal(append(mcpServerIDs, target.MCPServerIDs...))
 		skills, err = loadAdvancedChatSkills(userID, skillIDs)
 		if err != nil {
 			return preparedAdvancedChatAssistantRun{}, http.StatusInternalServerError, "Failed to load group agent skills", err

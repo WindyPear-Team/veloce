@@ -277,6 +277,8 @@ func normalizeAdvancedChatGroupAgents(input []advancedChatGroupAgent) []advanced
 			ChatAgentID:   chatAgentID,
 			DefaultModel:  truncateAdvancedChatAgentField(agent.DefaultModel, 100),
 			UserChannelID: agent.UserChannelID,
+			SkillIDs:      uniqueStringsLocal(agent.SkillIDs),
+			MCPServerIDs:  uniqueStringsLocal(agent.MCPServerIDs),
 		})
 		seen[id] = struct{}{}
 		if len(result) >= 40 {
@@ -533,6 +535,7 @@ func executeAdvancedChatAgentDelegate(ctx context.Context, user *model.User, inp
 		"agent_name":    agent.Name,
 		"agent_type":    normalizeAdvancedChatAgentType(agent.Type),
 		"goal":          goal,
+		"context":       extraContext,
 		"chat_agent_id": strings.TrimSpace(agent.ChatAgentID),
 	})
 	chatAgent, err := loadAdvancedChatAgent(user.ID, agent.ChatAgentID)
@@ -549,6 +552,8 @@ func executeAdvancedChatAgentDelegate(ctx context.Context, user *model.User, inp
 		skillIDs = uniqueStringsLocal(decodeStringList(chatAgent.SkillIDs))
 		mcpServerIDs = uniqueStringsLocal(decodeStringList(chatAgent.MCPServerIDs))
 	}
+	skillIDs = uniqueStringsLocal(append(skillIDs, agent.SkillIDs...))
+	mcpServerIDs = uniqueStringsLocal(append(mcpServerIDs, agent.MCPServerIDs...))
 	skills, err := loadAdvancedChatSkills(user.ID, skillIDs)
 	if err != nil {
 		appendAdvancedChatAgentTaskEvent(input.RunID, input.SessionID, user.ID, gin.H{"task_id": taskID, "status": "error", "error": err.Error()})
@@ -669,6 +674,8 @@ func advancedChatAgentNamePrefix(content string, name string) string {
 func runAdvancedChatDelegatedAgentLoop(ctx context.Context, user *model.User, modelName string, userChannelID uint, system string, messages []ChatExecutorMessage, tools []ChatExecutorTool, mcpBindings map[string]mcpToolBinding, connectorBindings map[string]advancedChatConnectorToolBinding, options advancedChatDelegatedAgentLoopOptions) (string, error) {
 	executorMessages := append([]ChatExecutorMessage{}, messages...)
 	lastContent := ""
+	lastToolResult := ""
+	lastToolStatus := ""
 	for round := 0; round < 6; round++ {
 		result, err := executeAdvancedChatModelRequestWithRetry(ctx, user, ChatExecutorRequest{
 			Context:       ctx,
@@ -683,6 +690,7 @@ func runAdvancedChatDelegatedAgentLoop(ctx context.Context, user *model.User, mo
 			return strings.TrimSpace(lastContent), err
 		}
 		lastContent = result.Content
+		appendAdvancedChatAgentMessageEvent(options, user.ID, "assistant", result.Content, "", "running")
 		if len(result.ToolCalls) == 0 {
 			return strings.TrimSpace(result.Content), nil
 		}
@@ -857,6 +865,11 @@ func runAdvancedChatDelegatedAgentLoop(ctx context.Context, user *model.User, mo
 					toolResult = value
 				}
 			}
+			if trimmed := strings.TrimSpace(toolResult); trimmed != "" {
+				lastToolResult = trimmed
+				lastToolStatus = detail.Status
+			}
+			appendAdvancedChatAgentMessageEvent(options, user.ID, "tool", toolResult, detail.Tool, detail.Status)
 			detail.Result = truncateToolResult(toolResult)
 			if options.Observer.OnToolCall != nil {
 				if err := options.Observer.OnToolCall(detail); err != nil {
@@ -871,10 +884,13 @@ func runAdvancedChatDelegatedAgentLoop(ctx context.Context, user *model.User, mo
 			})
 		}
 	}
-	if strings.TrimSpace(lastContent) == "" {
-		return "", errors.New("delegated agent reached the tool round limit without a final result")
+	if content := strings.TrimSpace(lastContent); content != "" {
+		return content, nil
 	}
-	return strings.TrimSpace(lastContent), nil
+	if strings.TrimSpace(lastToolResult) != "" && strings.EqualFold(strings.TrimSpace(lastToolStatus), "ok") {
+		return "Completed delegated work. Last tool result:\n" + truncateToolResult(lastToolResult), nil
+	}
+	return "", errors.New("delegated agent reached the tool round limit without a final result")
 }
 
 type advancedChatAgentSplitInput struct {
@@ -1011,6 +1027,26 @@ func appendAdvancedChatAgentTaskEvent(runID string, sessionID string, userID uin
 		sessionID = run.SessionID
 	}
 	_ = appendAdvancedChatRunEvent(runID, sessionID, userID, "agent_task", payload)
+}
+
+func appendAdvancedChatAgentMessageEvent(options advancedChatDelegatedAgentLoopOptions, userID uint, role string, content string, tool string, status string) {
+	runID := strings.TrimSpace(options.RunID)
+	groupID := strings.TrimSpace(options.StatusAgentGroupID)
+	agentID := strings.TrimSpace(options.StatusAgentID)
+	content = strings.TrimSpace(content)
+	if runID == "" || groupID == "" || agentID == "" || content == "" {
+		return
+	}
+	_ = appendAdvancedChatRunEvent(runID, strings.TrimSpace(options.SessionID), userID, "agent_message", gin.H{
+		"group_id":   groupID,
+		"agent_id":   agentID,
+		"agent_name": strings.TrimSpace(options.StatusAgentName),
+		"agent_type": strings.TrimSpace(options.StatusAgentType),
+		"role":       normalizedAdvancedChatAgentWorkMessageRole(role),
+		"content":    truncateToolResult(content),
+		"tool":       strings.TrimSpace(tool),
+		"status":     strings.TrimSpace(status),
+	})
 }
 
 func findAdvancedChatGroupAgent(groups []advancedChatAgentGroup, groupID string, agentID string) (advancedChatAgentGroup, advancedChatGroupAgent, bool) {
