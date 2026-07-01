@@ -20,6 +20,7 @@ import (
 const (
 	advancedChatAgentDelegateToolName = "agent_delegate"
 	advancedChatAgentSplitToolName    = "agent_split"
+	advancedChatDelegatedToolWait     = 45 * time.Second
 )
 
 var advancedChatAgentGroupIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,80}$`)
@@ -503,6 +504,7 @@ type advancedChatAgentDelegateInput struct {
 	Observer           advancedChatCompletionObserver
 	OnApprovalRequired func(context.Context, MessageChannelConnectorApproval) error
 	Arguments          map[string]interface{}
+	DisplayRound       int
 }
 
 func executeAdvancedChatAgentDelegate(ctx context.Context, user *model.User, input advancedChatAgentDelegateInput) (string, error) {
@@ -524,7 +526,34 @@ func executeAdvancedChatAgentDelegate(ctx context.Context, user *model.User, inp
 		return "", errors.New("chief agents cannot be delegated execution tasks")
 	}
 	taskID := newAdvancedChatID("agt")
-	appendAdvancedChatAgentTaskEvent(input.RunID, input.SessionID, user.ID, gin.H{
+	emitTaskEvent := func(payload gin.H) {
+		if strings.TrimSpace(stringFromMap(payload, "task_id")) == "" {
+			payload["task_id"] = taskID
+		}
+		if strings.TrimSpace(stringFromMap(payload, "parent_id")) == "" {
+			payload["parent_id"] = strings.TrimSpace(input.ToolCallID)
+		}
+		if strings.TrimSpace(stringFromMap(payload, "kind")) == "" {
+			payload["kind"] = "cps"
+		}
+		if strings.TrimSpace(stringFromMap(payload, "group_id")) == "" {
+			payload["group_id"] = group.ID
+		}
+		if strings.TrimSpace(stringFromMap(payload, "group_name")) == "" {
+			payload["group_name"] = group.Name
+		}
+		if strings.TrimSpace(stringFromMap(payload, "agent_id")) == "" {
+			payload["agent_id"] = agent.ID
+		}
+		if strings.TrimSpace(stringFromMap(payload, "agent_name")) == "" {
+			payload["agent_name"] = agent.Name
+		}
+		if strings.TrimSpace(stringFromMap(payload, "agent_type")) == "" {
+			payload["agent_type"] = normalizeAdvancedChatAgentType(agent.Type)
+		}
+		appendAdvancedChatAgentTaskEvent(input.RunID, input.SessionID, user.ID, payload)
+	}
+	emitTaskEvent(gin.H{
 		"task_id":       taskID,
 		"parent_id":     strings.TrimSpace(input.ToolCallID),
 		"kind":          "cps",
@@ -540,7 +569,7 @@ func executeAdvancedChatAgentDelegate(ctx context.Context, user *model.User, inp
 	})
 	chatAgent, err := loadAdvancedChatAgent(user.ID, agent.ChatAgentID)
 	if err != nil {
-		appendAdvancedChatAgentTaskEvent(input.RunID, input.SessionID, user.ID, gin.H{"task_id": taskID, "status": "error", "error": err.Error()})
+		emitTaskEvent(gin.H{"status": "error", "error": err.Error()})
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return "", errors.New("referenced chat agent was not found")
 		}
@@ -556,23 +585,23 @@ func executeAdvancedChatAgentDelegate(ctx context.Context, user *model.User, inp
 	mcpServerIDs = uniqueStringsLocal(append(mcpServerIDs, agent.MCPServerIDs...))
 	skills, err := loadAdvancedChatSkills(user.ID, skillIDs)
 	if err != nil {
-		appendAdvancedChatAgentTaskEvent(input.RunID, input.SessionID, user.ID, gin.H{"task_id": taskID, "status": "error", "error": err.Error()})
+		emitTaskEvent(gin.H{"status": "error", "error": err.Error()})
 		return "", err
 	}
 	if len(skills) != len(uniqueStringsLocal(skillIDs)) {
-		appendAdvancedChatAgentTaskEvent(input.RunID, input.SessionID, user.ID, gin.H{"task_id": taskID, "status": "error", "error": "referenced skill was not found"})
+		emitTaskEvent(gin.H{"status": "error", "error": "referenced skill was not found"})
 		return "", errors.New("referenced skill was not found")
 	}
 	serverIDs := uniqueStringsLocal(append(mcpServerIDs, skillMCPIDs(skills)...))
 	servers := []AdvancedChatMCPServer{}
 	if len(serverIDs) > 0 {
 		if !advancedChatAssistantMCPToolsEnabled() {
-			appendAdvancedChatAgentTaskEvent(input.RunID, input.SessionID, user.ID, gin.H{"task_id": taskID, "status": "error", "error": "mcp tools are disabled"})
+			emitTaskEvent(gin.H{"status": "error", "error": "mcp tools are disabled"})
 			return "", errors.New("mcp tools are disabled")
 		}
 		servers, err = loadAdvancedChatMCPServersForCall(user.ID, serverIDs)
 		if err != nil {
-			appendAdvancedChatAgentTaskEvent(input.RunID, input.SessionID, user.ID, gin.H{"task_id": taskID, "status": "error", "error": err.Error()})
+			emitTaskEvent(gin.H{"status": "error", "error": err.Error()})
 			return "", err
 		}
 	}
@@ -584,7 +613,7 @@ func executeAdvancedChatAgentDelegate(ctx context.Context, user *model.User, inp
 		modelName = strings.TrimSpace(input.ModelName)
 	}
 	if modelName == "" {
-		appendAdvancedChatAgentTaskEvent(input.RunID, input.SessionID, user.ID, gin.H{"task_id": taskID, "status": "error", "error": "model is required for delegated agent"})
+		emitTaskEvent(gin.H{"status": "error", "error": "model is required for delegated agent"})
 		return "", errors.New("model is required for delegated agent")
 	}
 	userChannelID := input.UserChannelID
@@ -647,14 +676,15 @@ func executeAdvancedChatAgentDelegate(ctx context.Context, user *model.User, inp
 			StatusAgentName:    agent.Name,
 			StatusAgentType:    normalizeAdvancedChatAgentType(agent.Type),
 			StatusAgentGroupID: group.ID,
+			DisplayRound:       input.DisplayRound,
 		})
 	})
 	if err != nil {
-		appendAdvancedChatAgentTaskEvent(input.RunID, input.SessionID, user.ID, gin.H{"task_id": taskID, "status": "error", "error": err.Error(), "result": truncateToolResult(result)})
+		emitTaskEvent(gin.H{"status": "error", "error": err.Error(), "result": truncateToolResult(result)})
 		return result, err
 	}
 	result = advancedChatAgentNamePrefix(result, agent.Name)
-	appendAdvancedChatAgentTaskEvent(input.RunID, input.SessionID, user.ID, gin.H{"task_id": taskID, "status": "completed", "result": truncateToolResult(result)})
+	emitTaskEvent(gin.H{"status": "completed", "result": truncateToolResult(result)})
 	return result, nil
 }
 
@@ -705,7 +735,7 @@ func runAdvancedChatDelegatedAgentLoop(ctx context.Context, user *model.User, mo
 			agentSplitExists := call.Name == advancedChatAgentSplitToolName && options.AllowSplit
 			commitDeltaExists := call.Name == advancedChatAgentStudioCommitDeltaToolName && options.AllowCommit
 			interruptExists := call.Name == advancedChatAgentStudioInterruptToolName
-			detail := advancedChatCompletionToolCall{ID: call.ID, Round: round + 1, Name: call.Name, Status: "running"}
+			detail := advancedChatCompletionToolCall{ID: call.ID, Round: advancedChatDelegatedDisplayRound(options, round+1), Name: call.Name, Status: "running"}
 			precreatedConnectorTaskID := ""
 			var precreateConnectorTaskErr error
 			if mcpExists {
@@ -791,7 +821,9 @@ func runAdvancedChatDelegatedAgentLoop(ctx context.Context, user *model.User, mo
 				} else if precreatedConnectorTaskID != "" {
 					value, err = waitAdvancedChatConnectorTask(ctx, precreatedConnectorTaskID, user.ID)
 				} else {
-					value, err = executeAdvancedChatConnectorToolForAgent(ctx, user.ID, options.RunID, connectorBinding, arguments, options.DeltaLog)
+					toolCtx, cancel := context.WithTimeout(ctx, advancedChatDelegatedToolWait)
+					value, err = executeAdvancedChatConnectorToolForAgent(toolCtx, user.ID, options.RunID, connectorBinding, arguments, options.DeltaLog)
+					cancel()
 				}
 				if err != nil {
 					detail.Status = "error"
@@ -825,6 +857,7 @@ func runAdvancedChatDelegatedAgentLoop(ctx context.Context, user *model.User, mo
 					Observer:           options.Observer,
 					OnApprovalRequired: options.OnApprovalRequired,
 					Arguments:          arguments,
+					DisplayRound:       advancedChatDelegatedDisplayRound(options, round+1),
 				})
 				if err != nil {
 					detail.Status = "error"
@@ -893,6 +926,13 @@ func runAdvancedChatDelegatedAgentLoop(ctx context.Context, user *model.User, mo
 	return "", errors.New("delegated agent reached the tool round limit without a final result")
 }
 
+func advancedChatDelegatedDisplayRound(options advancedChatDelegatedAgentLoopOptions, fallback int) int {
+	if options.DisplayRound > 0 {
+		return options.DisplayRound
+	}
+	return fallback
+}
+
 type advancedChatAgentSplitInput struct {
 	RunID              string
 	SessionID          string
@@ -907,6 +947,7 @@ type advancedChatAgentSplitInput struct {
 	Observer           advancedChatCompletionObserver
 	OnApprovalRequired func(context.Context, MessageChannelConnectorApproval) error
 	Arguments          map[string]interface{}
+	DisplayRound       int
 }
 
 func executeAdvancedChatAgentSplit(ctx context.Context, user *model.User, input advancedChatAgentSplitInput) (string, error) {
@@ -961,6 +1002,7 @@ func executeAdvancedChatAgentSplit(ctx context.Context, user *model.User, input 
 				StatusAgentID:      label,
 				StatusAgentName:    label,
 				StatusAgentType:    "worker",
+				DisplayRound:       input.DisplayRound,
 			})
 			mutations := delta.snapshot()
 			if err != nil {

@@ -44,6 +44,7 @@ type advancedChatDelegatedAgentLoopOptions struct {
 	AllowSplit         bool
 	AllowCommit        bool
 	DeltaLog           *advancedChatAgentStudioDeltaLog
+	DisplayRound       int
 	StatusAgentID      string
 	StatusAgentName    string
 	StatusAgentType    string

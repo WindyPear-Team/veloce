@@ -170,11 +170,12 @@ type advancedChatAgentTaskListItem struct {
 }
 
 type advancedChatAgentWorkResponse struct {
-	RunID     string                        `json:"run_id"`
-	SessionID string                        `json:"session_id"`
-	GroupID   string                        `json:"group_id"`
-	GroupName string                        `json:"group_name"`
-	Agents    []advancedChatAgentWorkStatus `json:"agents"`
+	RunID          string                               `json:"run_id"`
+	SessionID      string                               `json:"session_id"`
+	GroupID        string                               `json:"group_id"`
+	GroupName      string                               `json:"group_name"`
+	Agents         []advancedChatAgentWorkStatus        `json:"agents"`
+	ConnectorTasks []advancedChatAgentWorkConnectorTask `json:"connector_tasks"`
 }
 
 type advancedChatAgentWorkStatus struct {
@@ -195,6 +196,23 @@ type advancedChatAgentWorkMessage struct {
 	Status    string     `json:"status,omitempty"`
 	Tool      string     `json:"tool,omitempty"`
 	CreatedAt *time.Time `json:"created_at,omitempty"`
+}
+
+type advancedChatAgentWorkConnectorTask struct {
+	ID                    string                 `json:"id"`
+	DeviceID              string                 `json:"device_id"`
+	DeviceName            string                 `json:"device_name"`
+	Action                string                 `json:"action"`
+	Status                string                 `json:"status"`
+	WorkspacePath         string                 `json:"workspace_path"`
+	WorkspaceUnrestricted bool                   `json:"workspace_unrestricted"`
+	Payload               map[string]interface{} `json:"payload"`
+	Result                string                 `json:"result,omitempty"`
+	ErrorMessage          string                 `json:"error_message,omitempty"`
+	CreatedAt             time.Time              `json:"created_at"`
+	UpdatedAt             time.Time              `json:"updated_at"`
+	StartedAt             *time.Time             `json:"started_at,omitempty"`
+	FinishedAt            *time.Time             `json:"finished_at,omitempty"`
 }
 
 type advancedChatSessionInput struct {
@@ -522,13 +540,16 @@ func advancedChatAgentWorkForRun(ctx context.Context, userID uint, rawRunID stri
 	}
 
 	response := advancedChatAgentWorkResponse{
-		RunID:     run.ID,
-		SessionID: run.SessionID,
-		GroupID:   group.ID,
-		GroupName: group.Name,
-		Agents:    make([]advancedChatAgentWorkStatus, 0, len(group.Agents)),
+		RunID:          run.ID,
+		SessionID:      run.SessionID,
+		GroupID:        group.ID,
+		GroupName:      group.Name,
+		Agents:         make([]advancedChatAgentWorkStatus, 0, len(group.Agents)),
+		ConnectorTasks: []advancedChatAgentWorkConnectorTask{},
 	}
 	indexByAgentID := map[string]int{}
+	taskAgentIndexByID := map[string]int{}
+	taskKindByID := map[string]string{}
 	for _, agent := range group.Agents {
 		status := advancedChatAgentWorkStatus{
 			AgentID:   agent.ID,
@@ -581,13 +602,27 @@ func advancedChatAgentWorkForRun(ctx context.Context, userID uint, rawRunID stri
 		}
 		switch event.Event {
 		case "agent_task":
-			if strings.EqualFold(strings.TrimSpace(stringFromMap(payload, "kind")), "split") {
+			taskID := strings.TrimSpace(stringFromMap(payload, "task_id"))
+			kind := strings.ToLower(strings.TrimSpace(stringFromMap(payload, "kind")))
+			if kind == "" && taskID != "" {
+				kind = taskKindByID[taskID]
+			}
+			if kind == "split" {
 				continue
 			}
 			agentID := strings.TrimSpace(stringFromMap(payload, "agent_id"))
 			index, exists := indexByAgentID[agentID]
-			if agentID == "" || !exists {
+			if (!exists || agentID == "") && taskID != "" {
+				index, exists = taskAgentIndexByID[taskID]
+			}
+			if !exists {
 				continue
+			}
+			if taskID != "" {
+				taskAgentIndexByID[taskID] = index
+				if kind != "" {
+					taskKindByID[taskID] = kind
+				}
 			}
 			createdAt := event.CreatedAt
 			status := strings.TrimSpace(stringFromMap(payload, "status"))
@@ -650,14 +685,87 @@ func advancedChatAgentWorkForRun(ctx context.Context, userID uint, rawRunID stri
 				Tool:      strings.TrimSpace(stringFromMap(payload, "tool")),
 				CreatedAt: &createdAt,
 			})
-			if status != "" {
+			if status == "running" || status == "approval_required" {
 				response.Agents[index].Status = status
-				response.Agents[index].Working = status == "running" || status == "approval_required"
+				response.Agents[index].Working = true
 				response.Agents[index].UpdatedAt = &createdAt
 			}
 		}
 	}
+	connectorTasks, err := advancedChatAgentWorkConnectorTasks(ctx, userID, run.ID)
+	if err != nil {
+		return advancedChatAgentWorkResponse{}, http.StatusInternalServerError, "Failed to load connector tasks", err
+	}
+	response.ConnectorTasks = connectorTasks
 	return response, http.StatusOK, "", nil
+}
+
+func advancedChatAgentWorkConnectorTasks(ctx context.Context, userID uint, runID string) ([]advancedChatAgentWorkConnectorTask, error) {
+	var tasks []AdvancedChatConnectorTask
+	if err := model.DB.WithContext(ctx).
+		Where("user_id = ? AND run_id = ?", userID, runID).
+		Order("created_at ASC").
+		Limit(500).
+		Find(&tasks).Error; err != nil {
+		return nil, err
+	}
+	if len(tasks) == 0 {
+		return []advancedChatAgentWorkConnectorTask{}, nil
+	}
+	deviceIDs := make([]string, 0, len(tasks))
+	for _, task := range tasks {
+		if strings.TrimSpace(task.DeviceID) != "" {
+			deviceIDs = append(deviceIDs, task.DeviceID)
+		}
+	}
+	devices := map[string]AdvancedChatConnectorDevice{}
+	if len(deviceIDs) > 0 {
+		var rows []AdvancedChatConnectorDevice
+		if err := model.DB.WithContext(ctx).Where("user_id = ? AND id IN ?", userID, deviceIDs).Find(&rows).Error; err != nil {
+			return nil, err
+		}
+		for _, device := range rows {
+			devices[device.ID] = device
+		}
+	}
+	result := make([]advancedChatAgentWorkConnectorTask, 0, len(tasks))
+	for _, task := range tasks {
+		payload := map[string]interface{}{}
+		if strings.TrimSpace(task.Payload) != "" {
+			_ = json.Unmarshal([]byte(task.Payload), &payload)
+		}
+		device := devices[task.DeviceID]
+		result = append(result, advancedChatAgentWorkConnectorTask{
+			ID:                    task.ID,
+			DeviceID:              task.DeviceID,
+			DeviceName:            device.Name,
+			Action:                task.Action,
+			Status:                task.Status,
+			WorkspacePath:         task.WorkspacePath,
+			WorkspaceUnrestricted: strings.TrimSpace(task.WorkspacePath) == "",
+			Payload:               truncateAdvancedChatAgentWorkConnectorPayload(payload),
+			Result:                truncateToolResult(task.Result),
+			ErrorMessage:          truncateToolResult(task.ErrorMessage),
+			CreatedAt:             task.CreatedAt,
+			UpdatedAt:             task.UpdatedAt,
+			StartedAt:             task.StartedAt,
+			FinishedAt:            task.FinishedAt,
+		})
+	}
+	return result, nil
+}
+
+func truncateAdvancedChatAgentWorkConnectorPayload(payload map[string]interface{}) map[string]interface{} {
+	result := make(map[string]interface{}, len(payload))
+	for key, value := range payload {
+		switch typed := value.(type) {
+		case string:
+			result[key] = truncateToolResult(typed)
+		default:
+			result[key] = typed
+		}
+	}
+	return result
 }
 
 func advancedChatTopLevelAgentForWork(group advancedChatAgentGroup, messages []AdvancedChatMessage) (advancedChatGroupAgent, bool) {
@@ -1890,6 +1998,7 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 						CallerAgentName:    preparedGroupAgentName(prepared.groupAgent),
 						Observer:           observer,
 						Arguments:          arguments,
+						DisplayRound:       round + 1,
 					})
 					if err != nil {
 						detail.Status = "error"
@@ -1920,6 +2029,7 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 						ConnectorBindings: connectorBindings,
 						Observer:          observer,
 						Arguments:         arguments,
+						DisplayRound:      round + 1,
 					})
 					if err != nil {
 						detail.Status = "error"
