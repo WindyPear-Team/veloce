@@ -101,6 +101,60 @@ func TestAgentStudioRolePermissions(t *testing.T) {
 	if !advancedChatAgentStudioCanUseExecutionTools("worker") || !advancedChatAgentStudioCanSplit("worker") {
 		t.Fatal("worker agents should be able to execute and split")
 	}
+	if advancedChatAgentStudioCanUseExecutionTools("checker") || advancedChatAgentStudioCanSplit("checker") || advancedChatAgentStudioCanDelegate("checker", true) {
+		t.Fatal("checker agents must not execute, split, or delegate")
+	}
+	if advancedChatAgentStudioConnectorActionAllowed("checker", "read_file") || advancedChatAgentStudioConnectorActionAllowed("checker", "write_file") {
+		t.Fatal("checker agents must not receive connector tools")
+	}
+}
+
+func TestNormalizeAdvancedChatAgentGroupRequiresOneChecker(t *testing.T) {
+	base := advancedChatAgentGroupInput{
+		ID:   "studio",
+		Name: "Studio",
+		Agents: []advancedChatGroupAgent{
+			{ID: "chief", Name: "Chief", Type: "chief", ChatAgentID: "1"},
+			{ID: "checker", Name: "Checker", Type: "checker", ChatAgentID: "2"},
+			{ID: "worker", Name: "Worker", Type: "worker", ChatAgentID: "3"},
+		},
+	}
+	if _, err := normalizeAdvancedChatAgentGroup(base); err != nil {
+		t.Fatalf("expected one chief and one checker to be valid, got %v", err)
+	}
+	missingChecker := base
+	missingChecker.Agents = []advancedChatGroupAgent{
+		{ID: "chief", Name: "Chief", Type: "chief", ChatAgentID: "1"},
+		{ID: "worker", Name: "Worker", Type: "worker", ChatAgentID: "3"},
+	}
+	if _, err := normalizeAdvancedChatAgentGroup(missingChecker); err == nil || !strings.Contains(err.Error(), "exactly one checker") {
+		t.Fatalf("expected missing checker to fail, got %v", err)
+	}
+	twoCheckers := base
+	twoCheckers.Agents = append(twoCheckers.Agents, advancedChatGroupAgent{ID: "checker2", Name: "Checker 2", Type: "checker", ChatAgentID: "4"})
+	if _, err := normalizeAdvancedChatAgentGroup(twoCheckers); err == nil || !strings.Contains(err.Error(), "exactly one checker") {
+		t.Fatalf("expected duplicate checker to fail, got %v", err)
+	}
+}
+
+func TestAgentStudioCheckerDecisionRequiresApprovalTool(t *testing.T) {
+	yes, opinion, err := advancedChatAgentStudioCheckerDecision(&ChatExecutorResult{ToolCalls: []ChatExecutorToolCall{{
+		Name:      advancedChatAgentStudioApprovalToolName,
+		Arguments: `{"decision":"yes","opinion":"scoped change"}`,
+	}}})
+	if err != nil || !yes || opinion != "scoped change" {
+		t.Fatalf("expected yes decision with opinion, got yes=%v opinion=%q err=%v", yes, opinion, err)
+	}
+	no, _, err := advancedChatAgentStudioCheckerDecision(&ChatExecutorResult{ToolCalls: []ChatExecutorToolCall{{
+		Name:      advancedChatAgentStudioApprovalToolName,
+		Arguments: `{"decision":"no"}`,
+	}}})
+	if err != nil || no {
+		t.Fatalf("expected no decision, got no=%v err=%v", no, err)
+	}
+	if _, _, err := advancedChatAgentStudioCheckerDecision(&ChatExecutorResult{Content: "yes"}); err == nil {
+		t.Fatal("checker must call approval decision tool")
+	}
 }
 
 func TestMergeAdvancedChatToolCallDetailListPreservesStreamedWorkerCalls(t *testing.T) {

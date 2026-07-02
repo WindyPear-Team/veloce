@@ -382,44 +382,70 @@ func (api *advancedChatAPI) decideConnectorTask(c *gin.Context) {
 		return
 	}
 	taskID := strings.TrimSpace(c.Param("id"))
+	status, err := decideAdvancedChatConnectorTask(user.ID, taskID, input.Approved, "user", "")
+	if err != nil {
+		var taskErr advancedChatConnectorTaskDecisionConflict
+		if errors.As(err, &taskErr) {
+			c.JSON(http.StatusConflict, gin.H{"error": "Connector task already decided", "status": taskErr.Status})
+			return
+		}
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Connector task not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update connector task"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "status": status})
+}
+
+type advancedChatConnectorTaskDecisionConflict struct {
+	Status string
+}
+
+func (e advancedChatConnectorTaskDecisionConflict) Error() string {
+	return "connector task already decided"
+}
+
+func decideAdvancedChatConnectorTask(userID uint, taskID string, approved bool, actor string, opinion string) (string, error) {
+	taskID = strings.TrimSpace(taskID)
+	actor = strings.TrimSpace(actor)
+	if actor == "" {
+		actor = "user"
+	}
 	now := time.Now()
 	updates := map[string]interface{}{
 		"status":     advancedChatConnectorTaskStatusQueued,
 		"updated_at": now,
 	}
-	if !input.Approved {
+	status := advancedChatConnectorTaskStatusQueued
+	if !approved {
+		message := "denied by " + actor
+		if trimmed := strings.TrimSpace(opinion); trimmed != "" {
+			message += ": " + truncateConnectorTaskText(trimmed)
+		}
+		status = advancedChatConnectorTaskStatusFailed
 		updates = map[string]interface{}{
-			"status":        advancedChatConnectorTaskStatusFailed,
-			"error_message": "denied by user",
+			"status":        status,
+			"error_message": message,
 			"finished_at":   &now,
 			"updated_at":    now,
 		}
 	}
 	update := model.DB.Model(&AdvancedChatConnectorTask{}).
-		Where("id = ? AND user_id = ? AND status = ?", taskID, user.ID, advancedChatConnectorTaskStatusPendingApproval).
+		Where("id = ? AND user_id = ? AND status = ?", taskID, userID, advancedChatConnectorTaskStatusPendingApproval).
 		Updates(updates)
 	if update.Error != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update connector task"})
-		return
+		return "", update.Error
 	}
-	if update.RowsAffected == 0 {
-		var task AdvancedChatConnectorTask
-		if err := model.DB.Where("id = ? AND user_id = ?", taskID, user.ID).First(&task).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				c.JSON(http.StatusNotFound, gin.H{"error": "Connector task not found"})
-				return
-			}
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load connector task"})
-			return
-		}
-		c.JSON(http.StatusConflict, gin.H{"error": "Connector task already decided", "status": task.Status})
-		return
+	if update.RowsAffected > 0 {
+		return status, nil
 	}
-	status := advancedChatConnectorTaskStatusQueued
-	if !input.Approved {
-		status = advancedChatConnectorTaskStatusFailed
+	var task AdvancedChatConnectorTask
+	if err := model.DB.Where("id = ? AND user_id = ?", taskID, userID).First(&task).Error; err != nil {
+		return "", err
 	}
-	c.JSON(http.StatusOK, gin.H{"ok": true, "status": status})
+	return "", advancedChatConnectorTaskDecisionConflict{Status: task.Status}
 }
 
 func (api *advancedChatAPI) deleteConnectorDevice(c *gin.Context) {

@@ -1696,6 +1696,10 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 	studioCanSplit := !studioRoleActive || advancedChatAgentStudioCanSplit(studioRole)
 	studioCanDelegate := advancedChatAgentStudioCanDelegate(studioRole, studioRoleActive)
 	studioCanCommit := studioRoleActive && normalizeAdvancedChatAgentType(studioRole) == "reviewer"
+	var approvalChecker *advancedChatAgentStudioApprovalChecker
+	if prepared.agentGroup != nil {
+		approvalChecker, _ = advancedChatAgentStudioApprovalCheckerForGroup(prepared.agentGroup)
+	}
 	if advancedChatAssistantMCPToolsEnabled() {
 		var err error
 		mcpTools, bindings, err = listAdvancedChatMCPTools(ctx, prepared.servers)
@@ -1862,6 +1866,7 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 			detail := advancedChatCompletionToolCall{ID: toolCall.ID, Round: round + 1, Name: toolCall.Name, Status: "running"}
 			precreatedConnectorTaskID := ""
 			var precreateConnectorTaskErr error
+			toolResultText := "Tool not found: " + toolCall.Name
 			if exists {
 				detail.Server = binding.Server.Name
 				detail.Tool = binding.Tool.Name
@@ -1902,6 +1907,14 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 					arguments = advancedChatConnectorArgumentsWithTaskID(arguments, task.ID)
 					detail.Arguments = arguments
 					detail.Status = "approval_required"
+					if approvalChecker != nil {
+						if value, err := approveAdvancedChatConnectorTaskWithChecker(ctx, user, prepared.runID, prepared.input.SessionID, approvalChecker, task, connectorBinding, arguments, observer, prepared.input.UserChannelID, round+1); err != nil {
+							precreateConnectorTaskErr = err
+							toolResultText = "Checker approval failed: " + err.Error()
+						} else if strings.TrimSpace(value) != "" {
+							toolResultText = value
+						}
+					}
 				}
 			}
 			if observer.OnToolCall != nil {
@@ -1910,7 +1923,6 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 				}
 			}
 			detail.Status = "missing"
-			toolResultText := "Tool not found: " + toolCall.Name
 			if exists {
 				detail.Server = binding.Server.Name
 				detail.Tool = binding.Tool.Name
@@ -1939,7 +1951,7 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 					toolResultText = "Invalid tool arguments: " + argumentsErr.Error()
 				} else if precreateConnectorTaskErr != nil {
 					detail.Status = "error"
-					toolResultText = "Failed to create connector task: " + precreateConnectorTaskErr.Error()
+					toolResultText = "Connector task unavailable: " + precreateConnectorTaskErr.Error()
 				} else {
 					var toolResult string
 					var err error
@@ -2029,6 +2041,7 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 						ConnectorBindings: connectorBindings,
 						Observer:          observer,
 						Arguments:         arguments,
+						ApprovalChecker:   approvalChecker,
 						DisplayRound:      round + 1,
 					})
 					if err != nil {

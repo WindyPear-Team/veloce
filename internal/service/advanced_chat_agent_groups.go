@@ -231,13 +231,20 @@ func normalizeAdvancedChatAgentGroup(input advancedChatAgentGroupInput) (advance
 		return advancedChatAgentGroup{}, errors.New("studio requires at least one member")
 	}
 	chiefCount := 0
+	checkerCount := 0
 	for _, agent := range agents {
-		if normalizeAdvancedChatAgentType(agent.Type) == "chief" {
+		switch normalizeAdvancedChatAgentType(agent.Type) {
+		case "chief":
 			chiefCount++
+		case "checker":
+			checkerCount++
 		}
 	}
 	if chiefCount != 1 {
 		return advancedChatAgentGroup{}, errors.New("studio must contain exactly one chief")
+	}
+	if checkerCount != 1 {
+		return advancedChatAgentGroup{}, errors.New("studio must contain exactly one checker")
 	}
 	return advancedChatAgentGroup{
 		ID:          id,
@@ -377,7 +384,7 @@ func sanitizeAdvancedChatAgentGroupPart(value string, fallback string) string {
 
 func normalizeAdvancedChatAgentType(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "chief", "worker", "critic", "reviewer":
+	case "chief", "worker", "critic", "reviewer", "checker":
 		return strings.ToLower(strings.TrimSpace(value))
 	default:
 		return "worker"
@@ -392,6 +399,8 @@ func advancedChatAgentTypeSystemPrompt(agentType string) string {
 		return "Role: critic agent. Stress-test assumptions, identify flaws, missing evidence, unsafe steps, and weak reasoning. You are an employee agent and may use execution tools when the delegated critique requires local evidence."
 	case "reviewer":
 		return "Role: reviewer agent. Review completed work for correctness, regressions, quality, maintainability, and test gaps. You are the employee agent responsible for final conflict review and physical commit when MutationLogs are provided."
+	case "checker":
+		return "Role: checker agent. Review connector approval requests only. You do not execute tasks, edit files, run local commands, split into sub-agents, delegate, or commit. Use only the approval decision tool when it is provided."
 	default:
 		return "Role: worker agent. Execute the assigned goal directly, choose fast direct execution for simple work, split into temporary sub-agents for complex work, report concrete results, and avoid taking ownership of unrelated work."
 	}
@@ -525,6 +534,9 @@ func executeAdvancedChatAgentDelegate(ctx context.Context, user *model.User, inp
 	}
 	if normalizeAdvancedChatAgentType(agent.Type) == "chief" {
 		return "", errors.New("chief agents cannot be delegated execution tasks")
+	}
+	if normalizeAdvancedChatAgentType(agent.Type) == "checker" {
+		return "", errors.New("checker agents can only be used for connector approval checks")
 	}
 	taskID := newAdvancedChatID("agt")
 	emitTaskEvent := func(payload gin.H) {
@@ -679,6 +691,7 @@ func executeAdvancedChatAgentDelegate(ctx context.Context, user *model.User, inp
 			StatusAgentName:    agent.Name,
 			StatusAgentType:    normalizeAdvancedChatAgentType(agent.Type),
 			StatusAgentGroupID: group.ID,
+			ApprovalChecker:    advancedChatAgentStudioApprovalCheckerForGroupValue(group),
 			DisplayRound:       input.DisplayRound,
 		})
 	})
@@ -818,6 +831,14 @@ func runAdvancedChatDelegatedAgentLoop(ctx context.Context, user *model.User, mo
 							return strings.TrimSpace(lastContent), err
 						}
 					}
+					if options.ApprovalChecker != nil {
+						if value, err := approveAdvancedChatConnectorTaskWithChecker(ctx, user, options.RunID, options.SessionID, options.ApprovalChecker, task, connectorBinding, arguments, options.Observer, userChannelID, advancedChatDelegatedDisplayRound(options, round+1)); err != nil {
+							precreateConnectorTaskErr = err
+							toolResult = "Checker approval failed: " + err.Error()
+						} else if strings.TrimSpace(value) != "" {
+							toolResult = value
+						}
+					}
 				}
 			}
 			if options.Observer.OnToolCall != nil {
@@ -849,7 +870,7 @@ func runAdvancedChatDelegatedAgentLoop(ctx context.Context, user *model.User, mo
 				var err error
 				if precreateConnectorTaskErr != nil {
 					err = precreateConnectorTaskErr
-					toolResult = "Failed to create connector task: " + precreateConnectorTaskErr.Error()
+					toolResult = "Connector task unavailable: " + precreateConnectorTaskErr.Error()
 				} else if precreatedConnectorTaskID != "" {
 					value, err = waitAdvancedChatConnectorTask(ctx, precreatedConnectorTaskID, user.ID)
 				} else {
@@ -889,6 +910,7 @@ func runAdvancedChatDelegatedAgentLoop(ctx context.Context, user *model.User, mo
 					Observer:           options.Observer,
 					OnApprovalRequired: options.OnApprovalRequired,
 					Arguments:          arguments,
+					ApprovalChecker:    options.ApprovalChecker,
 					DisplayRound:       advancedChatDelegatedDisplayRound(options, round+1),
 				})
 				if err != nil {
@@ -1038,6 +1060,7 @@ type advancedChatAgentSplitInput struct {
 	Observer           advancedChatCompletionObserver
 	OnApprovalRequired func(context.Context, MessageChannelConnectorApproval) error
 	Arguments          map[string]interface{}
+	ApprovalChecker    *advancedChatAgentStudioApprovalChecker
 	DisplayRound       int
 }
 
@@ -1093,6 +1116,7 @@ func executeAdvancedChatAgentSplit(ctx context.Context, user *model.User, input 
 				StatusAgentID:      label,
 				StatusAgentName:    label,
 				StatusAgentType:    "worker",
+				ApprovalChecker:    input.ApprovalChecker,
 				DisplayRound:       input.DisplayRound,
 			})
 			mutations := delta.snapshot()
