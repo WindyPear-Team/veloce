@@ -1226,7 +1226,7 @@ func advancedChatConnectorTaskRequiresApproval(binding advancedChatConnectorTool
 	case "run_command":
 		command, _ := arguments["command"].(string)
 		return !connectorCommandAutoApproved(command, binding.CommandPrefixes)
-	case "write_file", "replace_text":
+	case "write_file", "replace_text", "commit_delta":
 		return !binding.AutoApprove
 	default:
 		return true

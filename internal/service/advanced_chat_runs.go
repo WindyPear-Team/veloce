@@ -1729,7 +1729,7 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 		tools = append(tools, advancedChatAgentSplitTool())
 	}
 	if studioRoleActive {
-		tools = append(tools, advancedChatAgentStudioInterruptTool())
+		tools = append(tools, advancedChatAgentStudioInterruptTool(), advancedChatAgentStudioQueryStatusTool(), advancedChatAgentStudioResumeTool())
 	}
 	if studioCanCommit && len(connectorTools) > 0 {
 		tools = append(tools, advancedChatAgentStudioCommitDeltaTool())
@@ -1863,6 +1863,8 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 			agentSplitExists := toolCall.Name == advancedChatAgentSplitToolName && studioCanSplit
 			commitDeltaExists := toolCall.Name == advancedChatAgentStudioCommitDeltaToolName && studioCanCommit
 			interruptExists := toolCall.Name == advancedChatAgentStudioInterruptToolName && studioRoleActive
+			queryStatusExists := toolCall.Name == advancedChatAgentStudioQueryStatusToolName && studioRoleActive
+			resumeExists := toolCall.Name == advancedChatAgentStudioResumeToolName && studioRoleActive
 			detail := advancedChatCompletionToolCall{ID: toolCall.ID, Round: round + 1, Name: toolCall.Name, Status: "running"}
 			precreatedConnectorTaskID := ""
 			var precreateConnectorTaskErr error
@@ -1888,6 +1890,12 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 			} else if interruptExists {
 				detail.Server = "agent studio"
 				detail.Tool = "interrupt_sub_agents"
+			} else if queryStatusExists {
+				detail.Server = "agent studio"
+				detail.Tool = "query_sub_agent_status"
+			} else if resumeExists {
+				detail.Server = "agent studio"
+				detail.Tool = "resume_sub_agents"
 			}
 			arguments, argumentsErr := parseToolArguments(toolCall.Arguments)
 			if argumentsErr == nil {
@@ -2066,7 +2074,7 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 						commitBinding = binding
 						break
 					}
-					toolResultText, err = commitAdvancedChatAgentStudioDelta(ctx, user.ID, prepared.runID, commitBinding, arguments)
+					toolResultText, err = commitAdvancedChatAgentStudioDelta(ctx, user, prepared.runID, prepared.input.SessionID, commitBinding, arguments, approvalChecker, observer, prepared.input.UserChannelID, round+1)
 					if err != nil {
 						detail.Status = "error"
 						if strings.TrimSpace(toolResultText) != "" {
@@ -2089,6 +2097,36 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 					if err != nil {
 						detail.Status = "error"
 						toolResultText = "Sub-agent interrupt failed: " + err.Error()
+					} else {
+						detail.Status = "ok"
+					}
+				}
+			} else if queryStatusExists {
+				detail.Server = "agent studio"
+				detail.Tool = "query_sub_agent_status"
+				if argumentsErr != nil {
+					detail.Status = "invalid_arguments"
+					toolResultText = "Invalid sub-agent status query arguments: " + argumentsErr.Error()
+				} else {
+					toolResultText, err = queryAdvancedChatAgentStudioSubAgentStatus(prepared.runID, user.ID, arguments)
+					if err != nil {
+						detail.Status = "error"
+						toolResultText = "Sub-agent status query failed: " + err.Error()
+					} else {
+						detail.Status = "ok"
+					}
+				}
+			} else if resumeExists {
+				detail.Server = "agent studio"
+				detail.Tool = "resume_sub_agents"
+				if argumentsErr != nil {
+					detail.Status = "invalid_arguments"
+					toolResultText = "Invalid sub-agent resume arguments: " + argumentsErr.Error()
+				} else {
+					toolResultText, err = resumeAdvancedChatAgentStudioSubAgents(prepared.runID, prepared.input.SessionID, user.ID, arguments)
+					if err != nil {
+						detail.Status = "error"
+						toolResultText = "Sub-agent resume failed: " + err.Error()
 					} else {
 						detail.Status = "ok"
 					}

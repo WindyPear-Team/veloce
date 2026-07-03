@@ -157,6 +157,40 @@ func TestAgentStudioCheckerDecisionRequiresApprovalTool(t *testing.T) {
 	}
 }
 
+func TestCommitDeltaRequiresApprovalUnlessAutoApproved(t *testing.T) {
+	binding := advancedChatConnectorToolBinding{Action: "commit_delta"}
+	if !advancedChatConnectorTaskRequiresApproval(binding, map[string]interface{}{"mutations": []interface{}{}}) {
+		t.Fatal("commit_delta should require approval by default")
+	}
+	binding.AutoApprove = true
+	if advancedChatConnectorTaskRequiresApproval(binding, map[string]interface{}{"mutations": []interface{}{}}) {
+		t.Fatal("commit_delta should respect connector auto approval")
+	}
+}
+
+func TestAgentStudioSubAgentStatusHelpers(t *testing.T) {
+	payload := map[string]interface{}{
+		"task_id":    "task-1",
+		"agent_id":   "split-a",
+		"agent_name": "Split A",
+	}
+	if !advancedChatAgentStudioSubAgentMatches(payload, "task-1") {
+		t.Fatal("status query should match task id")
+	}
+	if !advancedChatAgentStudioSubAgentMatches(payload, "split-a") {
+		t.Fatal("status query should match agent id")
+	}
+	if !advancedChatAgentStudioSubAgentMatches(payload, "Split A") {
+		t.Fatal("status query should match agent name")
+	}
+	if advancedChatAgentStudioSubAgentMatches(payload, "other") {
+		t.Fatal("status query should not match unrelated ids")
+	}
+	if key := advancedChatAgentStudioSubAgentKey(payload); key != "task-1" {
+		t.Fatalf("expected task id to be the stable key, got %q", key)
+	}
+}
+
 func TestMergeAdvancedChatToolCallDetailListPreservesStreamedWorkerCalls(t *testing.T) {
 	current := []advancedChatCompletionToolCall{
 		{ID: "delegate-1", Name: "agent_delegate", Server: "Agent Studio", Tool: "agent_delegate", Status: "running"},

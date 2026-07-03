@@ -674,7 +674,7 @@ func executeAdvancedChatAgentDelegate(ctx context.Context, user *model.User, inp
 			mcpBindings = bindings
 		}
 		if advancedChatAgentStudioCanSplit(agent.Type) {
-			tools = append(tools, advancedChatAgentSplitTool(), advancedChatAgentStudioInterruptTool())
+			tools = append(tools, advancedChatAgentSplitTool(), advancedChatAgentStudioInterruptTool(), advancedChatAgentStudioQueryStatusTool(), advancedChatAgentStudioResumeTool())
 		}
 		if normalizeAdvancedChatAgentType(agent.Type) == "reviewer" && input.ConnectorDevice != nil {
 			tools = append(tools, advancedChatAgentStudioCommitDeltaTool())
@@ -780,6 +780,8 @@ func runAdvancedChatDelegatedAgentLoop(ctx context.Context, user *model.User, mo
 			agentSplitExists := call.Name == advancedChatAgentSplitToolName && options.AllowSplit
 			commitDeltaExists := call.Name == advancedChatAgentStudioCommitDeltaToolName && options.AllowCommit
 			interruptExists := call.Name == advancedChatAgentStudioInterruptToolName
+			queryStatusExists := call.Name == advancedChatAgentStudioQueryStatusToolName
+			resumeExists := call.Name == advancedChatAgentStudioResumeToolName
 			detail := advancedChatCompletionToolCall{ID: call.ID, Round: advancedChatDelegatedDisplayRound(options, round+1), Name: call.Name, Status: "running"}
 			precreatedConnectorTaskID := ""
 			var precreateConnectorTaskErr error
@@ -798,6 +800,12 @@ func runAdvancedChatDelegatedAgentLoop(ctx context.Context, user *model.User, mo
 			} else if interruptExists {
 				detail.Server = "agent studio"
 				detail.Tool = "interrupt_sub_agents"
+			} else if queryStatusExists {
+				detail.Server = "agent studio"
+				detail.Tool = "query_sub_agent_status"
+			} else if resumeExists {
+				detail.Server = "agent studio"
+				detail.Tool = "resume_sub_agents"
 			}
 			toolResult := "Tool not found for delegated agent: " + call.Name
 			arguments, parseErr := parseToolArguments(call.Arguments)
@@ -847,7 +855,7 @@ func runAdvancedChatDelegatedAgentLoop(ctx context.Context, user *model.User, mo
 				}
 			}
 			detail.Status = "missing"
-			if !mcpExists && !connectorExists && !agentSplitExists && !commitDeltaExists && !interruptExists {
+			if !mcpExists && !connectorExists && !agentSplitExists && !commitDeltaExists && !interruptExists && !queryStatusExists && !resumeExists {
 				// Delegated agents deliberately do not get agent_delegate again.
 			} else if parseErr != nil {
 				detail.Status = "invalid_arguments"
@@ -895,6 +903,8 @@ func runAdvancedChatDelegatedAgentLoop(ctx context.Context, user *model.User, mo
 					advancedChatAgentSplitToolName:             true,
 					advancedChatAgentStudioCommitDeltaToolName: true,
 					advancedChatAgentStudioInterruptToolName:   true,
+					advancedChatAgentStudioQueryStatusToolName: true,
+					advancedChatAgentStudioResumeToolName:      true,
 				})
 				value, err := executeAdvancedChatAgentSplit(ctx, user, advancedChatAgentSplitInput{
 					RunID:              options.RunID,
@@ -930,7 +940,7 @@ func runAdvancedChatDelegatedAgentLoop(ctx context.Context, user *model.User, mo
 						commitBinding = binding
 						break
 					}
-					value, err := commitAdvancedChatAgentStudioDelta(ctx, user.ID, options.RunID, commitBinding, arguments)
+					value, err := commitAdvancedChatAgentStudioDelta(ctx, user, options.RunID, options.SessionID, commitBinding, arguments, options.ApprovalChecker, options.Observer, userChannelID, advancedChatDelegatedDisplayRound(options, round+1))
 					if err != nil {
 						detail.Status = "error"
 						toolResult = "Delta commit failed: " + err.Error()
@@ -947,6 +957,24 @@ func runAdvancedChatDelegatedAgentLoop(ctx context.Context, user *model.User, mo
 				if err != nil {
 					detail.Status = "error"
 					toolResult = "Sub-agent interrupt failed: " + err.Error()
+				} else {
+					detail.Status = "ok"
+					toolResult = value
+				}
+			} else if queryStatusExists {
+				value, err := queryAdvancedChatAgentStudioSubAgentStatus(options.RunID, user.ID, arguments)
+				if err != nil {
+					detail.Status = "error"
+					toolResult = "Sub-agent status query failed: " + err.Error()
+				} else {
+					detail.Status = "ok"
+					toolResult = value
+				}
+			} else if resumeExists {
+				value, err := resumeAdvancedChatAgentStudioSubAgents(options.RunID, options.SessionID, user.ID, arguments)
+				if err != nil {
+					detail.Status = "error"
+					toolResult = "Sub-agent resume failed: " + err.Error()
 				} else {
 					detail.Status = "ok"
 					toolResult = value

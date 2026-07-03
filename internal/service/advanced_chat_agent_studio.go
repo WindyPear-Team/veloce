@@ -17,6 +17,8 @@ import (
 const (
 	advancedChatAgentStudioCommitDeltaToolName = "workspace_commit_delta"
 	advancedChatAgentStudioInterruptToolName   = "interrupt_sub_agents"
+	advancedChatAgentStudioQueryStatusToolName = "query_sub_agent_status"
+	advancedChatAgentStudioResumeToolName      = "resume_sub_agents"
 	advancedChatAgentStudioApprovalToolName    = "connector_approval_decision"
 )
 
@@ -146,6 +148,7 @@ func advancedChatAgentStudioPrompt(agentType string, hasConnector bool) string {
 - You may use connector browsing tools and approved commands to inspect context. Commands must be diagnostic/read-only; delegate modifications to employees.
 - Use agent_delegate to assign concrete task lists to worker, critic, or reviewer main agents. Do not delegate implementation work to the checker.
 - For implementation work, delegate to employees. For final physical commit of merged changes, delegate review and commit to a reviewer.
+- When the human asks about running sub-agent progress, use query_sub_agent_status, answer concisely, then call resume_sub_agents.
 - When the human sends new information for running sub-agents, use interrupt_sub_agents to deliver that message to them.`)
 	}
 	if agentType == "checker" {
@@ -162,6 +165,7 @@ func advancedChatAgentStudioPrompt(agentType string, hasConnector bool) string {
 - Use agent_split for complex work that benefits from parallel temporary sub-agents.
 - Split sub-agents work on a deferred virtual filesystem: their file writes become MutationLog entries and are not physically written to disk.
 - When split results include MutationLog entries, merge and reason about them before reporting. Reviewer agents can use workspace_commit_delta for final physical commit after conflict review.
+- Use query_sub_agent_status when the human or caller asks for progress, then call resume_sub_agents after replying.
 - Use interrupt_sub_agents when the human or caller sends new information that should be delivered to running sub-agents.`)
 }
 
@@ -261,6 +265,34 @@ func advancedChatAgentStudioInterruptTool() ChatExecutorTool {
 			"properties": map[string]interface{}{
 				"agent_id": map[string]interface{}{"type": "string", "description": "Optional agent id or split task label to filter."},
 				"message":  map[string]interface{}{"type": "string", "description": "New information, question, or directive to deliver to the selected sub-agents."},
+			},
+		},
+	}
+}
+
+func advancedChatAgentStudioQueryStatusTool() ChatExecutorTool {
+	return ChatExecutorTool{
+		Name:        advancedChatAgentStudioQueryStatusToolName,
+		Description: "Query recent split sub-agent progress snapshots without cancelling their background work.",
+		Schema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"agent_id":    map[string]interface{}{"type": "string", "description": "Optional agent id, split task label, or task id to filter."},
+				"max_agents":  map[string]interface{}{"type": "integer", "description": "Maximum sub-agent snapshots to return.", "minimum": 1, "maximum": 20},
+				"include_all": map[string]interface{}{"type": "boolean", "description": "When true, include completed and failed sub-agents as well as running ones."},
+			},
+		},
+	}
+}
+
+func advancedChatAgentStudioResumeTool() ChatExecutorTool {
+	return ChatExecutorTool{
+		Name:        advancedChatAgentStudioResumeToolName,
+		Description: "Record that sub-agents should continue after a progress query. This does not cancel or restart background work.",
+		Schema: map[string]interface{}{
+			"type": "object",
+			"properties": map[string]interface{}{
+				"agent_id": map[string]interface{}{"type": "string", "description": "Optional agent id, split task label, or task id to resume."},
 			},
 		},
 	}
@@ -470,7 +502,10 @@ func executeAdvancedChatConnectorToolForAgent(ctx context.Context, userID uint, 
 	}
 }
 
-func commitAdvancedChatAgentStudioDelta(ctx context.Context, userID uint, runID string, binding advancedChatConnectorToolBinding, arguments map[string]interface{}) (string, error) {
+func commitAdvancedChatAgentStudioDelta(ctx context.Context, user *model.User, runID string, sessionID string, binding advancedChatConnectorToolBinding, arguments map[string]interface{}, checker *advancedChatAgentStudioApprovalChecker, observer advancedChatCompletionObserver, fallbackUserChannelID uint, displayRound int) (string, error) {
+	if user == nil {
+		return "", errors.New("user is required")
+	}
 	mutations, err := parseAdvancedChatAgentStudioMutations(arguments)
 	if err != nil {
 		return "", err
@@ -478,43 +513,37 @@ func commitAdvancedChatAgentStudioDelta(ctx context.Context, userID uint, runID 
 	if len(mutations) == 0 {
 		return "", errors.New("mutations are required")
 	}
-	results := make([]string, 0, len(mutations))
+
 	for index, mutation := range mutations {
-		action := strings.TrimSpace(mutation.Action)
-		if action == "" {
-			return strings.Join(results, "\n"), fmt.Errorf("mutation %d is missing action", index+1)
-		}
-		callBinding := binding
-		callArguments := map[string]interface{}{"path": mutation.Path}
-		switch action {
-		case "write_file":
-			callBinding.Action = "write_file"
-			callArguments["content"] = mutation.Content
-			if mutation.Overwrite != nil {
-				callArguments["overwrite"] = *mutation.Overwrite
-			}
-			if mutation.CreateDirs != nil {
-				callArguments["create_dirs"] = *mutation.CreateDirs
-			}
-		case "replace_text":
-			callBinding.Action = "replace_text"
-			callArguments["old_text"] = mutation.OldText
-			callArguments["new_text"] = mutation.NewText
+		switch strings.TrimSpace(mutation.Action) {
+		case "write_file", "replace_text":
 		default:
-			return strings.Join(results, "\n"), fmt.Errorf("unsupported mutation action %q", action)
+			return "", fmt.Errorf("unsupported mutation action %q at index %d", mutation.Action, index+1)
 		}
-		result, err := callAdvancedChatConnectorToolExpanded(ctx, userID, runID, callBinding, callArguments)
-		if strings.TrimSpace(result) != "" {
-			results = append(results, result)
-		}
+	}
+
+	callBinding := binding
+	callBinding.Action = "commit_delta"
+	callArguments := map[string]interface{}{"mutations": mutations}
+	if advancedChatConnectorTaskRequiresApproval(callBinding, callArguments) && checker != nil {
+		task, err := createAdvancedChatConnectorTask(user.ID, runID, callBinding, callArguments)
 		if err != nil {
-			return strings.Join(results, "\n"), err
+			return "", err
 		}
+		checkerResult, err := approveAdvancedChatConnectorTaskWithChecker(ctx, user, runID, sessionID, checker, task, callBinding, callArguments, observer, fallbackUserChannelID, displayRound)
+		if err != nil {
+			return checkerResult, err
+		}
+		result, err := waitAdvancedChatConnectorTask(ctx, task.ID, user.ID)
+		if err != nil {
+			if strings.TrimSpace(checkerResult) != "" {
+				return checkerResult, err
+			}
+			return result, err
+		}
+		return result, nil
 	}
-	if len(results) == 0 {
-		return fmt.Sprintf("Committed %d mutation(s).", len(mutations)), nil
-	}
-	return fmt.Sprintf("Committed %d mutation(s).\n%s", len(mutations), strings.Join(results, "\n")), nil
+	return callAdvancedChatConnectorTool(ctx, user.ID, runID, callBinding, callArguments)
 }
 
 func interruptAdvancedChatAgentStudioSubAgents(runID string, sessionID string, userID uint, arguments map[string]interface{}) (string, error) {
@@ -553,6 +582,107 @@ func interruptAdvancedChatAgentStudioSubAgents(runID string, sessionID string, u
 		return "", err
 	}
 	return string(data), nil
+}
+
+func queryAdvancedChatAgentStudioSubAgentStatus(runID string, userID uint, arguments map[string]interface{}) (string, error) {
+	agentID := strings.TrimSpace(stringFromMap(arguments, "agent_id"))
+	maxAgents := 10
+	if value, ok := intFromConnectorArgument(arguments["max_agents"]); ok && value > 0 && value <= 20 {
+		maxAgents = value
+	}
+	includeAll := false
+	if value, ok := boolFromConnectorArgument(arguments["include_all"]); ok {
+		includeAll = value
+	}
+	var events []AdvancedChatRunEvent
+	if err := model.DB.Where("run_id = ? AND user_id = ? AND event = ?", strings.TrimSpace(runID), userID, "agent_task").
+		Order("seq ASC").
+		Limit(200).
+		Find(&events).Error; err != nil {
+		return "", err
+	}
+	states := map[string]map[string]interface{}{}
+	order := []string{}
+	for _, event := range events {
+		payload := map[string]interface{}{}
+		if err := json.Unmarshal([]byte(event.Payload), &payload); err != nil {
+			continue
+		}
+		if !advancedChatAgentStudioSubAgentMatches(payload, agentID) {
+			continue
+		}
+		key := advancedChatAgentStudioSubAgentKey(payload)
+		if key == "" {
+			continue
+		}
+		current := states[key]
+		if current == nil {
+			current = map[string]interface{}{}
+			states[key] = current
+			order = append(order, key)
+		}
+		for name, value := range payload {
+			current[name] = value
+		}
+	}
+	items := make([]map[string]interface{}, 0, len(order))
+	runningCount := 0
+	for _, key := range order {
+		item := states[key]
+		status := strings.ToLower(strings.TrimSpace(fmt.Sprint(item["status"])))
+		if status == "running" || status == "approval_required" {
+			runningCount++
+		}
+		if !includeAll && status != "running" && status != "approval_required" {
+			continue
+		}
+		items = append(items, item)
+		if len(items) >= maxAgents {
+			break
+		}
+	}
+	data, err := json.Marshal(gin.H{
+		"queried":       true,
+		"running_count": runningCount,
+		"sub_agents":    items,
+	})
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func resumeAdvancedChatAgentStudioSubAgents(runID string, sessionID string, userID uint, arguments map[string]interface{}) (string, error) {
+	agentID := strings.TrimSpace(stringFromMap(arguments, "agent_id"))
+	_ = appendAdvancedChatRunEvent(runID, sessionID, userID, "agent_task", gin.H{
+		"status":   "resumed",
+		"agent_id": agentID,
+	})
+	data, err := json.Marshal(gin.H{"resumed": true, "agent_id": agentID})
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func advancedChatAgentStudioSubAgentMatches(payload map[string]interface{}, agentID string) bool {
+	if agentID == "" {
+		return true
+	}
+	taskID := strings.TrimSpace(fmt.Sprint(payload["task_id"]))
+	id := strings.TrimSpace(fmt.Sprint(payload["agent_id"]))
+	name := strings.TrimSpace(fmt.Sprint(payload["agent_name"]))
+	return taskID == agentID || id == agentID || name == agentID
+}
+
+func advancedChatAgentStudioSubAgentKey(payload map[string]interface{}) string {
+	for _, name := range []string{"task_id", "agent_id", "agent_name"} {
+		value := strings.TrimSpace(fmt.Sprint(payload[name]))
+		if value != "" && value != "<nil>" {
+			return value
+		}
+	}
+	return ""
 }
 
 func (d *advancedChatAgentStudioDeltaLog) append(mutation advancedChatAgentStudioMutation) {
