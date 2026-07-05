@@ -633,9 +633,14 @@ func executeAdvancedChatAgentDelegate(ctx context.Context, user *model.User, inp
 	if agent.UserChannelID > 0 {
 		userChannelID = agent.UserChannelID
 	}
+	var delegatedDelta *advancedChatAgentStudioDeltaLog
 	result, err := withAdvancedChatAgentStudioLock(user.ID, group.ID, agent.ID, func() (string, error) {
 		delegatedCtx, delegatedCancel := newAdvancedChatDelegatedAgentContext(input.RunID, user.ID)
 		defer delegatedCancel()
+		agentType := normalizeAdvancedChatAgentType(agent.Type)
+		if advancedChatAgentStudioCanUseExecutionTools(agentType) && agentType != "reviewer" {
+			delegatedDelta = &advancedChatAgentStudioDeltaLog{}
+		}
 		systemParts := []string{
 			"You are running as an employee main agent in Agent Studio. Complete only the delegated goal and return a concise result to the caller agent.",
 			"Agent Studio: " + group.Name + " (" + group.ID + ")",
@@ -687,6 +692,7 @@ func executeAdvancedChatAgentDelegate(ctx context.Context, user *model.User, inp
 			OnApprovalRequired: input.OnApprovalRequired,
 			AllowSplit:         advancedChatAgentStudioCanSplit(agent.Type),
 			AllowCommit:        normalizeAdvancedChatAgentType(agent.Type) == "reviewer",
+			DeltaLog:           delegatedDelta,
 			StatusAgentID:      agent.ID,
 			StatusAgentName:    agent.Name,
 			StatusAgentType:    normalizeAdvancedChatAgentType(agent.Type),
@@ -699,8 +705,15 @@ func executeAdvancedChatAgentDelegate(ctx context.Context, user *model.User, inp
 		emitTaskEvent(gin.H{"status": "error", "error": err.Error(), "result": truncateToolResult(result)})
 		return result, err
 	}
+	mutations := []advancedChatAgentStudioMutation{}
+	if delegatedDelta != nil {
+		mutations = delegatedDelta.snapshot()
+		if len(mutations) > 0 {
+			result = appendAdvancedChatAgentStudioMutationLog(result, mutations)
+		}
+	}
 	result = advancedChatAgentNamePrefix(result, agent.Name)
-	emitTaskEvent(gin.H{"status": "completed", "result": truncateToolResult(result)})
+	emitTaskEvent(gin.H{"status": "completed", "result": truncateToolResult(result), "mutation_count": len(mutations)})
 	return result, nil
 }
 
@@ -715,6 +728,21 @@ func advancedChatAgentNamePrefix(content string, name string) string {
 		return content
 	}
 	return prefix + " " + content
+}
+
+func appendAdvancedChatAgentStudioMutationLog(content string, mutations []advancedChatAgentStudioMutation) string {
+	if len(mutations) == 0 {
+		return strings.TrimSpace(content)
+	}
+	data, err := json.MarshalIndent(gin.H{"mutations": mutations}, "", "  ")
+	if err != nil {
+		return strings.TrimSpace(content)
+	}
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return "MutationLog:\n```json\n" + string(data) + "\n```"
+	}
+	return content + "\n\nMutationLog:\n```json\n" + string(data) + "\n```"
 }
 
 func newAdvancedChatDelegatedAgentContext(runID string, userID uint) (context.Context, context.CancelFunc) {

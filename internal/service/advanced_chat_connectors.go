@@ -1221,7 +1221,7 @@ func expandAdvancedChatConnectorToolArguments(binding advancedChatConnectorToolB
 
 func advancedChatConnectorTaskRequiresApproval(binding advancedChatConnectorToolBinding, arguments map[string]interface{}) bool {
 	switch binding.Action {
-	case "list_files", "read_file", "web_search", "web_fetch", "list_agent_skills", "list_windows_drives":
+	case "list_files", "read_file", "file_sha256", "web_search", "web_fetch", "list_agent_skills", "list_windows_drives":
 		return false
 	case "run_command":
 		command, _ := arguments["command"].(string)

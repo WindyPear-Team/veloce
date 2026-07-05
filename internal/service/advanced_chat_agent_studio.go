@@ -477,11 +477,12 @@ func executeAdvancedChatConnectorToolForAgent(ctx context.Context, userID uint, 
 		}
 		return virtual, nil
 	case "write_file":
+		baseSHA256 := baseSHA256ForPath(ctx, userID, runID, binding, stringFromMap(arguments, "path"))
 		mutation := advancedChatAgentStudioMutation{
 			Action:     "write_file",
 			Path:       stringFromMap(arguments, "path"),
 			Content:    stringFromMap(arguments, "content"),
-			BaseSHA256: sha256Hex(""),
+			BaseSHA256: baseSHA256,
 		}
 		if value, ok := boolFromConnectorArgument(arguments["overwrite"]); ok {
 			mutation.Overwrite = &value
@@ -492,7 +493,17 @@ func executeAdvancedChatConnectorToolForAgent(ctx context.Context, userID uint, 
 		delta.append(mutation)
 		return "Deferred write captured in MutationLog. No physical file was changed.", nil
 	case "replace_text":
-		mutations := advancedChatAgentStudioMutationsFromReplaceArguments(arguments)
+		baseSHA256ByPath := map[string]string{}
+		baseForPath := func(path string) string {
+			path = strings.TrimSpace(path)
+			if value, ok := baseSHA256ByPath[path]; ok {
+				return value
+			}
+			value := baseSHA256ForPath(ctx, userID, runID, binding, path)
+			baseSHA256ByPath[path] = value
+			return value
+		}
+		mutations := advancedChatAgentStudioMutationsFromReplaceArguments(arguments, baseForPath)
 		for _, mutation := range mutations {
 			delta.append(mutation)
 		}
@@ -500,6 +511,31 @@ func executeAdvancedChatConnectorToolForAgent(ctx context.Context, userID uint, 
 	default:
 		return callAdvancedChatConnectorToolExpanded(ctx, userID, runID, binding, arguments)
 	}
+}
+
+func baseSHA256ForPath(ctx context.Context, userID uint, runID string, binding advancedChatConnectorToolBinding, path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return sha256Hex("")
+	}
+	hashBinding := binding
+	hashBinding.Action = "file_sha256"
+	hashCtx, cancel := context.WithTimeout(ctx, advancedChatDelegatedToolWait)
+	defer cancel()
+	result, err := callAdvancedChatConnectorTool(hashCtx, userID, runID, hashBinding, map[string]interface{}{"path": path})
+	if err != nil {
+		return sha256Hex("")
+	}
+	result = strings.ToLower(strings.TrimSpace(result))
+	if len(result) != 64 {
+		return sha256Hex("")
+	}
+	for _, char := range result {
+		if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
+			return sha256Hex("")
+		}
+	}
+	return result
 }
 
 func commitAdvancedChatAgentStudioDelta(ctx context.Context, user *model.User, runID string, sessionID string, binding advancedChatConnectorToolBinding, arguments map[string]interface{}, checker *advancedChatAgentStudioApprovalChecker, observer advancedChatCompletionObserver, fallbackUserChannelID uint, displayRound int) (string, error) {
@@ -513,13 +549,8 @@ func commitAdvancedChatAgentStudioDelta(ctx context.Context, user *model.User, r
 	if len(mutations) == 0 {
 		return "", errors.New("mutations are required")
 	}
-
-	for index, mutation := range mutations {
-		switch strings.TrimSpace(mutation.Action) {
-		case "write_file", "replace_text":
-		default:
-			return "", fmt.Errorf("unsupported mutation action %q at index %d", mutation.Action, index+1)
-		}
+	if err := validateAdvancedChatAgentStudioMutations(mutations); err != nil {
+		return "", err
 	}
 
 	callBinding := binding
@@ -544,6 +575,40 @@ func commitAdvancedChatAgentStudioDelta(ctx context.Context, user *model.User, r
 		return result, nil
 	}
 	return callAdvancedChatConnectorTool(ctx, user.ID, runID, callBinding, callArguments)
+}
+
+func validateAdvancedChatAgentStudioMutations(mutations []advancedChatAgentStudioMutation) error {
+	writeByPath := map[string]string{}
+	replaceByPathAndAnchor := map[string]string{}
+	for index, mutation := range mutations {
+		action := strings.TrimSpace(mutation.Action)
+		path := strings.TrimSpace(mutation.Path)
+		if path == "" {
+			return fmt.Errorf("mutation %d is missing path", index+1)
+		}
+		switch action {
+		case "write_file":
+			if previous, exists := writeByPath[path]; exists && previous != mutation.Content {
+				return fmt.Errorf("conflicting write_file mutations for %s", path)
+			}
+			writeByPath[path] = mutation.Content
+		case "replace_text":
+			if strings.TrimSpace(mutation.OldText) == "" {
+				return fmt.Errorf("mutation %d old_text is required", index+1)
+			}
+			key := path + "\x00" + mutation.OldText
+			if previous, exists := replaceByPathAndAnchor[key]; exists && previous != mutation.NewText {
+				return fmt.Errorf("conflicting replace_text mutations for %s", path)
+			}
+			if _, exists := replaceByPathAndAnchor[key]; exists {
+				return fmt.Errorf("duplicate replace_text mutation for %s", path)
+			}
+			replaceByPathAndAnchor[key] = mutation.NewText
+		default:
+			return fmt.Errorf("unsupported mutation action %q at index %d", mutation.Action, index+1)
+		}
+	}
+	return nil
 }
 
 func interruptAdvancedChatAgentStudioSubAgents(runID string, sessionID string, userID uint, arguments map[string]interface{}) (string, error) {
@@ -727,16 +792,21 @@ func (d *advancedChatAgentStudioDeltaLog) applyToPath(path string, base string) 
 	return result
 }
 
-func advancedChatAgentStudioMutationsFromReplaceArguments(arguments map[string]interface{}) []advancedChatAgentStudioMutation {
+func advancedChatAgentStudioMutationsFromReplaceArguments(arguments map[string]interface{}, baseSHA256ForPath func(string) string) []advancedChatAgentStudioMutation {
 	calls := expandAdvancedChatConnectorToolArguments(advancedChatConnectorToolBinding{Action: "replace_text"}, arguments)
 	mutations := make([]advancedChatAgentStudioMutation, 0, len(calls))
 	for _, call := range calls {
+		path := stringFromMap(call, "path")
+		baseSHA256 := sha256Hex("")
+		if baseSHA256ForPath != nil {
+			baseSHA256 = baseSHA256ForPath(path)
+		}
 		mutations = append(mutations, advancedChatAgentStudioMutation{
 			Action:     "replace_text",
-			Path:       stringFromMap(call, "path"),
+			Path:       path,
 			OldText:    stringFromMap(call, "old_text"),
 			NewText:    stringFromMap(call, "new_text"),
-			BaseSHA256: sha256Hex(""),
+			BaseSHA256: baseSHA256,
 		})
 	}
 	return mutations

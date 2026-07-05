@@ -166,6 +166,57 @@ func TestCommitDeltaRequiresApprovalUnlessAutoApproved(t *testing.T) {
 	if advancedChatConnectorTaskRequiresApproval(binding, map[string]interface{}{"mutations": []interface{}{}}) {
 		t.Fatal("commit_delta should respect connector auto approval")
 	}
+	if advancedChatConnectorTaskRequiresApproval(advancedChatConnectorToolBinding{Action: "file_sha256"}, map[string]interface{}{"path": "main.go"}) {
+		t.Fatal("file_sha256 should be treated as read-only and not require approval")
+	}
+}
+
+func TestAgentStudioReplaceMutationsUseBaseSHA(t *testing.T) {
+	mutations := advancedChatAgentStudioMutationsFromReplaceArguments(map[string]interface{}{
+		"path":     "main.go",
+		"old_text": "old",
+		"new_text": "new",
+	}, func(path string) string {
+		if path != "main.go" {
+			t.Fatalf("unexpected path %q", path)
+		}
+		return sha256Hex("base")
+	})
+	if len(mutations) != 1 {
+		t.Fatalf("expected one mutation, got %d", len(mutations))
+	}
+	if mutations[0].BaseSHA256 != sha256Hex("base") {
+		t.Fatalf("base sha = %q, want %q", mutations[0].BaseSHA256, sha256Hex("base"))
+	}
+}
+
+func TestValidateAgentStudioMutationsDetectsConflicts(t *testing.T) {
+	if err := validateAdvancedChatAgentStudioMutations([]advancedChatAgentStudioMutation{{
+		Action:  "replace_text",
+		Path:    "main.go",
+		OldText: "old",
+		NewText: "new",
+	}}); err != nil {
+		t.Fatalf("expected valid mutation, got %v", err)
+	}
+	if err := validateAdvancedChatAgentStudioMutations([]advancedChatAgentStudioMutation{
+		{Action: "replace_text", Path: "main.go", OldText: "old", NewText: "new"},
+		{Action: "replace_text", Path: "main.go", OldText: "old", NewText: "other"},
+	}); err == nil || !strings.Contains(err.Error(), "conflicting replace_text") {
+		t.Fatalf("expected replace conflict, got %v", err)
+	}
+	if err := validateAdvancedChatAgentStudioMutations([]advancedChatAgentStudioMutation{
+		{Action: "write_file", Path: "main.go", Content: "one"},
+		{Action: "write_file", Path: "main.go", Content: "two"},
+	}); err == nil || !strings.Contains(err.Error(), "conflicting write_file") {
+		t.Fatalf("expected write conflict, got %v", err)
+	}
+	if err := validateAdvancedChatAgentStudioMutations([]advancedChatAgentStudioMutation{{
+		Action: "replace_text",
+		Path:   "main.go",
+	}}); err == nil || !strings.Contains(err.Error(), "old_text is required") {
+		t.Fatalf("expected old_text validation error, got %v", err)
+	}
 }
 
 func TestAgentStudioSubAgentStatusHelpers(t *testing.T) {
