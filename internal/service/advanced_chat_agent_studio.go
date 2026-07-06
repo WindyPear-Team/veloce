@@ -20,6 +20,8 @@ const (
 	advancedChatAgentStudioQueryStatusToolName = "query_sub_agent_status"
 	advancedChatAgentStudioResumeToolName      = "resume_sub_agents"
 	advancedChatAgentStudioApprovalToolName    = "connector_approval_decision"
+	advancedChatAgentStudioSandboxIDArg        = "sandbox_id"
+	advancedChatAgentStudioSandboxBackendArg   = "sandbox_backend"
 )
 
 type advancedChatAgentStudioMutation struct {
@@ -52,6 +54,7 @@ type advancedChatDelegatedAgentLoopOptions struct {
 	StatusAgentName    string
 	StatusAgentType    string
 	StatusAgentGroupID string
+	SandboxID          string
 	ApprovalChecker    *advancedChatAgentStudioApprovalChecker
 }
 
@@ -164,6 +167,7 @@ func advancedChatAgentStudioPrompt(agentType string, hasConnector bool) string {
 - You are an employee main agent. Use the fast path for simple, deterministic local edits.
 - Use agent_split for complex work that benefits from parallel temporary sub-agents.
 - Split sub-agents work on a deferred virtual filesystem: their file writes become MutationLog entries and are not physically written to disk.
+- Workspace commands and file reads in delegated/split work run against your sandbox workspace view when available. Command results may include a SandboxChangeReport containing MutationLog-compatible changes.
 - When split results include MutationLog entries, merge and reason about them before reporting. Reviewer agents can use workspace_commit_delta for final physical commit after conflict review.
 - Use query_sub_agent_status when the human or caller asks for progress, then call resume_sub_agents after replying.
 - Use interrupt_sub_agents when the human or caller sends new information that should be delivered to running sub-agents.`)
@@ -223,7 +227,7 @@ func advancedChatAgentStudioCommitDeltaTool() ChatExecutorTool {
 						"type":     "object",
 						"required": []string{"action", "path"},
 						"properties": map[string]interface{}{
-							"action":      map[string]interface{}{"type": "string", "enum": []string{"write_file", "replace_text"}},
+							"action":      map[string]interface{}{"type": "string", "enum": []string{"write_file", "replace_text", "delete_file"}},
 							"path":        map[string]interface{}{"type": "string"},
 							"content":     map[string]interface{}{"type": "string"},
 							"old_text":    map[string]interface{}{"type": "string"},
@@ -451,6 +455,49 @@ func advancedChatAgentStudioLockKey(userID uint, groupID string, agentID string)
 	return fmt.Sprintf("%d:%s:%s", userID, strings.TrimSpace(groupID), strings.TrimSpace(agentID))
 }
 
+func advancedChatAgentStudioSandboxID(parts ...string) string {
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		var builder strings.Builder
+		for _, r := range part {
+			if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+				builder.WriteRune(r)
+			} else {
+				builder.WriteByte('-')
+			}
+			if builder.Len() >= 64 {
+				break
+			}
+		}
+		if text := strings.Trim(builder.String(), "-_"); text != "" {
+			values = append(values, text)
+		}
+	}
+	if len(values) == 0 {
+		return ""
+	}
+	result := strings.Join(values, "-")
+	if len(result) > 160 {
+		result = result[:160]
+	}
+	return result
+}
+
+func advancedChatAgentStudioSandboxArguments(arguments map[string]interface{}, sandboxID string) map[string]interface{} {
+	sandboxID = strings.TrimSpace(sandboxID)
+	if sandboxID == "" {
+		return arguments
+	}
+	next := cloneAdvancedChatConnectorArguments(arguments)
+	next[advancedChatAgentStudioSandboxIDArg] = sandboxID
+	next[advancedChatAgentStudioSandboxBackendArg] = "appcontainer"
+	return next
+}
+
 func withAdvancedChatAgentStudioLock(userID uint, groupID string, agentID string, fn func() (string, error)) (string, error) {
 	key := advancedChatAgentStudioLockKey(userID, groupID, agentID)
 	value, _ := advancedChatAgentStudioLocks.LoadOrStore(key, &sync.Mutex{})
@@ -604,6 +651,11 @@ func validateAdvancedChatAgentStudioMutations(mutations []advancedChatAgentStudi
 				return fmt.Errorf("duplicate replace_text mutation for %s", path)
 			}
 			replaceByPathAndAnchor[key] = mutation.NewText
+		case "delete_file":
+			if _, exists := writeByPath[path]; exists {
+				return fmt.Errorf("conflicting delete_file mutation for %s", path)
+			}
+			writeByPath[path] = "\x00deleted"
 		default:
 			return fmt.Errorf("unsupported mutation action %q at index %d", mutation.Action, index+1)
 		}

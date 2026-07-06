@@ -217,6 +217,36 @@ func TestValidateAgentStudioMutationsDetectsConflicts(t *testing.T) {
 	}}); err == nil || !strings.Contains(err.Error(), "old_text is required") {
 		t.Fatalf("expected old_text validation error, got %v", err)
 	}
+	if err := validateAdvancedChatAgentStudioMutations([]advancedChatAgentStudioMutation{{
+		Action: "delete_file",
+		Path:   "main.go",
+	}}); err != nil {
+		t.Fatalf("expected delete_file mutation to validate, got %v", err)
+	}
+	if err := validateAdvancedChatAgentStudioMutations([]advancedChatAgentStudioMutation{
+		{Action: "write_file", Path: "main.go", Content: "next"},
+		{Action: "delete_file", Path: "main.go"},
+	}); err == nil || !strings.Contains(err.Error(), "conflicting delete_file") {
+		t.Fatalf("expected delete conflict, got %v", err)
+	}
+}
+
+func TestAgentStudioSandboxArguments(t *testing.T) {
+	sandboxID := advancedChatAgentStudioSandboxID("run/1", "group A", "worker")
+	if sandboxID != "run-1-group-A-worker" {
+		t.Fatalf("unexpected sandbox id %q", sandboxID)
+	}
+	arguments := map[string]interface{}{"command": "go test ./..."}
+	next := advancedChatAgentStudioSandboxArguments(arguments, sandboxID)
+	if next[advancedChatAgentStudioSandboxIDArg] != sandboxID {
+		t.Fatalf("sandbox id was not injected: %+v", next)
+	}
+	if next[advancedChatAgentStudioSandboxBackendArg] != "appcontainer" {
+		t.Fatalf("sandbox backend was not injected: %+v", next)
+	}
+	if _, exists := arguments[advancedChatAgentStudioSandboxIDArg]; exists {
+		t.Fatal("sandbox argument injection must not mutate the original argument map")
+	}
 }
 
 func TestAgentStudioSubAgentStatusHelpers(t *testing.T) {

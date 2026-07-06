@@ -697,6 +697,7 @@ func executeAdvancedChatAgentDelegate(ctx context.Context, user *model.User, inp
 			StatusAgentName:    agent.Name,
 			StatusAgentType:    normalizeAdvancedChatAgentType(agent.Type),
 			StatusAgentGroupID: group.ID,
+			SandboxID:          advancedChatAgentStudioSandboxID(input.RunID, group.ID, agent.ID),
 			ApprovalChecker:    advancedChatAgentStudioApprovalCheckerForGroupValue(group),
 			DisplayRound:       input.DisplayRound,
 		})
@@ -839,6 +840,7 @@ func runAdvancedChatDelegatedAgentLoop(ctx context.Context, user *model.User, mo
 			arguments, parseErr := parseToolArguments(call.Arguments)
 			if parseErr == nil {
 				if connectorExists {
+					arguments = advancedChatAgentStudioSandboxArguments(arguments, options.SandboxID)
 					arguments = advancedChatConnectorToolPreviewArguments(ctx, user.ID, options.RunID, connectorBinding, arguments)
 					arguments = advancedChatConnectorArgumentsWithToolCallID(arguments, call.ID)
 				}
@@ -1172,6 +1174,7 @@ func executeAdvancedChatAgentSplit(ctx context.Context, user *model.User, input 
 				StatusAgentID:      label,
 				StatusAgentName:    label,
 				StatusAgentType:    "worker",
+				SandboxID:          advancedChatAgentStudioSandboxID(input.RunID, strings.TrimSpace(input.ToolCallID), label),
 				ApprovalChecker:    input.ApprovalChecker,
 				DisplayRound:       input.DisplayRound,
 			})

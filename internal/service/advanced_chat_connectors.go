@@ -1175,7 +1175,7 @@ func stripAdvancedChatConnectorPreviewFields(payload map[string]interface{}) map
 	}
 	sanitized := make(map[string]interface{}, len(payload))
 	for key, value := range payload {
-		if key == advancedChatConnectorPreviewOldContent || key == advancedChatConnectorPreviewOldContentAvailable || key == advancedChatConnectorPreviewToolCallID || key == advancedChatConnectorTaskID {
+		if key == advancedChatConnectorPreviewOldContent || key == advancedChatConnectorPreviewOldContentAvailable || key == advancedChatConnectorPreviewToolCallID || key == advancedChatConnectorTaskID || key == advancedChatAgentStudioSandboxIDArg || key == advancedChatAgentStudioSandboxBackendArg {
 			continue
 		}
 		sanitized[key] = value
