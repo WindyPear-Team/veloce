@@ -5,11 +5,13 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base32"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"path"
 	"strings"
 	"time"
 
@@ -21,6 +23,9 @@ import (
 const (
 	advancedChatConnectorDeviceStatusOffline = "offline"
 	advancedChatConnectorDeviceStatusOnline  = "online"
+
+	advancedChatConnectorModePlatform  = "platform"
+	advancedChatConnectorModeWebServer = "web_server"
 
 	advancedChatConnectorTaskStatusPendingApproval = "pending_approval"
 	advancedChatConnectorTaskStatusQueued          = "queued"
@@ -36,14 +41,24 @@ const (
 	advancedChatAgentSkillsMaxFileBytes  = 64 * 1024
 	advancedChatAgentSkillsMaxTotalBytes = 256 * 1024
 
-	advancedChatConnectorToolListFiles     = "workspace_list_files"
-	advancedChatConnectorToolReadFile      = "workspace_read_file"
-	advancedChatConnectorToolWriteFile     = "workspace_write_file"
-	advancedChatConnectorToolReplaceText   = "workspace_replace_text"
-	advancedChatConnectorToolRunCommand    = "workspace_run_command"
-	advancedChatConnectorToolWebSearch     = "workspace_web_search"
-	advancedChatConnectorToolWebFetch      = "workspace_web_fetch"
-	advancedChatConnectorToolWindowsDrives = "workspace_list_windows_drives"
+	advancedChatStaticSiteMaxSites          = 20
+	advancedChatStaticSiteMaxFiles          = 200
+	advancedChatStaticSiteMaxFileBytes      = 2 * 1024 * 1024
+	advancedChatStaticSiteMaxTotalBytes     = 20 * 1024 * 1024
+	advancedChatStaticSiteDefaultListenPort = 8080
+
+	advancedChatConnectorToolListFiles      = "workspace_list_files"
+	advancedChatConnectorToolReadFile       = "workspace_read_file"
+	advancedChatConnectorToolWriteFile      = "workspace_write_file"
+	advancedChatConnectorToolReplaceText    = "workspace_replace_text"
+	advancedChatConnectorToolRunCommand     = "workspace_run_command"
+	advancedChatConnectorToolWebSearch      = "workspace_web_search"
+	advancedChatConnectorToolWebFetch       = "workspace_web_fetch"
+	advancedChatConnectorToolWindowsDrives  = "workspace_list_windows_drives"
+	advancedChatConnectorToolListSites      = "list_static_sites"
+	advancedChatConnectorToolDeploySite     = "deploy_static_site"
+	advancedChatConnectorToolSetSiteEnabled = "set_static_site_enabled"
+	advancedChatConnectorToolDeleteSite     = "delete_static_site"
 
 	advancedChatConnectorPreviewOldContent          = "preview_old_content"
 	advancedChatConnectorPreviewOldContentAvailable = "preview_old_content_available"
@@ -52,23 +67,38 @@ const (
 )
 
 type AdvancedChatConnectorDevice struct {
-	ID        string     `gorm:"primaryKey;size:80" json:"id"`
-	UserID    uint       `gorm:"index;not null" json:"user_id"`
-	User      model.User `gorm:"foreignKey:UserID" json:"-"`
-	TokenHash string     `gorm:"uniqueIndex;size:64;not null" json:"-"`
-	Name      string     `gorm:"size:120;not null" json:"name"`
-	Remark    string     `gorm:"size:200;not null;default:''" json:"remark"`
-	Hostname  string     `gorm:"size:120" json:"hostname"`
-	OS        string     `gorm:"size:40" json:"os"`
-	Arch      string     `gorm:"size:40" json:"arch"`
-	Version   string     `gorm:"size:80" json:"version"`
-	Status    string     `gorm:"size:20;index;not null" json:"status"`
+	ID         string     `gorm:"primaryKey;size:80" json:"id"`
+	UserID     uint       `gorm:"index;not null" json:"user_id"`
+	User       model.User `gorm:"foreignKey:UserID" json:"-"`
+	TokenHash  string     `gorm:"uniqueIndex;size:64;not null" json:"-"`
+	Name       string     `gorm:"size:120;not null" json:"name"`
+	Remark     string     `gorm:"size:200;not null;default:''" json:"remark"`
+	Hostname   string     `gorm:"size:120" json:"hostname"`
+	OS         string     `gorm:"size:40" json:"os"`
+	Arch       string     `gorm:"size:40" json:"arch"`
+	Version    string     `gorm:"size:80" json:"version"`
+	Mode       string     `gorm:"size:40;not null;default:'platform'" json:"mode"`
+	ListenPort int        `gorm:"not null;default:0" json:"listen_port"`
+	Status     string     `gorm:"size:20;index;not null" json:"status"`
 	// Kept for existing databases that already migrated the previous connector schema.
 	// New connector versions no longer register workspace paths on the device.
 	Workspaces string     `gorm:"type:text;not null" json:"-"`
 	LastSeenAt *time.Time `json:"last_seen_at,omitempty"`
 	CreatedAt  time.Time  `json:"created_at"`
 	UpdatedAt  time.Time  `json:"updated_at"`
+}
+
+type AdvancedChatStaticSite struct {
+	ID         string                      `gorm:"primaryKey;size:80" json:"id"`
+	UserID     uint                        `gorm:"index;not null;uniqueIndex:idx_advanced_chat_static_site_user_domain" json:"user_id"`
+	User       model.User                  `gorm:"foreignKey:UserID" json:"-"`
+	DeviceID   string                      `gorm:"index;size:80;not null" json:"device_id"`
+	Device     AdvancedChatConnectorDevice `gorm:"foreignKey:DeviceID" json:"-"`
+	DomainName string                      `gorm:"size:253;not null;uniqueIndex:idx_advanced_chat_static_site_user_domain" json:"domain_name"`
+	Enabled    bool                        `gorm:"not null;default:true" json:"enabled"`
+	LastTaskID string                      `gorm:"size:80" json:"last_task_id"`
+	CreatedAt  time.Time                   `json:"created_at"`
+	UpdatedAt  time.Time                   `json:"updated_at"`
 }
 
 type AdvancedChatConnectorTask struct {
@@ -96,6 +126,8 @@ type advancedChatConnectorDeviceResponse struct {
 	OS         string     `json:"os,omitempty"`
 	Arch       string     `json:"arch,omitempty"`
 	Version    string     `json:"version,omitempty"`
+	Mode       string     `json:"mode"`
+	ListenPort int        `json:"listen_port,omitempty"`
 	Status     string     `json:"status"`
 	Online     bool       `json:"online"`
 	LastSeenAt *time.Time `json:"last_seen_at,omitempty"`
@@ -104,8 +136,10 @@ type advancedChatConnectorDeviceResponse struct {
 }
 
 type advancedChatConnectorTokenInput struct {
-	Name   string `json:"name"`
-	Remark string `json:"remark"`
+	Name       string `json:"name"`
+	Remark     string `json:"remark"`
+	Mode       string `json:"mode"`
+	ListenPort int    `json:"listen_port"`
 }
 
 type advancedChatConnectorDeviceUpdateInput struct {
@@ -114,11 +148,28 @@ type advancedChatConnectorDeviceUpdateInput struct {
 }
 
 type advancedChatConnectorRegisterInput struct {
-	Name     string `json:"name"`
-	Hostname string `json:"hostname"`
-	OS       string `json:"os"`
-	Arch     string `json:"arch"`
-	Version  string `json:"version"`
+	Name       string `json:"name"`
+	Hostname   string `json:"hostname"`
+	OS         string `json:"os"`
+	Arch       string `json:"arch"`
+	Version    string `json:"version"`
+	Mode       string `json:"mode"`
+	ListenPort int    `json:"listen_port"`
+}
+
+type advancedChatStaticSiteResponse struct {
+	ID         string    `json:"id"`
+	DeviceID   string    `json:"device_id"`
+	DeviceName string    `json:"device_name,omitempty"`
+	DomainName string    `json:"domain_name"`
+	Enabled    bool      `json:"enabled"`
+	LastTaskID string    `json:"last_task_id,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+type advancedChatStaticSiteUpdateInput struct {
+	Enabled *bool `json:"enabled"`
 }
 
 type advancedChatConnectorTaskResponse struct {
@@ -231,6 +282,8 @@ func (api *advancedChatAPI) createConnectorToken(c *gin.Context) {
 		name = string([]rune(name)[:120])
 	}
 	remark := truncateConnectorField(input.Remark, 200)
+	mode := normalizeAdvancedChatConnectorMode(input.Mode)
+	listenPort := normalizeAdvancedChatConnectorListenPort(input.ListenPort, mode)
 	token, err := newAdvancedChatConnectorToken()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create connector token"})
@@ -243,6 +296,8 @@ func (api *advancedChatAPI) createConnectorToken(c *gin.Context) {
 		TokenHash:  hashAdvancedChatConnectorToken(token),
 		Name:       name,
 		Remark:     remark,
+		Mode:       mode,
+		ListenPort: listenPort,
 		Status:     advancedChatConnectorDeviceStatusOffline,
 		Workspaces: "[]",
 		CreatedAt:  now,
@@ -468,6 +523,126 @@ func (api *advancedChatAPI) deleteConnectorDevice(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Device deleted"})
 }
 
+func (api *advancedChatAPI) listStaticSites(c *gin.Context) {
+	user, ok := currentAdvancedChatUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+	var sites []AdvancedChatStaticSite
+	if err := model.DB.Where("user_id = ?", user.ID).Order("updated_at DESC, created_at DESC").Find(&sites).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list static sites"})
+		return
+	}
+	deviceIDs := make([]string, 0, len(sites))
+	for _, site := range sites {
+		if strings.TrimSpace(site.DeviceID) != "" {
+			deviceIDs = append(deviceIDs, site.DeviceID)
+		}
+	}
+	devices := map[string]AdvancedChatConnectorDevice{}
+	if len(deviceIDs) > 0 {
+		var rows []AdvancedChatConnectorDevice
+		if err := model.DB.Where("user_id = ? AND id IN ?", user.ID, deviceIDs).Find(&rows).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load connector devices"})
+			return
+		}
+		for _, device := range rows {
+			devices[device.ID] = device
+		}
+	}
+	responses := make([]advancedChatStaticSiteResponse, 0, len(sites))
+	for _, site := range sites {
+		responses = append(responses, advancedChatStaticSiteResponseFromModel(site, devices[site.DeviceID]))
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"sites":           responses,
+		"max_sites":       advancedChatStaticSiteMaxSites,
+		"max_files":       advancedChatStaticSiteMaxFiles,
+		"max_file_bytes":  advancedChatStaticSiteMaxFileBytes,
+		"max_total_bytes": advancedChatStaticSiteMaxTotalBytes,
+	})
+}
+
+func (api *advancedChatAPI) updateStaticSite(c *gin.Context) {
+	user, ok := currentAdvancedChatUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+	var input advancedChatStaticSiteUpdateInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if input.Enabled == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "enabled is required"})
+		return
+	}
+	now := time.Now()
+	update := model.DB.Model(&AdvancedChatStaticSite{}).
+		Where("id = ? AND user_id = ?", c.Param("id"), user.ID).
+		Updates(map[string]interface{}{"enabled": *input.Enabled, "updated_at": now})
+	if update.Error != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update static site"})
+		return
+	}
+	if update.RowsAffected == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Static site not found"})
+		return
+	}
+	var site AdvancedChatStaticSite
+	if err := model.DB.Where("id = ? AND user_id = ?", c.Param("id"), user.ID).First(&site).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load static site"})
+		return
+	}
+	var device AdvancedChatConnectorDevice
+	_ = model.DB.Where("id = ? AND user_id = ?", site.DeviceID, user.ID).First(&device).Error
+	taskID, taskErr := createAdvancedChatStaticSiteControlTask(user.ID, site, "set_static_site_enabled", map[string]interface{}{
+		"domain_name": site.DomainName,
+		"enabled":     site.Enabled,
+	})
+	if taskErr == nil && taskID != "" {
+		site.LastTaskID = taskID
+		_ = model.DB.Model(&site).Update("last_task_id", taskID).Error
+	}
+	response := advancedChatStaticSiteResponseFromModel(site, device)
+	if taskErr != nil {
+		c.JSON(http.StatusOK, gin.H{"site": response, "warning": taskErr.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, response)
+}
+
+func (api *advancedChatAPI) deleteStaticSite(c *gin.Context) {
+	user, ok := currentAdvancedChatUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+	var site AdvancedChatStaticSite
+	if err := model.DB.Where("id = ? AND user_id = ?", c.Param("id"), user.ID).First(&site).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Static site not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load static site"})
+		return
+	}
+	taskID, taskErr := createAdvancedChatStaticSiteControlTask(user.ID, site, "delete_static_site", map[string]interface{}{
+		"domain_name": site.DomainName,
+	})
+	if err := model.DB.Where("id = ? AND user_id = ?", site.ID, user.ID).Delete(&AdvancedChatStaticSite{}).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete static site"})
+		return
+	}
+	if taskErr != nil {
+		c.JSON(http.StatusOK, gin.H{"ok": true, "warning": taskErr.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "connector_task_id": taskID})
+}
+
 func (api *advancedChatAPI) refreshWorkspaceSkills(c *gin.Context) {
 	user, ok := currentAdvancedChatUser(c)
 	if !ok {
@@ -643,6 +818,8 @@ func connectorDeviceUpdates(input advancedChatConnectorRegisterInput, now time.T
 		"os":           truncateConnectorField(input.OS, 40),
 		"arch":         truncateConnectorField(input.Arch, 40),
 		"version":      truncateConnectorField(input.Version, 80),
+		"mode":         normalizeAdvancedChatConnectorMode(input.Mode),
+		"listen_port":  normalizeAdvancedChatConnectorListenPort(input.ListenPort, input.Mode),
 		"status":       advancedChatConnectorDeviceStatusOnline,
 		"last_seen_at": &now,
 		"updated_at":   now,
@@ -740,11 +917,26 @@ func advancedChatConnectorDeviceResponseFromModel(device AdvancedChatConnectorDe
 		OS:         device.OS,
 		Arch:       device.Arch,
 		Version:    device.Version,
+		Mode:       normalizeAdvancedChatConnectorMode(device.Mode),
+		ListenPort: device.ListenPort,
 		Status:     status,
 		Online:     online,
 		LastSeenAt: device.LastSeenAt,
 		CreatedAt:  device.CreatedAt,
 		UpdatedAt:  device.UpdatedAt,
+	}
+}
+
+func advancedChatStaticSiteResponseFromModel(site AdvancedChatStaticSite, device AdvancedChatConnectorDevice) advancedChatStaticSiteResponse {
+	return advancedChatStaticSiteResponse{
+		ID:         site.ID,
+		DeviceID:   site.DeviceID,
+		DeviceName: device.Name,
+		DomainName: site.DomainName,
+		Enabled:    site.Enabled,
+		LastTaskID: site.LastTaskID,
+		CreatedAt:  site.CreatedAt,
+		UpdatedAt:  site.UpdatedAt,
 	}
 }
 
@@ -956,6 +1148,71 @@ func advancedChatConnectorTools(device *AdvancedChatConnectorDevice, workspacePa
 		},
 	})
 
+	if normalizeAdvancedChatConnectorMode(device.Mode) != advancedChatConnectorModeWebServer {
+		return tools, bindings
+	}
+
+	bind(advancedChatConnectorToolListSites, "list_static_sites")
+	add("list_static_sites", ChatExecutorTool{
+		Name:        advancedChatConnectorToolListSites,
+		Description: "List static sites registered for this connector device. Returns site id, domain, enabled state, and recent deployment task metadata.",
+		Schema: map[string]interface{}{
+			"type":       "object",
+			"properties": map[string]interface{}{},
+		},
+	})
+	bind(advancedChatConnectorToolDeploySite, "deploy_static_site")
+	add("deploy_static_site", ChatExecutorTool{
+		Name:        advancedChatConnectorToolDeploySite,
+		Description: "Deploy or update a static website on the selected connector web server. Generate the complete HTML/CSS/JS asset tree first, then provide base64-encoded file contents for atomic publication.",
+		Schema: map[string]interface{}{
+			"type":     "object",
+			"required": []string{"domain_name", "files"},
+			"properties": map[string]interface{}{
+				"site_id":     map[string]interface{}{"type": "string", "description": "Optional existing site id. Omit to create or update by domain."},
+				"domain_name": map[string]interface{}{"type": "string", "description": "Target hostname/domain, such as site.example.com. Schemes and paths are not allowed."},
+				"enabled":     map[string]interface{}{"type": "boolean", "description": "Whether the site should serve traffic after deployment. Defaults to true."},
+				"files": map[string]interface{}{
+					"type":        "array",
+					"description": "Static files to publish. Each path is relative to the site's public root and each content value is base64.",
+					"items": map[string]interface{}{
+						"type":     "object",
+						"required": []string{"path", "content"},
+						"properties": map[string]interface{}{
+							"path":    map[string]interface{}{"type": "string", "description": "Relative path, for example index.html or css/main.css."},
+							"content": map[string]interface{}{"type": "string", "description": "Base64-encoded file bytes."},
+						},
+					},
+				},
+			},
+		},
+	})
+	bind(advancedChatConnectorToolSetSiteEnabled, "set_static_site_enabled")
+	add("set_static_site_enabled", ChatExecutorTool{
+		Name:        advancedChatConnectorToolSetSiteEnabled,
+		Description: "Enable or suspend a static site hosted by this connector. Suspended sites should return 403 at the edge.",
+		Schema: map[string]interface{}{
+			"type":     "object",
+			"required": []string{"site_id", "enabled"},
+			"properties": map[string]interface{}{
+				"site_id": map[string]interface{}{"type": "string", "description": "Static site id."},
+				"enabled": map[string]interface{}{"type": "boolean", "description": "true to serve the site, false to suspend it."},
+			},
+		},
+	})
+	bind(advancedChatConnectorToolDeleteSite, "delete_static_site")
+	add("delete_static_site", ChatExecutorTool{
+		Name:        advancedChatConnectorToolDeleteSite,
+		Description: "Delete a static site from the control plane and ask the connector to remove its hosted files and route.",
+		Schema: map[string]interface{}{
+			"type":     "object",
+			"required": []string{"site_id"},
+			"properties": map[string]interface{}{
+				"site_id": map[string]interface{}{"type": "string", "description": "Static site id."},
+			},
+		},
+	})
+
 	return tools, bindings
 }
 
@@ -964,10 +1221,16 @@ func callAdvancedChatConnectorTool(ctx context.Context, userID uint, runID strin
 	if err != nil {
 		return "", err
 	}
+	if task.ID == "" && strings.TrimSpace(task.Result) != "" {
+		return task.Result, nil
+	}
 	return waitAdvancedChatConnectorTask(ctx, task.ID, userID)
 }
 
 func createAdvancedChatConnectorTask(userID uint, runID string, binding advancedChatConnectorToolBinding, arguments map[string]interface{}) (AdvancedChatConnectorTask, error) {
+	if isAdvancedChatStaticSiteControlAction(binding.Action) {
+		return createAdvancedChatStaticSiteToolTask(userID, runID, binding, arguments)
+	}
 	payload, err := json.Marshal(arguments)
 	if err != nil {
 		return AdvancedChatConnectorTask{}, err
@@ -992,6 +1255,479 @@ func createAdvancedChatConnectorTask(userID uint, runID string, binding advanced
 		return AdvancedChatConnectorTask{}, err
 	}
 	return task, nil
+}
+
+func isAdvancedChatStaticSiteControlAction(action string) bool {
+	switch action {
+	case "list_static_sites", "deploy_static_site", "set_static_site_enabled", "delete_static_site":
+		return true
+	default:
+		return false
+	}
+}
+
+func createAdvancedChatStaticSiteToolTask(userID uint, runID string, binding advancedChatConnectorToolBinding, arguments map[string]interface{}) (AdvancedChatConnectorTask, error) {
+	switch binding.Action {
+	case "list_static_sites":
+		result, err := advancedChatStaticSitesJSON(userID, binding.DeviceID)
+		if err != nil {
+			return AdvancedChatConnectorTask{}, err
+		}
+		return AdvancedChatConnectorTask{Result: result}, nil
+	case "deploy_static_site":
+		site, payload, err := prepareAdvancedChatStaticSiteDeployment(userID, binding.DeviceID, arguments)
+		if err != nil {
+			return AdvancedChatConnectorTask{}, err
+		}
+		task, err := createAdvancedChatRawConnectorTask(userID, runID, binding, payload, false)
+		if err != nil {
+			return AdvancedChatConnectorTask{}, err
+		}
+		_ = model.DB.Model(&AdvancedChatStaticSite{}).Where("id = ? AND user_id = ?", site.ID, userID).Updates(map[string]interface{}{
+			"last_task_id": task.ID,
+			"updated_at":   time.Now(),
+		}).Error
+		return task, nil
+	case "set_static_site_enabled":
+		site, payload, err := prepareAdvancedChatStaticSiteEnabled(userID, binding.DeviceID, arguments)
+		if err != nil {
+			return AdvancedChatConnectorTask{}, err
+		}
+		task, err := createAdvancedChatRawConnectorTask(userID, runID, binding, payload, false)
+		if err != nil {
+			return AdvancedChatConnectorTask{}, err
+		}
+		_ = model.DB.Model(&AdvancedChatStaticSite{}).Where("id = ? AND user_id = ?", site.ID, userID).Updates(map[string]interface{}{
+			"last_task_id": task.ID,
+			"updated_at":   time.Now(),
+		}).Error
+		return task, nil
+	case "delete_static_site":
+		site, payload, err := prepareAdvancedChatStaticSiteDelete(userID, binding.DeviceID, arguments)
+		if err != nil {
+			return AdvancedChatConnectorTask{}, err
+		}
+		task, err := createAdvancedChatRawConnectorTask(userID, runID, binding, payload, false)
+		if err != nil {
+			return AdvancedChatConnectorTask{}, err
+		}
+		_ = model.DB.Where("id = ? AND user_id = ?", site.ID, userID).Delete(&AdvancedChatStaticSite{}).Error
+		return task, nil
+	default:
+		return AdvancedChatConnectorTask{}, fmt.Errorf("unsupported static site action: %s", binding.Action)
+	}
+}
+
+func createAdvancedChatRawConnectorTask(userID uint, runID string, binding advancedChatConnectorToolBinding, arguments map[string]interface{}, allowApproval bool) (AdvancedChatConnectorTask, error) {
+	payload, err := json.Marshal(arguments)
+	if err != nil {
+		return AdvancedChatConnectorTask{}, err
+	}
+	status := advancedChatConnectorTaskStatusQueued
+	if allowApproval && advancedChatConnectorTaskRequiresApproval(binding, arguments) {
+		status = advancedChatConnectorTaskStatusPendingApproval
+	}
+	task := AdvancedChatConnectorTask{
+		ID:            newAdvancedChatID("act"),
+		UserID:        userID,
+		DeviceID:      binding.DeviceID,
+		RunID:         runID,
+		Action:        binding.Action,
+		WorkspacePath: "",
+		Payload:       string(payload),
+		Status:        status,
+		Result:        "",
+		ErrorMessage:  "",
+	}
+	if err := model.DB.Create(&task).Error; err != nil {
+		return AdvancedChatConnectorTask{}, err
+	}
+	return task, nil
+}
+
+func advancedChatStaticSitesJSON(userID uint, deviceID string) (string, error) {
+	var sites []AdvancedChatStaticSite
+	query := model.DB.Where("user_id = ?", userID)
+	if strings.TrimSpace(deviceID) != "" {
+		query = query.Where("device_id = ?", strings.TrimSpace(deviceID))
+	}
+	if err := query.Order("updated_at DESC, created_at DESC").Find(&sites).Error; err != nil {
+		return "", err
+	}
+	deviceIDs := make([]string, 0, len(sites))
+	for _, site := range sites {
+		deviceIDs = append(deviceIDs, site.DeviceID)
+	}
+	devices := map[string]AdvancedChatConnectorDevice{}
+	if len(deviceIDs) > 0 {
+		var rows []AdvancedChatConnectorDevice
+		if err := model.DB.Where("user_id = ? AND id IN ?", userID, deviceIDs).Find(&rows).Error; err != nil {
+			return "", err
+		}
+		for _, device := range rows {
+			devices[device.ID] = device
+		}
+	}
+	responses := make([]advancedChatStaticSiteResponse, 0, len(sites))
+	for _, site := range sites {
+		responses = append(responses, advancedChatStaticSiteResponseFromModel(site, devices[site.DeviceID]))
+	}
+	payload, err := json.Marshal(map[string]interface{}{
+		"sites":           responses,
+		"max_sites":       advancedChatStaticSiteMaxSites,
+		"max_files":       advancedChatStaticSiteMaxFiles,
+		"max_file_bytes":  advancedChatStaticSiteMaxFileBytes,
+		"max_total_bytes": advancedChatStaticSiteMaxTotalBytes,
+	})
+	if err != nil {
+		return "", err
+	}
+	return string(payload), nil
+}
+
+func prepareAdvancedChatStaticSiteDeployment(userID uint, deviceID string, arguments map[string]interface{}) (AdvancedChatStaticSite, map[string]interface{}, error) {
+	deviceID = strings.TrimSpace(deviceID)
+	if deviceID == "" {
+		return AdvancedChatStaticSite{}, nil, errors.New("connector device is required")
+	}
+	if err := ensureAdvancedChatStaticSiteConnectorDevice(userID, deviceID); err != nil {
+		return AdvancedChatStaticSite{}, nil, err
+	}
+	if err := validateAdvancedChatConnectorIDArgument(arguments, deviceID); err != nil {
+		return AdvancedChatStaticSite{}, nil, err
+	}
+	domain, err := normalizeAdvancedChatStaticSiteDomain(stringMapValue(arguments, "domain_name"))
+	if err != nil {
+		return AdvancedChatStaticSite{}, nil, err
+	}
+	files, totalBytes, err := normalizeAdvancedChatStaticSiteFiles(arguments["files"])
+	if err != nil {
+		return AdvancedChatStaticSite{}, nil, err
+	}
+	enabled := true
+	if raw, ok := arguments["enabled"].(bool); ok {
+		enabled = raw
+	}
+	siteID := strings.TrimSpace(stringMapValue(arguments, "site_id"))
+	site, err := upsertAdvancedChatStaticSite(userID, deviceID, siteID, domain, enabled)
+	if err != nil {
+		return AdvancedChatStaticSite{}, nil, err
+	}
+	payload := map[string]interface{}{
+		"site_id":      site.ID,
+		"domain_name":  site.DomainName,
+		"enabled":      site.Enabled,
+		"files":        files,
+		"file_count":   len(files),
+		"total_bytes":  totalBytes,
+		"public_root":  "public",
+		"storage_root": "/data/sites/" + site.DomainName + "/public",
+	}
+	return site, payload, nil
+}
+
+func prepareAdvancedChatStaticSiteEnabled(userID uint, deviceID string, arguments map[string]interface{}) (AdvancedChatStaticSite, map[string]interface{}, error) {
+	site, err := loadAdvancedChatStaticSiteForTool(userID, deviceID, arguments)
+	if err != nil {
+		return AdvancedChatStaticSite{}, nil, err
+	}
+	enabled, ok := arguments["enabled"].(bool)
+	if !ok {
+		return AdvancedChatStaticSite{}, nil, errors.New("enabled is required")
+	}
+	now := time.Now()
+	if err := model.DB.Model(&AdvancedChatStaticSite{}).Where("id = ? AND user_id = ?", site.ID, userID).Updates(map[string]interface{}{
+		"enabled":    enabled,
+		"updated_at": now,
+	}).Error; err != nil {
+		return AdvancedChatStaticSite{}, nil, err
+	}
+	site.Enabled = enabled
+	site.UpdatedAt = now
+	return site, map[string]interface{}{
+		"site_id":     site.ID,
+		"domain_name": site.DomainName,
+		"enabled":     site.Enabled,
+	}, nil
+}
+
+func prepareAdvancedChatStaticSiteDelete(userID uint, deviceID string, arguments map[string]interface{}) (AdvancedChatStaticSite, map[string]interface{}, error) {
+	site, err := loadAdvancedChatStaticSiteForTool(userID, deviceID, arguments)
+	if err != nil {
+		return AdvancedChatStaticSite{}, nil, err
+	}
+	return site, map[string]interface{}{
+		"site_id":     site.ID,
+		"domain_name": site.DomainName,
+	}, nil
+}
+
+func createAdvancedChatStaticSiteControlTask(userID uint, site AdvancedChatStaticSite, action string, payload map[string]interface{}) (string, error) {
+	if err := ensureAdvancedChatStaticSiteConnectorDevice(userID, site.DeviceID); err != nil {
+		return "", err
+	}
+	binding := advancedChatConnectorToolBinding{
+		DeviceID:   site.DeviceID,
+		DeviceName: site.DeviceID,
+		Action:     action,
+	}
+	task, err := createAdvancedChatRawConnectorTask(userID, "", binding, payload, false)
+	if err != nil {
+		return "", err
+	}
+	return task.ID, nil
+}
+
+func ensureAdvancedChatStaticSiteConnectorDevice(userID uint, deviceID string) error {
+	var device AdvancedChatConnectorDevice
+	if err := model.DB.Where("id = ? AND user_id = ?", deviceID, userID).First(&device).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return errors.New("connector device not found")
+		}
+		return err
+	}
+	if !advancedChatConnectorDeviceOnline(device) {
+		return errors.New("connector device is offline")
+	}
+	if normalizeAdvancedChatConnectorMode(device.Mode) != advancedChatConnectorModeWebServer {
+		return errors.New("connector device is not running in web_server mode")
+	}
+	return nil
+}
+
+func validateAdvancedChatConnectorIDArgument(arguments map[string]interface{}, deviceID string) error {
+	raw := strings.TrimSpace(stringMapValue(arguments, "connector_id"))
+	if raw == "" {
+		return nil
+	}
+	if raw != deviceID {
+		return errors.New("connector_id does not match the selected connector device")
+	}
+	return nil
+}
+
+func upsertAdvancedChatStaticSite(userID uint, deviceID string, siteID string, domain string, enabled bool) (AdvancedChatStaticSite, error) {
+	var existing AdvancedChatStaticSite
+	query := model.DB.Where("user_id = ?", userID)
+	if siteID != "" {
+		query = query.Where("id = ?", siteID)
+	} else {
+		query = query.Where("domain_name = ?", domain)
+	}
+	err := query.First(&existing).Error
+	now := time.Now()
+	if err == nil {
+		if existing.DeviceID != deviceID {
+			return AdvancedChatStaticSite{}, errors.New("static site belongs to another connector device")
+		}
+		if existing.DomainName != domain {
+			return AdvancedChatStaticSite{}, errors.New("site_id and domain_name refer to different sites")
+		}
+		existing.Enabled = enabled
+		existing.UpdatedAt = now
+		if err := model.DB.Model(&existing).Updates(map[string]interface{}{"enabled": enabled, "updated_at": now}).Error; err != nil {
+			return AdvancedChatStaticSite{}, err
+		}
+		return existing, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return AdvancedChatStaticSite{}, err
+	}
+	var count int64
+	if err := model.DB.Model(&AdvancedChatStaticSite{}).Where("user_id = ?", userID).Count(&count).Error; err != nil {
+		return AdvancedChatStaticSite{}, err
+	}
+	if count >= advancedChatStaticSiteMaxSites {
+		return AdvancedChatStaticSite{}, fmt.Errorf("static site quota exceeded: max %d sites", advancedChatStaticSiteMaxSites)
+	}
+	site := AdvancedChatStaticSite{
+		ID:         newAdvancedChatID("acs"),
+		UserID:     userID,
+		DeviceID:   deviceID,
+		DomainName: domain,
+		Enabled:    enabled,
+		LastTaskID: "",
+	}
+	if err := model.DB.Create(&site).Error; err != nil {
+		return AdvancedChatStaticSite{}, err
+	}
+	return site, nil
+}
+
+func loadAdvancedChatStaticSiteForTool(userID uint, deviceID string, arguments map[string]interface{}) (AdvancedChatStaticSite, error) {
+	if strings.TrimSpace(deviceID) == "" {
+		return AdvancedChatStaticSite{}, errors.New("connector device is required")
+	}
+	if err := validateAdvancedChatConnectorIDArgument(arguments, deviceID); err != nil {
+		return AdvancedChatStaticSite{}, err
+	}
+	siteID := strings.TrimSpace(stringMapValue(arguments, "site_id"))
+	domain := strings.TrimSpace(stringMapValue(arguments, "domain_name"))
+	if siteID == "" && domain == "" {
+		return AdvancedChatStaticSite{}, errors.New("site_id or domain_name is required")
+	}
+	query := model.DB.Where("user_id = ? AND device_id = ?", userID, deviceID)
+	if siteID != "" {
+		query = query.Where("id = ?", siteID)
+	} else {
+		normalized, err := normalizeAdvancedChatStaticSiteDomain(domain)
+		if err != nil {
+			return AdvancedChatStaticSite{}, err
+		}
+		query = query.Where("domain_name = ?", normalized)
+	}
+	var site AdvancedChatStaticSite
+	if err := query.First(&site).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return AdvancedChatStaticSite{}, errors.New("static site not found")
+		}
+		return AdvancedChatStaticSite{}, err
+	}
+	return site, nil
+}
+
+func normalizeAdvancedChatStaticSiteDomain(value string) (string, error) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.TrimPrefix(value, "http://")
+	value = strings.TrimPrefix(value, "https://")
+	if slash := strings.Index(value, "/"); slash >= 0 {
+		value = value[:slash]
+	}
+	value = strings.TrimSuffix(value, ".")
+	if value == "" || len(value) > 253 {
+		return "", errors.New("domain_name is invalid")
+	}
+	if strings.ContainsAny(value, " \t\r\n\\@:") || strings.Contains(value, "..") {
+		return "", errors.New("domain_name must be a hostname without scheme, path, port, or credentials")
+	}
+	if value == "localhost" {
+		return value, nil
+	}
+	labels := strings.Split(value, ".")
+	if len(labels) < 2 {
+		return "", errors.New("domain_name must contain at least two labels")
+	}
+	for _, label := range labels {
+		if label == "" || len(label) > 63 || strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-") {
+			return "", errors.New("domain_name contains an invalid label")
+		}
+		for _, r := range label {
+			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+				continue
+			}
+			return "", errors.New("domain_name may only contain letters, numbers, hyphens, and dots")
+		}
+	}
+	return value, nil
+}
+
+func normalizeAdvancedChatStaticSiteFiles(raw interface{}) ([]map[string]interface{}, int, error) {
+	items, ok := raw.([]interface{})
+	if !ok || len(items) == 0 {
+		return nil, 0, errors.New("files is required")
+	}
+	if len(items) > advancedChatStaticSiteMaxFiles {
+		return nil, 0, fmt.Errorf("too many files: max %d", advancedChatStaticSiteMaxFiles)
+	}
+	files := make([]map[string]interface{}, 0, len(items))
+	seen := map[string]bool{}
+	totalBytes := 0
+	for _, item := range items {
+		row, ok := item.(map[string]interface{})
+		if !ok {
+			return nil, 0, errors.New("files items must be objects")
+		}
+		relativePath, err := normalizeAdvancedChatStaticSiteFilePath(stringMapValue(row, "path"))
+		if err != nil {
+			return nil, 0, err
+		}
+		if seen[relativePath] {
+			return nil, 0, fmt.Errorf("duplicate static site file path: %s", relativePath)
+		}
+		content := strings.TrimSpace(stringMapValue(row, "content"))
+		if content == "" {
+			return nil, 0, fmt.Errorf("file %s content is required", relativePath)
+		}
+		decoded, err := base64.StdEncoding.DecodeString(content)
+		if err != nil {
+			return nil, 0, fmt.Errorf("file %s content must be base64", relativePath)
+		}
+		if len(decoded) > advancedChatStaticSiteMaxFileBytes {
+			return nil, 0, fmt.Errorf("file %s exceeds max size %d bytes", relativePath, advancedChatStaticSiteMaxFileBytes)
+		}
+		totalBytes += len(decoded)
+		if totalBytes > advancedChatStaticSiteMaxTotalBytes {
+			return nil, 0, fmt.Errorf("static site payload exceeds max total size %d bytes", advancedChatStaticSiteMaxTotalBytes)
+		}
+		seen[relativePath] = true
+		files = append(files, map[string]interface{}{"path": relativePath, "content": content, "size": len(decoded)})
+	}
+	return files, totalBytes, nil
+}
+
+func normalizeAdvancedChatStaticSiteFilePath(value string) (string, error) {
+	value = strings.TrimSpace(strings.ReplaceAll(value, "\\", "/"))
+	if strings.HasPrefix(value, "/") || strings.Contains(value, "\x00") {
+		return "", errors.New("static site file path must be relative")
+	}
+	rawParts := strings.Split(value, "/")
+	for _, part := range rawParts {
+		if part == ".." {
+			return "", errors.New("static site file path must be relative")
+		}
+	}
+	value = path.Clean("/" + value)
+	value = strings.TrimPrefix(value, "/")
+	if value == "" || value == "." {
+		return "", errors.New("static site file path is invalid")
+	}
+	if len([]rune(value)) > 500 {
+		return "", errors.New("static site file path is too long")
+	}
+	parts := strings.Split(value, "/")
+	for _, part := range parts {
+		if part == "" || part == "." || part == ".." {
+			return "", errors.New("static site file path must be relative")
+		}
+	}
+	return value, nil
+}
+
+func normalizeAdvancedChatConnectorMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case advancedChatConnectorModeWebServer:
+		return advancedChatConnectorModeWebServer
+	default:
+		return advancedChatConnectorModePlatform
+	}
+}
+
+func normalizeAdvancedChatConnectorListenPort(port int, mode string) int {
+	if port <= 0 {
+		if normalizeAdvancedChatConnectorMode(mode) == advancedChatConnectorModeWebServer {
+			return advancedChatStaticSiteDefaultListenPort
+		}
+		return 0
+	}
+	if port > 65535 {
+		return 0
+	}
+	return port
+}
+
+func stringMapValue(values map[string]interface{}, key string) string {
+	value, ok := values[key]
+	if !ok {
+		return ""
+	}
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case fmt.Stringer:
+		return strings.TrimSpace(typed.String())
+	default:
+		return strings.TrimSpace(fmt.Sprint(typed))
+	}
 }
 
 func callAdvancedChatConnectorToolExpanded(ctx context.Context, userID uint, runID string, binding advancedChatConnectorToolBinding, arguments map[string]interface{}) (string, error) {
@@ -1223,10 +1959,12 @@ func advancedChatConnectorTaskRequiresApproval(binding advancedChatConnectorTool
 	switch binding.Action {
 	case "list_files", "read_file", "file_sha256", "web_search", "web_fetch", "list_agent_skills", "list_windows_drives":
 		return false
+	case "list_static_sites":
+		return false
 	case "run_command":
 		command, _ := arguments["command"].(string)
 		return !connectorCommandAutoApproved(command, binding.CommandPrefixes)
-	case "write_file", "replace_text", "commit_delta":
+	case "write_file", "replace_text", "commit_delta", "deploy_static_site", "set_static_site_enabled", "delete_static_site":
 		return !binding.AutoApprove
 	default:
 		return true

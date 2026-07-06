@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/base64"
 	"errors"
 	"net/http"
 	"strings"
@@ -168,6 +169,50 @@ func TestCommitDeltaRequiresApprovalUnlessAutoApproved(t *testing.T) {
 	}
 	if advancedChatConnectorTaskRequiresApproval(advancedChatConnectorToolBinding{Action: "file_sha256"}, map[string]interface{}{"path": "main.go"}) {
 		t.Fatal("file_sha256 should be treated as read-only and not require approval")
+	}
+}
+
+func TestNormalizeStaticSiteDomainAndFiles(t *testing.T) {
+	domain, err := normalizeAdvancedChatStaticSiteDomain("https://Site.Example.COM/path")
+	if err != nil {
+		t.Fatalf("expected domain to normalize, got %v", err)
+	}
+	if domain != "site.example.com" {
+		t.Fatalf("domain = %q, want site.example.com", domain)
+	}
+	if _, err := normalizeAdvancedChatStaticSiteDomain("example.com:8080"); err == nil {
+		t.Fatal("domain with port should be rejected")
+	}
+	files, total, err := normalizeAdvancedChatStaticSiteFiles([]interface{}{
+		map[string]interface{}{"path": "index.html", "content": base64.StdEncoding.EncodeToString([]byte("<html></html>"))},
+	})
+	if err != nil {
+		t.Fatalf("expected files to normalize, got %v", err)
+	}
+	if len(files) != 1 || files[0]["path"] != "index.html" || total != len("<html></html>") {
+		t.Fatalf("unexpected files=%v total=%d", files, total)
+	}
+	if _, _, err := normalizeAdvancedChatStaticSiteFiles([]interface{}{
+		map[string]interface{}{"path": "../secret.txt", "content": base64.StdEncoding.EncodeToString([]byte("x"))},
+	}); err == nil {
+		t.Fatal("path traversal should be rejected")
+	}
+	if _, _, err := normalizeAdvancedChatStaticSiteFiles([]interface{}{
+		map[string]interface{}{"path": "index.html", "content": "not base64"},
+	}); err == nil {
+		t.Fatal("invalid base64 should be rejected")
+	}
+}
+
+func TestNormalizeConnectorModeDefaultsToPlatform(t *testing.T) {
+	if got := normalizeAdvancedChatConnectorMode(""); got != advancedChatConnectorModePlatform {
+		t.Fatalf("empty mode = %q, want platform", got)
+	}
+	if got := normalizeAdvancedChatConnectorListenPort(0, ""); got != 0 {
+		t.Fatalf("platform default port = %d, want 0", got)
+	}
+	if got := normalizeAdvancedChatConnectorListenPort(0, advancedChatConnectorModeWebServer); got != advancedChatStaticSiteDefaultListenPort {
+		t.Fatalf("web server default port = %d, want %d", got, advancedChatStaticSiteDefaultListenPort)
 	}
 }
 

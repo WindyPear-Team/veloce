@@ -22,6 +22,7 @@ func InitCommunityAdvancedChatFeatures() error {
 		&AdvancedChatRunEvent{},
 		&AdvancedChatConnectorDevice{},
 		&AdvancedChatConnectorTask{},
+		&AdvancedChatStaticSite{},
 	)
 }
 
@@ -80,6 +81,9 @@ func RegisterCommunityAdvancedChatUserRoutes(group *gin.RouterGroup) {
 	group.POST("/advanced-chat/devices/:id/token", api.rotateConnectorDeviceToken)
 	group.PUT("/advanced-chat/devices/:id", api.updateConnectorDevice)
 	group.DELETE("/advanced-chat/devices/:id", api.deleteConnectorDevice)
+	group.GET("/advanced-chat/static-sites", api.listStaticSites)
+	group.PUT("/advanced-chat/static-sites/:id", api.updateStaticSite)
+	group.DELETE("/advanced-chat/static-sites/:id", api.deleteStaticSite)
 	group.GET("/advanced-chat/agent-groups", api.listAgentGroups)
 	group.GET("/advanced-chat/agent-groups/:id", api.getAgentGroup)
 	group.POST("/advanced-chat/agent-groups", api.saveAgentGroup)

@@ -94,7 +94,7 @@ func advancedChatAgentStudioConnectorActionAllowed(agentType string, action stri
 		return true
 	}
 	switch strings.TrimSpace(action) {
-	case "list_files", "list_windows_drives", "read_file", "run_command", "web_search", "web_fetch":
+	case "list_files", "list_windows_drives", "read_file", "run_command", "web_search", "web_fetch", "list_static_sites":
 		return true
 	default:
 		return false
