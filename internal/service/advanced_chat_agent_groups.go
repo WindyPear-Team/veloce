@@ -714,11 +714,110 @@ func executeAdvancedChatAgentDelegate(ctx context.Context, user *model.User, inp
 		mutations = delegatedDelta.snapshot()
 		if len(mutations) > 0 {
 			result = appendAdvancedChatAgentStudioMutationLog(result, mutations)
+			commitResult, commitErr := commitDelegatedAdvancedChatAgentDelta(ctx, user, input, group, agent, mutations, userChannelID, input.DisplayRound)
+			if commitErr != nil {
+				result = strings.TrimSpace(result) + "\n\nAutoCommit failed: " + commitErr.Error()
+				emitTaskEvent(gin.H{"status": "error", "error": commitErr.Error(), "result": truncateToolResult(result), "mutation_count": len(mutations)})
+				return result, commitErr
+			}
+			result = appendAdvancedChatAgentStudioCommitResult(result, commitResult)
 		}
 	}
 	result = advancedChatAgentNamePrefix(result, agent.Name)
 	emitTaskEvent(gin.H{"status": "completed", "result": truncateToolResult(result), "mutation_count": len(mutations)})
 	return result, nil
+}
+
+func commitDelegatedAdvancedChatAgentDelta(ctx context.Context, user *model.User, input advancedChatAgentDelegateInput, group advancedChatAgentGroup, agent advancedChatGroupAgent, mutations []advancedChatAgentStudioMutation, userChannelID uint, displayRound int) (string, error) {
+	binding, ok := advancedChatAgentStudioCommitBinding(input.ConnectorBindings)
+	if !ok {
+		return "", errors.New("no connector workspace is available for final delta commit")
+	}
+	taskID := newAdvancedChatID("agt")
+	reviewer := advancedChatAgentStudioReviewer(group)
+	agentID := "auto-commit"
+	agentName := "AutoCommit"
+	agentType := "reviewer"
+	if reviewer.ID != "" {
+		agentID = reviewer.ID
+		agentName = reviewer.Name
+	}
+	appendAdvancedChatAgentTaskEvent(input.RunID, input.SessionID, user.ID, gin.H{
+		"task_id":         taskID,
+		"parent_id":       strings.TrimSpace(input.ToolCallID),
+		"kind":            "commit",
+		"status":          "running",
+		"group_id":        group.ID,
+		"group_name":      group.Name,
+		"agent_id":        agentID,
+		"agent_name":      agentName,
+		"agent_type":      agentType,
+		"source_agent_id": agent.ID,
+		"mutation_count":  len(mutations),
+	})
+	result, err := commitAdvancedChatAgentStudioDelta(ctx, user, input.RunID, input.SessionID, binding, map[string]interface{}{"mutations": mutations}, advancedChatAgentStudioApprovalCheckerForGroupValue(group), input.Observer, userChannelID, displayRound)
+	if err != nil {
+		appendAdvancedChatAgentTaskEvent(input.RunID, input.SessionID, user.ID, gin.H{
+			"task_id":         taskID,
+			"kind":            "commit",
+			"status":          "error",
+			"group_id":        group.ID,
+			"agent_id":        agentID,
+			"agent_name":      agentName,
+			"agent_type":      agentType,
+			"source_agent_id": agent.ID,
+			"mutation_count":  len(mutations),
+			"error":           err.Error(),
+			"result":          truncateToolResult(result),
+		})
+		return result, err
+	}
+	appendAdvancedChatAgentTaskEvent(input.RunID, input.SessionID, user.ID, gin.H{
+		"task_id":         taskID,
+		"kind":            "commit",
+		"status":          "completed",
+		"group_id":        group.ID,
+		"agent_id":        agentID,
+		"agent_name":      agentName,
+		"agent_type":      agentType,
+		"source_agent_id": agent.ID,
+		"mutation_count":  len(mutations),
+		"result":          truncateToolResult(result),
+	})
+	return result, nil
+}
+
+func appendAdvancedChatAgentStudioCommitResult(content string, commitResult string) string {
+	content = strings.TrimSpace(content)
+	commitResult = strings.TrimSpace(commitResult)
+	if commitResult == "" {
+		commitResult = "MutationLog physically committed."
+	}
+	if content == "" {
+		return "AutoCommit:\n" + commitResult
+	}
+	return content + "\n\nAutoCommit:\n" + commitResult
+}
+
+func advancedChatAgentStudioCommitBinding(bindings map[string]advancedChatConnectorToolBinding) (advancedChatConnectorToolBinding, bool) {
+	for _, preferred := range []string{advancedChatConnectorToolWriteFile, advancedChatConnectorToolReplaceText, advancedChatConnectorToolReadFile, advancedChatConnectorToolListFiles, advancedChatConnectorToolRunCommand} {
+		if binding, ok := bindings[preferred]; ok {
+			return binding, true
+		}
+	}
+	for _, binding := range bindings {
+		return binding, true
+	}
+	return advancedChatConnectorToolBinding{}, false
+}
+
+func advancedChatAgentStudioReviewer(group advancedChatAgentGroup) advancedChatGroupAgent {
+	for _, agent := range group.Agents {
+		if normalizeAdvancedChatAgentType(agent.Type) == "reviewer" {
+			return agent
+		}
+	}
+	return advancedChatGroupAgent{}
 }
 
 func advancedChatAgentNamePrefix(content string, name string) string {
@@ -934,6 +1033,9 @@ func runAdvancedChatDelegatedAgentLoop(ctx context.Context, user *model.User, mo
 				} else {
 					detail.Status = "ok"
 					toolResult = value
+					if connectorBinding.Action == "run_command" && precreatedConnectorTaskID != "" {
+						appendAdvancedChatAgentStudioDeltaMutations(options.DeltaLog, advancedChatAgentStudioSandboxMutations(value))
+					}
 				}
 			} else if agentSplitExists {
 				splitTools := filterAdvancedChatToolsByName(tools, map[string]bool{
@@ -957,6 +1059,7 @@ func runAdvancedChatDelegatedAgentLoop(ctx context.Context, user *model.User, mo
 					Observer:           options.Observer,
 					OnApprovalRequired: options.OnApprovalRequired,
 					Stream:             options.Stream,
+					DeltaLog:           options.DeltaLog,
 					Arguments:          arguments,
 					ApprovalChecker:    options.ApprovalChecker,
 					DisplayRound:       advancedChatDelegatedDisplayRound(options, round+1),
@@ -1126,6 +1229,7 @@ type advancedChatAgentSplitInput struct {
 	Observer           advancedChatCompletionObserver
 	OnApprovalRequired func(context.Context, MessageChannelConnectorApproval) error
 	Stream             bool
+	DeltaLog           *advancedChatAgentStudioDeltaLog
 	Arguments          map[string]interface{}
 	ApprovalChecker    *advancedChatAgentStudioApprovalChecker
 	DisplayRound       int
@@ -1189,6 +1293,7 @@ func executeAdvancedChatAgentSplit(ctx context.Context, user *model.User, input 
 				DisplayRound:       input.DisplayRound,
 			})
 			mutations := delta.snapshot()
+			appendAdvancedChatAgentStudioDeltaMutations(input.DeltaLog, mutations)
 			if err != nil {
 				appendAdvancedChatAgentTaskEvent(input.RunID, input.SessionID, user.ID, gin.H{"task_id": taskID, "status": "error", "error": err.Error(), "result": truncateToolResult(result), "mutation_count": len(mutations)})
 				results[index] = map[string]interface{}{"id": label, "status": "error", "error": err.Error(), "result": strings.TrimSpace(result), "mutations": mutations}

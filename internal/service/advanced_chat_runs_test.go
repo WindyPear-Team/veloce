@@ -348,6 +348,56 @@ func TestAgentStudioDeltaLogVirtualRead(t *testing.T) {
 	}
 }
 
+func TestAgentStudioSandboxReportMutations(t *testing.T) {
+	report := `stdout
+
+SandboxChangeReport:
+` + "```json" + `
+{
+  "sandbox_id": "run-worker",
+  "backend": "portable-copy",
+  "workspace": "C:\\repo",
+  "changed": true,
+  "files": [{"path": "package.json", "change": "modified"}],
+  "mutations": [{
+    "action": "write_file",
+    "path": "package.json",
+    "content": "{\"dependencies\":{\"express\":\"^4.18.3\",\"typeorm\":\"^0.3.20\"}}",
+    "overwrite": true,
+    "create_dirs": true,
+    "base_sha256": "abc"
+  }]
+}
+` + "```"
+	mutations := advancedChatAgentStudioSandboxMutations(report)
+	if len(mutations) != 1 {
+		t.Fatalf("expected one sandbox mutation, got %d", len(mutations))
+	}
+	if mutations[0].Action != "write_file" || mutations[0].Path != "package.json" || !strings.Contains(mutations[0].Content, "typeorm") {
+		t.Fatalf("unexpected sandbox mutation: %+v", mutations[0])
+	}
+	delta := &advancedChatAgentStudioDeltaLog{}
+	appendAdvancedChatAgentStudioDeltaMutations(delta, mutations)
+	if got := delta.applyToPath("package.json", "{}"); !strings.Contains(got, "typeorm") {
+		t.Fatalf("sandbox mutation was not appended to delta, got %q", got)
+	}
+}
+
+func TestAgentStudioCommitBindingPrefersWorkspaceFileBinding(t *testing.T) {
+	readBinding := advancedChatConnectorToolBinding{Action: "read_file", DeviceID: "read-device"}
+	writeBinding := advancedChatConnectorToolBinding{Action: "write_file", DeviceID: "write-device"}
+	binding, ok := advancedChatAgentStudioCommitBinding(map[string]advancedChatConnectorToolBinding{
+		advancedChatConnectorToolReadFile:  readBinding,
+		advancedChatConnectorToolWriteFile: writeBinding,
+	})
+	if !ok {
+		t.Fatal("expected commit binding")
+	}
+	if binding.DeviceID != "write-device" {
+		t.Fatalf("expected write binding to be preferred, got %+v", binding)
+	}
+}
+
 func TestNormalizeAdvancedChatGroupAgentsPreservesMemberTools(t *testing.T) {
 	agents := normalizeAdvancedChatGroupAgents([]advancedChatGroupAgent{{
 		ID:           "worker",

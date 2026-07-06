@@ -556,6 +556,12 @@ func executeAdvancedChatConnectorToolForAgent(ctx context.Context, userID uint, 
 			delta.append(mutation)
 		}
 		return fmt.Sprintf("Deferred %d text replacement(s) captured in MutationLog. No physical file was changed.", len(mutations)), nil
+	case "run_command":
+		result, err := callAdvancedChatConnectorToolExpanded(ctx, userID, runID, binding, arguments)
+		if err == nil {
+			appendAdvancedChatAgentStudioDeltaMutations(delta, advancedChatAgentStudioSandboxMutations(result))
+		}
+		return result, err
 	default:
 		return callAdvancedChatConnectorToolExpanded(ctx, userID, runID, binding, arguments)
 	}
@@ -817,6 +823,12 @@ func (d *advancedChatAgentStudioDeltaLog) append(mutation advancedChatAgentStudi
 	d.mutations = append(d.mutations, mutation)
 }
 
+func appendAdvancedChatAgentStudioDeltaMutations(delta *advancedChatAgentStudioDeltaLog, mutations []advancedChatAgentStudioMutation) {
+	for _, mutation := range mutations {
+		delta.append(mutation)
+	}
+}
+
 func (d *advancedChatAgentStudioDeltaLog) snapshot() []advancedChatAgentStudioMutation {
 	if d == nil {
 		return nil
@@ -826,6 +838,36 @@ func (d *advancedChatAgentStudioDeltaLog) snapshot() []advancedChatAgentStudioMu
 	result := make([]advancedChatAgentStudioMutation, len(d.mutations))
 	copy(result, d.mutations)
 	return result
+}
+
+func advancedChatAgentStudioSandboxMutations(content string) []advancedChatAgentStudioMutation {
+	const marker = "SandboxChangeReport:"
+	mutations := []advancedChatAgentStudioMutation{}
+	remaining := content
+	for {
+		index := strings.Index(remaining, marker)
+		if index < 0 {
+			break
+		}
+		after := remaining[index+len(marker):]
+		jsonStart := strings.Index(after, "{")
+		if jsonStart < 0 {
+			break
+		}
+		after = after[jsonStart:]
+		jsonEnd := strings.Index(after, "\n```")
+		if jsonEnd < 0 {
+			jsonEnd = len(after)
+		}
+		var report struct {
+			Mutations []advancedChatAgentStudioMutation `json:"mutations"`
+		}
+		if err := json.Unmarshal([]byte(strings.TrimSpace(after[:jsonEnd])), &report); err == nil {
+			mutations = append(mutations, normalizeAdvancedChatAgentStudioMutations(report.Mutations)...)
+		}
+		remaining = after[jsonEnd:]
+	}
+	return mutations
 }
 
 func (d *advancedChatAgentStudioDeltaLog) applyToPath(path string, base string) string {
