@@ -1,12 +1,12 @@
-WindyPear Token Market
+Veloce
 
 社区版
 
 [English](README.md) | 简体中文
 
-WindyPear Token Market（简称 Token Market）是一款面向 AI 平台与开发者生态打造的 AI Token 市场与 API 网关。
+Veloce 是一款面向 AI 平台与开发者生态打造的 AI API 网关与服务市场。
 
-本仓库包含 WindyPear Token Market Community Edition（社区版），提供完整的 AI API 管理基础能力，包括身份认证、上游渠道管理、API 网关、用户余额、计费、调用日志等功能。
+本仓库包含 Veloce Community Edition（社区版），提供完整的 AI API 管理基础能力，包括身份认证、上游渠道管理、API 网关、用户余额、计费、调用日志等功能。
 
 功能特性
 
@@ -32,7 +32,7 @@ web/          前端
 
 社区版
 
-本仓库提供 WindyPear Token Market Community Edition（社区版）。
+本仓库提供 Veloce Community Edition（社区版）。
 
 如果需要更多高级功能、商业支持或企业级能力，可以购买 Professional Edition（专业版）：
 
@@ -69,7 +69,7 @@ go run .
 
 APP_ENV=development
 PORT=8080
-DB_PATH=token-market.db
+DB_PATH=veloce.db
 JWT_SECRET=your-secure-jwt-secret-here
 OIDC_ISSUER=https://your-oidc-provider.com
 OIDC_CLIENT_ID=your-client-id

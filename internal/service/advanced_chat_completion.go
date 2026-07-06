@@ -647,7 +647,7 @@ func buildAdvancedChatCompletionSystemPrompt(agent *AdvancedChatAgent, skills []
 		}
 	}
 	if len(workspaceSkills) > 0 {
-		sections = append(sections, strings.TrimSpace(`Connector skills were loaded from the selected workspace .agents directory and the user-level token-market/.agents directory when available.
+		sections = append(sections, strings.TrimSpace(`Connector skills were loaded from the selected workspace .agents directory and the user-level veloce/.agents directory when available.
 Follow these connector skills when they are relevant to the user's task.
 If a connector skill defines scripts, commands, checks, or other executable steps, run them through the available workspace connector command tool rather than claiming they were run.`))
 	}
