@@ -16,8 +16,9 @@ import (
 
 type AdvancedChatAgent struct {
 	ID           uint       `gorm:"primaryKey" json:"id"`
-	UserID       uint       `gorm:"uniqueIndex:idx_advanced_chat_agent_user_name;not null" json:"user_id"`
+	UserID       uint       `gorm:"uniqueIndex:idx_advanced_chat_agent_user_name;uniqueIndex:idx_advanced_chat_agent_user_stable_id;not null" json:"user_id"`
 	User         model.User `gorm:"foreignKey:UserID" json:"-"`
+	StableID     *string    `gorm:"uniqueIndex:idx_advanced_chat_agent_user_stable_id;size:80" json:"-"`
 	Name         string     `gorm:"uniqueIndex:idx_advanced_chat_agent_user_name;size:100;not null" json:"name"`
 	Prompt       string     `gorm:"type:text;not null" json:"prompt"`
 	DefaultModel string     `gorm:"size:100;not null" json:"default_model"`
@@ -27,6 +28,22 @@ type AdvancedChatAgent struct {
 	MCPServers   []string   `gorm:"-" json:"mcp_server_ids"`
 	CreatedAt    time.Time  `json:"created_at"`
 	UpdatedAt    time.Time  `json:"updated_at"`
+}
+
+const (
+	advancedChatDefaultAgentID   = "default"
+	advancedChatDefaultAgentName = "Default"
+)
+
+type advancedChatAgentResponse struct {
+	ID           string    `json:"id"`
+	Name         string    `json:"name"`
+	Prompt       string    `json:"prompt"`
+	DefaultModel string    `json:"default_model"`
+	SkillIDs     []string  `json:"skill_ids"`
+	MCPServerIDs []string  `json:"mcp_server_ids"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 type AdvancedChatAgentStudio struct {
@@ -412,15 +429,20 @@ func (api *advancedChatAPI) listAgents(c *gin.Context) {
 		return
 	}
 
+	if _, err := ensureAdvancedChatDefaultAgent(user.ID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to ensure default agent"})
+		return
+	}
 	var agents []AdvancedChatAgent
 	if err := model.DB.Where("user_id = ?", user.ID).Order("created_at ASC").Find(&agents).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list agents"})
 		return
 	}
+	responses := make([]advancedChatAgentResponse, 0, len(agents))
 	for i := range agents {
-		hydrateAdvancedChatAgentLists(&agents[i])
+		responses = append(responses, advancedChatAgentResponseFromModel(&agents[i]))
 	}
-	c.JSON(http.StatusOK, agents)
+	c.JSON(http.StatusOK, responses)
 }
 
 func (api *advancedChatAPI) createAgent(c *gin.Context) {
@@ -448,7 +470,7 @@ func (api *advancedChatAPI) createAgent(c *gin.Context) {
 		return
 	}
 	hydrateAdvancedChatAgentLists(&agent)
-	c.JSON(http.StatusOK, agent)
+	c.JSON(http.StatusOK, advancedChatAgentResponseFromModel(&agent))
 }
 
 func (api *advancedChatAPI) updateAgent(c *gin.Context) {
@@ -458,8 +480,8 @@ func (api *advancedChatAPI) updateAgent(c *gin.Context) {
 		return
 	}
 
-	var agent AdvancedChatAgent
-	if err := model.DB.Where("id = ? AND user_id = ?", c.Param("id"), user.ID).First(&agent).Error; err != nil {
+	agent, err := loadAdvancedChatAgent(user.ID, c.Param("id"))
+	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Agent not found"})
 			return
@@ -473,11 +495,14 @@ func (api *advancedChatAPI) updateAgent(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if isAdvancedChatDefaultAgent(agent) {
+		input.Name = agent.Name
+	}
 	next, ok := advancedChatAgentFromInput(c, user.ID, input)
 	if !ok {
 		return
 	}
-	if err := model.DB.Model(&agent).Updates(map[string]interface{}{
+	if err := model.DB.Model(agent).Updates(map[string]interface{}{
 		"name":           next.Name,
 		"prompt":         next.Prompt,
 		"default_model":  next.DefaultModel,
@@ -491,9 +516,9 @@ func (api *advancedChatAPI) updateAgent(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update agent"})
 		return
 	}
-	model.DB.First(&agent, agent.ID)
-	hydrateAdvancedChatAgentLists(&agent)
-	c.JSON(http.StatusOK, agent)
+	model.DB.First(agent, agent.ID)
+	hydrateAdvancedChatAgentLists(agent)
+	c.JSON(http.StatusOK, advancedChatAgentResponseFromModel(agent))
 }
 
 func (api *advancedChatAPI) deleteAgent(c *gin.Context) {
@@ -502,7 +527,20 @@ func (api *advancedChatAPI) deleteAgent(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
 		return
 	}
-	if err := model.DB.Where("id = ? AND user_id = ?", c.Param("id"), user.ID).Delete(&AdvancedChatAgent{}).Error; err != nil {
+	agent, err := loadAdvancedChatAgent(user.ID, c.Param("id"))
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Agent not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load agent"})
+		return
+	}
+	if isAdvancedChatDefaultAgent(agent) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Default agent cannot be deleted"})
+		return
+	}
+	if err := model.DB.Where("id = ? AND user_id = ?", agent.ID, user.ID).Delete(&AdvancedChatAgent{}).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete agent"})
 		return
 	}
@@ -754,6 +792,71 @@ func hydrateAdvancedChatAgentLists(agent *AdvancedChatAgent) {
 	}
 	agent.Skills = decodeStringList(agent.SkillIDs)
 	agent.MCPServers = decodeStringList(agent.MCPServerIDs)
+}
+
+func advancedChatAgentResponseFromModel(agent *AdvancedChatAgent) advancedChatAgentResponse {
+	if agent == nil {
+		return advancedChatAgentResponse{}
+	}
+	hydrateAdvancedChatAgentLists(agent)
+	id := strconv.FormatUint(uint64(agent.ID), 10)
+	if agent.StableID != nil && strings.TrimSpace(*agent.StableID) != "" {
+		id = strings.TrimSpace(*agent.StableID)
+	}
+	return advancedChatAgentResponse{
+		ID:           id,
+		Name:         agent.Name,
+		Prompt:       agent.Prompt,
+		DefaultModel: agent.DefaultModel,
+		SkillIDs:     agent.Skills,
+		MCPServerIDs: agent.MCPServers,
+		CreatedAt:    agent.CreatedAt,
+		UpdatedAt:    agent.UpdatedAt,
+	}
+}
+
+func isAdvancedChatDefaultAgent(agent *AdvancedChatAgent) bool {
+	return agent != nil && agent.StableID != nil && strings.TrimSpace(*agent.StableID) == advancedChatDefaultAgentID
+}
+
+func ensureAdvancedChatDefaultAgent(userID uint) (*AdvancedChatAgent, error) {
+	stableID := advancedChatDefaultAgentID
+	var agent AdvancedChatAgent
+	err := model.DB.Where("user_id = ? AND stable_id = ?", userID, stableID).First(&agent).Error
+	if err == nil {
+		hydrateAdvancedChatAgentLists(&agent)
+		return &agent, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+
+	if err := model.DB.Where("user_id = ? AND name = ?", userID, advancedChatDefaultAgentName).First(&agent).Error; err == nil {
+		if err := model.DB.Model(&agent).Update("stable_id", stableID).Error; err != nil {
+			return nil, err
+		}
+		agent.StableID = &stableID
+		hydrateAdvancedChatAgentLists(&agent)
+		return &agent, nil
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+
+	skillIDsJSON, _ := json.Marshal([]string{})
+	agent = AdvancedChatAgent{
+		UserID:       userID,
+		StableID:     &stableID,
+		Name:         advancedChatDefaultAgentName,
+		Prompt:       "",
+		DefaultModel: "",
+		SkillIDs:     string(skillIDsJSON),
+		MCPServerIDs: string(skillIDsJSON),
+	}
+	if err := model.DB.Create(&agent).Error; err != nil {
+		return nil, err
+	}
+	hydrateAdvancedChatAgentLists(&agent)
+	return &agent, nil
 }
 
 func isAdvancedChatUniqueConstraintError(err error) bool {

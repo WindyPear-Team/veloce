@@ -959,6 +959,9 @@ func prepareAdvancedChatAssistantRun(ctx context.Context, userID uint, input adv
 	if mode != advancedChatModeAssistant && mode != advancedChatModeAgentGroup {
 		mode = advancedChatModeAssistant
 	}
+	if mode == advancedChatModeAgentGroup {
+		modelName = ""
+	}
 
 	var agent *AdvancedChatAgent
 	var groupAgent *advancedChatGroupAgent
@@ -975,6 +978,9 @@ func prepareAdvancedChatAssistantRun(ctx context.Context, userID uint, input adv
 			return preparedAdvancedChatAssistantRun{}, http.StatusBadRequest, "Studio is required", errors.New("studio required")
 		}
 	} else {
+		if strings.TrimSpace(input.AgentID) == "" {
+			input.AgentID = advancedChatDefaultAgentID
+		}
 		agent, err = loadAdvancedChatAgent(userID, input.AgentID)
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -1076,11 +1082,17 @@ func prepareAdvancedChatAssistantRun(ctx context.Context, userID uint, input adv
 		}
 	}
 	if strings.TrimSpace(modelName) == "" {
+		if mode == advancedChatModeAgentGroup {
+			return preparedAdvancedChatAssistantRun{}, http.StatusBadRequest, "Model is required for Studio member", errors.New("studio member model required")
+		}
 		return preparedAdvancedChatAssistantRun{}, http.StatusBadRequest, "Model is required", errors.New("model required")
 	}
 	input.ConnectorDeviceID = strings.TrimSpace(input.ConnectorDeviceID)
 	input.ConnectorWorkspacePath = connectorWorkspace
 	input.ConnectorCommandPrefixes = normalizeConnectorCommandPrefixes(input.ConnectorCommandPrefixes)
+	if mode == advancedChatModeAgentGroup {
+		input.AgentID = ""
+	}
 	input.Mode = mode
 	return preparedAdvancedChatAssistantRun{
 		input:                    input,
@@ -1190,11 +1202,23 @@ func saveAdvancedChatSessionSnapshot(userID uint, sessionID string, input advanc
 	if len([]rune(modelName)) > 100 {
 		return advancedChatSessionResponse{}, http.StatusBadRequest, "Model name is too long", errors.New("model name too long")
 	}
+	if runMode == advancedChatModeAgentGroup {
+		modelName = ""
+	}
 	maxTokens := normalizeAdvancedChatMaxTokens(input.MaxTokens)
 	temperature := normalizeAdvancedChatTemperature(input.Temperature)
 	reasoningEffort := normalizeAdvancedChatReasoningEffort(input.ReasoningEffort)
 	agentID := strings.TrimSpace(input.AgentID)
 	agentGroupID := strings.TrimSpace(input.AgentGroupID)
+	if runMode == advancedChatModeChat || runMode == advancedChatModeAssistant {
+		if agentID == "" {
+			agentID = advancedChatDefaultAgentID
+		}
+		agentGroupID = ""
+	}
+	if runMode == advancedChatModeAgentGroup {
+		agentID = ""
+	}
 	var agent *AdvancedChatAgent
 	if agentID != "" {
 		loadedAgent, err := loadAdvancedChatAgent(userID, agentID)
@@ -1237,6 +1261,14 @@ func saveAdvancedChatSessionSnapshot(userID uint, sessionID string, input advanc
 	commandPrefixesJSON, _ := json.Marshal(commandPrefixes)
 	connectorDeviceID := strings.TrimSpace(input.ConnectorDeviceID)
 	connectorWorkspacePath := strings.TrimSpace(input.ConnectorWorkspacePath)
+	connectorAutoApprove := input.ConnectorAutoApprove
+	if runMode == advancedChatModeChat {
+		connectorDeviceID = ""
+		connectorWorkspacePath = ""
+		connectorAutoApprove = false
+		commandPrefixes = []string{}
+		commandPrefixesJSON, _ = json.Marshal(commandPrefixes)
+	}
 	if runMode == advancedChatModeAgentGroup && agentGroupID == "" {
 		return advancedChatSessionResponse{}, http.StatusBadRequest, "Studio is required", errors.New("studio required")
 	}
@@ -1293,7 +1325,7 @@ func saveAdvancedChatSessionSnapshot(userID uint, sessionID string, input advanc
 			MCPServerIDs:             string(mcpServerIDsJSON),
 			ConnectorDeviceID:        connectorDeviceID,
 			ConnectorWorkspacePath:   connectorWorkspacePath,
-			ConnectorAutoApprove:     input.ConnectorAutoApprove,
+			ConnectorAutoApprove:     connectorAutoApprove,
 			ConnectorCommandPrefixes: string(commandPrefixesJSON),
 			ModelName:                modelName,
 			UserChannelID:            input.UserChannelID,

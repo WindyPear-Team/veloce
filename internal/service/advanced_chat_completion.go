@@ -156,6 +156,13 @@ func (api *advancedChatAPI) completeChat(c *gin.Context) {
 		return
 	}
 	maxToolRounds := advancedChatCompletionMaxToolRounds(mode)
+	if strings.TrimSpace(input.AgentID) == "" {
+		input.AgentID = advancedChatDefaultAgentID
+	}
+	input.ConnectorDeviceID = ""
+	input.ConnectorWorkspacePath = ""
+	input.ConnectorAutoApprove = false
+	input.ConnectorCommandPrefixes = nil
 
 	agent, err := loadAdvancedChatAgent(user.ID, input.AgentID)
 	if err != nil {
@@ -422,6 +429,9 @@ func loadAdvancedChatAgent(userID uint, rawID string) (*AdvancedChatAgent, error
 	id := strings.TrimSpace(rawID)
 	if id == "" {
 		return nil, nil
+	}
+	if id == advancedChatDefaultAgentID {
+		return ensureAdvancedChatDefaultAgent(userID)
 	}
 	var agent AdvancedChatAgent
 	if err := model.DB.Where("id = ? AND user_id = ?", id, userID).First(&agent).Error; err != nil {
