@@ -2570,15 +2570,26 @@ func mergeAdvancedChatRunToolCall(runID string, userID uint, assistantMessageID 
 func mergeAdvancedChatToolCallDetails(current []advancedChatCompletionToolCall, next advancedChatCompletionToolCall) []advancedChatCompletionToolCall {
 	for index, item := range current {
 		if item.ID != "" && item.ID == next.ID {
-			current[index] = next
+			current[index] = mergeAdvancedChatToolCallDetail(item, next)
 			return current
 		}
 		if item.ID == "" && next.ID == "" && item.Round == next.Round && item.Name == next.Name && item.Server == next.Server && item.Tool == next.Tool {
-			current[index] = next
+			current[index] = mergeAdvancedChatToolCallDetail(item, next)
 			return current
 		}
 	}
 	return append(current, next)
+}
+
+func mergeAdvancedChatToolCallDetail(current advancedChatCompletionToolCall, next advancedChatCompletionToolCall) advancedChatCompletionToolCall {
+	merged := next
+	if strings.TrimSpace(merged.Result) == "" {
+		merged.Result = current.Result
+	}
+	if len(merged.Arguments) == 0 {
+		merged.Arguments = current.Arguments
+	}
+	return merged
 }
 
 func mergeAdvancedChatToolCallDetailList(current []advancedChatCompletionToolCall, next []advancedChatCompletionToolCall) []advancedChatCompletionToolCall {

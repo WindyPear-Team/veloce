@@ -410,6 +410,16 @@ func approveAdvancedChatConnectorTaskWithChecker(ctx context.Context, user *mode
 	}
 	status, err := decideAdvancedChatConnectorTask(user.ID, taskID, approved, "checker", opinion)
 	if err != nil {
+		if status, ok := acceptedAdvancedChatConnectorApprovalConflict(err, approved); ok {
+			decision := "yes"
+			appendAdvancedChatAgentTaskEvent(runID, sessionID, user.ID, gin.H{
+				"task_id":  eventPayload["task_id"],
+				"status":   "completed",
+				"decision": decision,
+				"opinion":  truncateToolResult(opinion),
+			})
+			return fmt.Sprintf("Checker decision: %s. Connector task was already %s. %s", decision, status, strings.TrimSpace(opinion)), nil
+		}
 		appendAdvancedChatAgentTaskEvent(runID, sessionID, user.ID, gin.H{"task_id": eventPayload["task_id"], "status": "error", "error": err.Error()})
 		return "", err
 	}
@@ -424,6 +434,23 @@ func approveAdvancedChatConnectorTaskWithChecker(ctx context.Context, user *mode
 		"opinion":  truncateToolResult(opinion),
 	})
 	return fmt.Sprintf("Checker decision: %s. Connector task status: %s. %s", decision, status, strings.TrimSpace(opinion)), nil
+}
+
+func acceptedAdvancedChatConnectorApprovalConflict(err error, approved bool) (string, bool) {
+	if !approved {
+		return "", false
+	}
+	var taskErr advancedChatConnectorTaskDecisionConflict
+	if !errors.As(err, &taskErr) {
+		return "", false
+	}
+	status := strings.TrimSpace(taskErr.Status)
+	switch status {
+	case advancedChatConnectorTaskStatusQueued, advancedChatConnectorTaskStatusRunning, advancedChatConnectorTaskStatusCompleted:
+		return status, true
+	default:
+		return "", false
+	}
 }
 
 func advancedChatAgentStudioCheckerDecision(result *ChatExecutorResult) (bool, string, error) {

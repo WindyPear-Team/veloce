@@ -171,6 +171,19 @@ func TestCommitDeltaRequiresApprovalUnlessAutoApproved(t *testing.T) {
 	}
 }
 
+func TestAcceptedConnectorApprovalConflict(t *testing.T) {
+	status, ok := acceptedAdvancedChatConnectorApprovalConflict(advancedChatConnectorTaskDecisionConflict{Status: advancedChatConnectorTaskStatusCompleted}, true)
+	if !ok || status != advancedChatConnectorTaskStatusCompleted {
+		t.Fatalf("completed approved conflict should be accepted, got status=%q ok=%v", status, ok)
+	}
+	if _, ok := acceptedAdvancedChatConnectorApprovalConflict(advancedChatConnectorTaskDecisionConflict{Status: advancedChatConnectorTaskStatusFailed}, true); ok {
+		t.Fatal("failed approval conflict should not be accepted")
+	}
+	if _, ok := acceptedAdvancedChatConnectorApprovalConflict(advancedChatConnectorTaskDecisionConflict{Status: advancedChatConnectorTaskStatusQueued}, false); ok {
+		t.Fatal("rejected approval conflict should not be accepted")
+	}
+}
+
 func TestAgentStudioReplaceMutationsUseBaseSHA(t *testing.T) {
 	mutations := advancedChatAgentStudioMutationsFromReplaceArguments(map[string]interface{}{
 		"path":     "main.go",
@@ -315,6 +328,34 @@ func TestMergeAdvancedChatToolCallDetailListPreservesStreamedWorkerCalls(t *test
 	}
 	if merged[1].ID != "worker-read-1" || merged[1].Status != "ok" {
 		t.Fatalf("expected worker tool call to be preserved, got %+v", merged[1])
+	}
+}
+
+func TestMergeAdvancedChatToolCallDetailsPreservesExistingResult(t *testing.T) {
+	current := []advancedChatCompletionToolCall{{
+		ID:        "read-1",
+		Name:      "workspace_read_file",
+		Server:    "local",
+		Tool:      "read_file",
+		Status:    "ok",
+		Arguments: map[string]interface{}{"path": "package.json"},
+		Result:    "file content",
+	}}
+	merged := mergeAdvancedChatToolCallDetails(current, advancedChatCompletionToolCall{
+		ID:     "read-1",
+		Name:   "workspace_read_file",
+		Server: "local",
+		Tool:   "read_file",
+		Status: "ok",
+	})
+	if len(merged) != 1 {
+		t.Fatalf("expected one merged tool call, got %d", len(merged))
+	}
+	if merged[0].Result != "file content" {
+		t.Fatalf("empty result should not overwrite existing result, got %q", merged[0].Result)
+	}
+	if stringFromMap(merged[0].Arguments, "path") != "package.json" {
+		t.Fatalf("empty arguments should not overwrite existing arguments, got %+v", merged[0].Arguments)
 	}
 }
 
