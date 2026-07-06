@@ -447,7 +447,6 @@ func TestNormalizeAdvancedChatGroupAgentsPreservesMemberTools(t *testing.T) {
 		ChatAgentID:  "1",
 		SkillIDs:     []string{"skill-a", "skill-a", "skill-b"},
 		MCPServerIDs: []string{"mcp-a", "", "mcp-b", "mcp-a"},
-		Stream:       true,
 	}})
 	if len(agents) != 1 {
 		t.Fatalf("expected one normalized agent, got %d", len(agents))
@@ -458,13 +457,10 @@ func TestNormalizeAdvancedChatGroupAgentsPreservesMemberTools(t *testing.T) {
 	if got := strings.Join(agents[0].MCPServerIDs, ","); got != "mcp-a,mcp-b" {
 		t.Fatalf("mcp server ids were not preserved and deduplicated, got %q", got)
 	}
-	if !agents[0].Stream {
-		t.Fatal("stream setting was not preserved")
+	if !advancedChatPreparedAgentStream(&AdvancedChatAgent{Stream: true}) {
+		t.Fatal("prepared agent stream helper should return true for streaming agents")
 	}
-	if !advancedChatPreparedGroupAgentStream(&agents[0]) {
-		t.Fatal("prepared group agent stream helper should return true for streaming agents")
-	}
-	if advancedChatPreparedGroupAgentStream(nil) {
+	if advancedChatPreparedAgentStream(nil) {
 		t.Fatal("prepared group agent stream helper should return false without an agent")
 	}
 }

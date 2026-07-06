@@ -15,19 +15,21 @@ import (
 )
 
 type AdvancedChatAgent struct {
-	ID           uint       `gorm:"primaryKey" json:"id"`
-	UserID       uint       `gorm:"uniqueIndex:idx_advanced_chat_agent_user_name;uniqueIndex:idx_advanced_chat_agent_user_stable_id;not null" json:"user_id"`
-	User         model.User `gorm:"foreignKey:UserID" json:"-"`
-	StableID     *string    `gorm:"uniqueIndex:idx_advanced_chat_agent_user_stable_id;size:80" json:"-"`
-	Name         string     `gorm:"uniqueIndex:idx_advanced_chat_agent_user_name;size:100;not null" json:"name"`
-	Prompt       string     `gorm:"type:text;not null" json:"prompt"`
-	DefaultModel string     `gorm:"size:100;not null" json:"default_model"`
-	SkillIDs     string     `gorm:"type:text;not null;default:'[]'" json:"-"`
-	Skills       []string   `gorm:"-" json:"skill_ids"`
-	MCPServerIDs string     `gorm:"type:text;not null;default:'[]'" json:"-"`
-	MCPServers   []string   `gorm:"-" json:"mcp_server_ids"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
+	ID            uint       `gorm:"primaryKey" json:"id"`
+	UserID        uint       `gorm:"uniqueIndex:idx_advanced_chat_agent_user_name;uniqueIndex:idx_advanced_chat_agent_user_stable_id;not null" json:"user_id"`
+	User          model.User `gorm:"foreignKey:UserID" json:"-"`
+	StableID      *string    `gorm:"uniqueIndex:idx_advanced_chat_agent_user_stable_id;size:80" json:"-"`
+	Name          string     `gorm:"uniqueIndex:idx_advanced_chat_agent_user_name;size:100;not null" json:"name"`
+	Prompt        string     `gorm:"type:text;not null" json:"prompt"`
+	DefaultModel  string     `gorm:"size:100;not null" json:"default_model"`
+	UserChannelID uint       `gorm:"index" json:"user_channel_id"`
+	Stream        bool       `gorm:"not null;default:false" json:"stream"`
+	SkillIDs      string     `gorm:"type:text;not null;default:'[]'" json:"-"`
+	Skills        []string   `gorm:"-" json:"skill_ids"`
+	MCPServerIDs  string     `gorm:"type:text;not null;default:'[]'" json:"-"`
+	MCPServers    []string   `gorm:"-" json:"mcp_server_ids"`
+	CreatedAt     time.Time  `json:"created_at"`
+	UpdatedAt     time.Time  `json:"updated_at"`
 }
 
 const (
@@ -36,14 +38,16 @@ const (
 )
 
 type advancedChatAgentResponse struct {
-	ID           string    `json:"id"`
-	Name         string    `json:"name"`
-	Prompt       string    `json:"prompt"`
-	DefaultModel string    `json:"default_model"`
-	SkillIDs     []string  `json:"skill_ids"`
-	MCPServerIDs []string  `json:"mcp_server_ids"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID            string    `json:"id"`
+	Name          string    `json:"name"`
+	Prompt        string    `json:"prompt"`
+	DefaultModel  string    `json:"default_model"`
+	UserChannelID uint      `json:"user_channel_id,omitempty"`
+	Stream        bool      `json:"stream"`
+	SkillIDs      []string  `json:"skill_ids"`
+	MCPServerIDs  []string  `json:"mcp_server_ids"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 type AdvancedChatAgentStudio struct {
@@ -59,12 +63,14 @@ type AdvancedChatAgentStudio struct {
 }
 
 type AdvancedChatUserSettings struct {
-	ID               uint       `gorm:"primaryKey" json:"id"`
-	UserID           uint       `gorm:"uniqueIndex;not null" json:"user_id"`
-	User             model.User `gorm:"foreignKey:UserID" json:"-"`
-	CustomMCPServers string     `gorm:"type:text;not null" json:"custom_mcp_servers"`
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
+	ID                 uint       `gorm:"primaryKey" json:"id"`
+	UserID             uint       `gorm:"uniqueIndex;not null" json:"user_id"`
+	User               model.User `gorm:"foreignKey:UserID" json:"-"`
+	CustomMCPServers   string     `gorm:"type:text;not null" json:"custom_mcp_servers"`
+	TitleModelName     string     `gorm:"size:100;not null;default:''" json:"title_model_name"`
+	TitleUserChannelID uint       `gorm:"index" json:"title_user_channel_id"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
 }
 
 type AdvancedChatSkill struct {
@@ -92,11 +98,13 @@ type AdvancedChatMCPServer struct {
 type advancedChatAPI struct{}
 
 type advancedChatAgentInput struct {
-	Name         string   `json:"name"`
-	Prompt       string   `json:"prompt"`
-	DefaultModel string   `json:"default_model"`
-	SkillIDs     []string `json:"skill_ids"`
-	MCPServerIDs []string `json:"mcp_server_ids"`
+	Name          string   `json:"name"`
+	Prompt        string   `json:"prompt"`
+	DefaultModel  string   `json:"default_model"`
+	UserChannelID uint     `json:"user_channel_id"`
+	Stream        bool     `json:"stream"`
+	SkillIDs      []string `json:"skill_ids"`
+	MCPServerIDs  []string `json:"mcp_server_ids"`
 }
 
 type advancedChatAdminSettingsResponse struct {
@@ -143,6 +151,8 @@ type advancedChatUserSettingsResponse struct {
 	ScheduledTasksEnabled                bool                    `json:"scheduled_tasks_enabled"`
 	MessageDeliveryEnabled               bool                    `json:"message_delivery_enabled"`
 	DeliverySystemSMTPEnabled            bool                    `json:"delivery_system_smtp_enabled"`
+	TitleModelName                       string                  `json:"title_model_name"`
+	TitleUserChannelID                   uint                    `json:"title_user_channel_id,omitempty"`
 }
 
 type advancedChatAdminSettingsInput struct {
@@ -169,6 +179,11 @@ type advancedChatAdminSettingsInput struct {
 
 type advancedChatUserMCPInput struct {
 	CustomMCPServers []AdvancedChatMCPServer `json:"custom_mcp_servers"`
+}
+
+type advancedChatUserSettingsInput struct {
+	TitleModelName     string `json:"title_model_name"`
+	TitleUserChannelID uint   `json:"title_user_channel_id"`
 }
 
 type advancedChatSkillInput struct {
@@ -236,6 +251,7 @@ func registerAdvancedChatAdminRoutes(group *gin.RouterGroup) {
 func registerAdvancedChatUserRoutes(group *gin.RouterGroup) {
 	api := &advancedChatAPI{}
 	group.GET("/advanced-chat/settings", api.getUserSettings)
+	group.PUT("/advanced-chat/settings", api.updateUserSettings)
 	group.POST("/advanced-chat/completions", api.completeChat)
 	group.GET("/advanced-chat/sessions", api.listSessions)
 	group.POST("/advanced-chat/sessions", api.saveSession)
@@ -390,6 +406,33 @@ func (api *advancedChatAPI) getUserSettings(c *gin.Context) {
 	c.JSON(http.StatusOK, currentAdvancedChatUserSettings(user.ID))
 }
 
+func (api *advancedChatAPI) updateUserSettings(c *gin.Context) {
+	user, ok := currentAdvancedChatUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+	var input advancedChatUserSettingsInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	titleModel := strings.TrimSpace(input.TitleModelName)
+	if len([]rune(titleModel)) > 100 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Title model is too long"})
+		return
+	}
+	settings := ensureAdvancedChatUserSettings(user.ID)
+	if err := model.DB.Model(&settings).Updates(map[string]interface{}{
+		"title_model_name":      titleModel,
+		"title_user_channel_id": input.TitleUserChannelID,
+	}).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save settings"})
+		return
+	}
+	c.JSON(http.StatusOK, currentAdvancedChatUserSettings(user.ID))
+}
+
 func (api *advancedChatAPI) updateUserMCPServers(c *gin.Context) {
 	user, ok := currentAdvancedChatUser(c)
 	if !ok {
@@ -503,11 +546,13 @@ func (api *advancedChatAPI) updateAgent(c *gin.Context) {
 		return
 	}
 	if err := model.DB.Model(agent).Updates(map[string]interface{}{
-		"name":           next.Name,
-		"prompt":         next.Prompt,
-		"default_model":  next.DefaultModel,
-		"skill_ids":      next.SkillIDs,
-		"mcp_server_ids": next.MCPServerIDs,
+		"name":            next.Name,
+		"prompt":          next.Prompt,
+		"default_model":   next.DefaultModel,
+		"user_channel_id": next.UserChannelID,
+		"stream":          next.Stream,
+		"skill_ids":       next.SkillIDs,
+		"mcp_server_ids":  next.MCPServerIDs,
 	}).Error; err != nil {
 		if isAdvancedChatUniqueConstraintError(err) {
 			c.JSON(http.StatusConflict, gin.H{"error": "Agent name already exists"})
@@ -753,6 +798,7 @@ func advancedChatAgentFromInput(c *gin.Context, userID uint, input advancedChatA
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Default model is too long"})
 		return AdvancedChatAgent{}, false
 	}
+	userChannelID := input.UserChannelID
 	prompt := strings.TrimSpace(input.Prompt)
 	if len([]rune(prompt)) > 20000 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Agent prompt is too long"})
@@ -777,12 +823,14 @@ func advancedChatAgentFromInput(c *gin.Context, userID uint, input advancedChatA
 	skillIDsJSON, _ := json.Marshal(skillIDs)
 	mcpServerIDsJSON, _ := json.Marshal(mcpServerIDs)
 	return AdvancedChatAgent{
-		UserID:       userID,
-		Name:         name,
-		Prompt:       prompt,
-		DefaultModel: defaultModel,
-		SkillIDs:     string(skillIDsJSON),
-		MCPServerIDs: string(mcpServerIDsJSON),
+		UserID:        userID,
+		Name:          name,
+		Prompt:        prompt,
+		DefaultModel:  defaultModel,
+		UserChannelID: userChannelID,
+		Stream:        input.Stream,
+		SkillIDs:      string(skillIDsJSON),
+		MCPServerIDs:  string(mcpServerIDsJSON),
 	}, true
 }
 
@@ -804,14 +852,16 @@ func advancedChatAgentResponseFromModel(agent *AdvancedChatAgent) advancedChatAg
 		id = strings.TrimSpace(*agent.StableID)
 	}
 	return advancedChatAgentResponse{
-		ID:           id,
-		Name:         agent.Name,
-		Prompt:       agent.Prompt,
-		DefaultModel: agent.DefaultModel,
-		SkillIDs:     agent.Skills,
-		MCPServerIDs: agent.MCPServers,
-		CreatedAt:    agent.CreatedAt,
-		UpdatedAt:    agent.UpdatedAt,
+		ID:            id,
+		Name:          agent.Name,
+		Prompt:        agent.Prompt,
+		DefaultModel:  agent.DefaultModel,
+		UserChannelID: agent.UserChannelID,
+		Stream:        agent.Stream,
+		SkillIDs:      agent.Skills,
+		MCPServerIDs:  agent.MCPServers,
+		CreatedAt:     agent.CreatedAt,
+		UpdatedAt:     agent.UpdatedAt,
 	}
 }
 
@@ -844,13 +894,15 @@ func ensureAdvancedChatDefaultAgent(userID uint) (*AdvancedChatAgent, error) {
 
 	skillIDsJSON, _ := json.Marshal([]string{})
 	agent = AdvancedChatAgent{
-		UserID:       userID,
-		StableID:     &stableID,
-		Name:         advancedChatDefaultAgentName,
-		Prompt:       "",
-		DefaultModel: "",
-		SkillIDs:     string(skillIDsJSON),
-		MCPServerIDs: string(skillIDsJSON),
+		UserID:        userID,
+		StableID:      &stableID,
+		Name:          advancedChatDefaultAgentName,
+		Prompt:        "",
+		DefaultModel:  "",
+		UserChannelID: 0,
+		Stream:        false,
+		SkillIDs:      string(skillIDsJSON),
+		MCPServerIDs:  string(skillIDsJSON),
 	}
 	if err := model.DB.Create(&agent).Error; err != nil {
 		return nil, err
@@ -905,6 +957,7 @@ func currentAdvancedChatUserSettings(userID uint) advancedChatUserSettingsRespon
 	builtinServers := advancedChatBuiltinMCPServers(false)
 	customServers := advancedChatCustomMCPServers(userID)
 	customServersWithHeaders := advancedChatCustomMCPServersWithHeaders(userID)
+	userSettings := ensureAdvancedChatUserSettings(userID)
 	settings := advancedChatUserSettingsResponse{
 		AttachmentMaxMB:                      advancedChatAttachmentMaxMB(),
 		AttachmentAllowedTypes:               advancedChatAttachmentAllowedTypes(),
@@ -927,6 +980,8 @@ func currentAdvancedChatUserSettings(userID uint) advancedChatUserSettingsRespon
 		ScheduledTasksEnabled:                advancedChatScheduledTasksEnabled(),
 		MessageDeliveryEnabled:               advancedChatMessageDeliveryEnabled(),
 		DeliverySystemSMTPEnabled:            advancedChatDeliverySystemSMTPEnabled(),
+		TitleModelName:                       strings.TrimSpace(userSettings.TitleModelName),
+		TitleUserChannelID:                   userSettings.TitleUserChannelID,
 	}
 	if !advancedChatPremiumFeaturesAvailable() {
 		settings.FileStorageEnabled = false
@@ -936,6 +991,16 @@ func currentAdvancedChatUserSettings(userID uint) advancedChatUserSettingsRespon
 		settings.ScheduledTasksEnabled = false
 		settings.MessageDeliveryEnabled = false
 		settings.DeliverySystemSMTPEnabled = false
+	}
+	return settings
+}
+
+func ensureAdvancedChatUserSettings(userID uint) AdvancedChatUserSettings {
+	settings := AdvancedChatUserSettings{UserID: userID, CustomMCPServers: "[]"}
+	_ = model.DB.Where("user_id = ?", userID).FirstOrCreate(&settings, AdvancedChatUserSettings{UserID: userID, CustomMCPServers: "[]"}).Error
+	if strings.TrimSpace(settings.CustomMCPServers) == "" {
+		settings.CustomMCPServers = "[]"
+		_ = model.DB.Model(&settings).Update("custom_mcp_servers", settings.CustomMCPServers).Error
 	}
 	return settings
 }

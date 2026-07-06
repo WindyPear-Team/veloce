@@ -51,7 +51,6 @@ type advancedChatGroupAgent struct {
 	UserChannelID uint     `json:"user_channel_id,omitempty"`
 	SkillIDs      []string `json:"skill_ids,omitempty"`
 	MCPServerIDs  []string `json:"mcp_server_ids,omitempty"`
-	Stream        bool     `json:"stream,omitempty"`
 }
 
 func (api *advancedChatAPI) listAgentGroups(c *gin.Context) {
@@ -289,7 +288,6 @@ func normalizeAdvancedChatGroupAgents(input []advancedChatGroupAgent) []advanced
 			UserChannelID: agent.UserChannelID,
 			SkillIDs:      uniqueStringsLocal(agent.SkillIDs),
 			MCPServerIDs:  uniqueStringsLocal(agent.MCPServerIDs),
-			Stream:        agent.Stream,
 		})
 		seen[id] = struct{}{}
 		if len(result) >= 40 {
@@ -632,7 +630,9 @@ func executeAdvancedChatAgentDelegate(ctx context.Context, user *model.User, inp
 		return "", errors.New("model is required for delegated agent")
 	}
 	userChannelID := input.UserChannelID
-	if agent.UserChannelID > 0 {
+	if chatAgent != nil && chatAgent.UserChannelID > 0 {
+		userChannelID = chatAgent.UserChannelID
+	} else if agent.UserChannelID > 0 {
 		userChannelID = agent.UserChannelID
 	}
 	var delegatedDelta *advancedChatAgentStudioDeltaLog
@@ -700,7 +700,7 @@ func executeAdvancedChatAgentDelegate(ctx context.Context, user *model.User, inp
 			StatusAgentType:    normalizeAdvancedChatAgentType(agent.Type),
 			StatusAgentGroupID: group.ID,
 			SandboxID:          advancedChatAgentStudioSandboxID(input.RunID, group.ID, agent.ID),
-			Stream:             agent.Stream,
+			Stream:             chatAgent != nil && chatAgent.Stream,
 			ApprovalChecker:    advancedChatAgentStudioApprovalCheckerForGroupValue(group),
 			DisplayRound:       input.DisplayRound,
 		})

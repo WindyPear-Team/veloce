@@ -471,9 +471,14 @@ func prepareAdvancedChatScheduledTaskRun(ctx context.Context, userID uint, task 
 		sessionID = input.SessionID
 	}
 	modelName := strings.TrimSpace(input.ModelName)
-	if modelName == "" && strings.TrimSpace(input.AgentID) != "" {
+	if strings.TrimSpace(input.AgentID) != "" {
 		if agent, err := loadAdvancedChatAgent(userID, input.AgentID); err == nil && agent != nil {
-			modelName = strings.TrimSpace(agent.DefaultModel)
+			if modelName == "" {
+				modelName = strings.TrimSpace(agent.DefaultModel)
+			}
+			if input.UserChannelID == 0 && agent.UserChannelID > 0 {
+				input.UserChannelID = agent.UserChannelID
+			}
 		}
 	}
 	if modelName == "" {

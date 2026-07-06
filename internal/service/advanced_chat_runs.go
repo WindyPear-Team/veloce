@@ -993,6 +993,9 @@ func prepareAdvancedChatAssistantRun(ctx context.Context, userID uint, input adv
 		if agent != nil {
 			skillIDs = uniqueStringsLocal(append(decodeStringList(agent.SkillIDs), skillIDs...))
 			mcpServerIDs = uniqueStringsLocal(append(decodeStringList(agent.MCPServerIDs), mcpServerIDs...))
+			if input.UserChannelID == 0 && agent.UserChannelID > 0 {
+				input.UserChannelID = agent.UserChannelID
+			}
 		}
 		skills, err = loadAdvancedChatSkills(userID, skillIDs)
 		if err != nil {
@@ -1077,7 +1080,9 @@ func prepareAdvancedChatAssistantRun(ctx context.Context, userID uint, input adv
 		} else if agent != nil && strings.TrimSpace(agent.DefaultModel) != "" {
 			modelName = strings.TrimSpace(agent.DefaultModel)
 		}
-		if target.UserChannelID > 0 {
+		if agent != nil && agent.UserChannelID > 0 {
+			input.UserChannelID = agent.UserChannelID
+		} else if target.UserChannelID > 0 {
 			input.UserChannelID = target.UserChannelID
 		}
 	}
@@ -1229,6 +1234,9 @@ func saveAdvancedChatSessionSnapshot(userID uint, sessionID string, input advanc
 			return advancedChatSessionResponse{}, http.StatusInternalServerError, "Failed to load agent", err
 		}
 		agent = loadedAgent
+		if input.UserChannelID == 0 && agent.UserChannelID > 0 {
+			input.UserChannelID = agent.UserChannelID
+		}
 	}
 	skillIDs := uniqueStringsLocal(input.SkillIDs)
 	if agent != nil {
@@ -1588,6 +1596,7 @@ func createAdvancedChatAssistantRun(userID uint, prepared preparedAdvancedChatAs
 			return sessionResp, runResp, http.StatusInternalServerError, "Failed to create assistant run", err
 		}
 	}
+	maybeStartAdvancedChatTitleGeneration(userID, sessionID, prepared.messages)
 	sessionResp, err = advancedChatSessionResponseFor(userID, sessionID)
 	if err != nil {
 		return sessionResp, runResp, http.StatusInternalServerError, "Failed to load assistant session", err
@@ -1696,11 +1705,11 @@ func runAdvancedChatAssistantCompletion(runID string, userID uint, prepared prep
 	if prepared.groupAgent != nil && advancedChatAgentStudioCanUseExecutionTools(prepared.groupAgent.Type) {
 		_, err = withAdvancedChatAgentStudioLock(user.ID, prepared.input.AgentGroupID, prepared.groupAgent.ID, func() (string, error) {
 			var runErr error
-			response, runErr = executePreparedAdvancedChatCompletion(ctx, &user, prepared, observer, true)
+			response, runErr = executePreparedAdvancedChatCompletion(ctx, &user, prepared, observer, advancedChatPreparedAgentStream(prepared.agent))
 			return "", runErr
 		})
 	} else {
-		response, err = executePreparedAdvancedChatCompletion(ctx, &user, prepared, observer, true)
+		response, err = executePreparedAdvancedChatCompletion(ctx, &user, prepared, observer, advancedChatPreparedAgentStream(prepared.agent))
 	}
 	if err != nil {
 		if errors.Is(err, errAdvancedChatRunCancelled) || errors.Is(err, context.Canceled) {
@@ -2080,7 +2089,7 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 						MCPBindings:       bindings,
 						ConnectorBindings: connectorBindings,
 						Observer:          observer,
-						Stream:            advancedChatPreparedGroupAgentStream(prepared.groupAgent),
+						Stream:            advancedChatPreparedAgentStream(prepared.agent),
 						Arguments:         arguments,
 						ApprovalChecker:   approvalChecker,
 						DisplayRound:      round + 1,
@@ -2396,7 +2405,7 @@ func preparedGroupAgentName(agent *advancedChatGroupAgent) string {
 	return strings.TrimSpace(agent.Name)
 }
 
-func advancedChatPreparedGroupAgentStream(agent *advancedChatGroupAgent) bool {
+func advancedChatPreparedAgentStream(agent *AdvancedChatAgent) bool {
 	return agent != nil && agent.Stream
 }
 
@@ -2489,6 +2498,7 @@ func createPersistedAdvancedChatCompletionSession(userID uint, input advancedCha
 	if _, status, message, err := saveAdvancedChatSessionSnapshot(userID, sessionID, snapshot, true); err != nil {
 		return "", "", status, message, err
 	}
+	maybeStartAdvancedChatTitleGeneration(userID, sessionID, messages)
 	assistantMessageID := newAdvancedChatID("acm")
 	err := model.DB.Transaction(func(tx *gorm.DB) error {
 		now := time.Now()
@@ -2513,6 +2523,71 @@ func createPersistedAdvancedChatCompletionSession(userID uint, input advancedCha
 		return "", "", http.StatusInternalServerError, "Failed to save assistant message", err
 	}
 	return sessionID, assistantMessageID, http.StatusOK, "", nil
+}
+
+func maybeStartAdvancedChatTitleGeneration(userID uint, sessionID string, messages []advancedChatCompletionMessage) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" || len(messages) != 1 {
+		return
+	}
+	content := strings.TrimSpace(messages[0].Content)
+	if content == "" {
+		return
+	}
+	settings := ensureAdvancedChatUserSettings(userID)
+	modelName := strings.TrimSpace(settings.TitleModelName)
+	if modelName == "" {
+		return
+	}
+	go generateAdvancedChatSessionTitle(userID, sessionID, content, modelName, settings.TitleUserChannelID)
+}
+
+func generateAdvancedChatSessionTitle(userID uint, sessionID string, firstMessage string, modelName string, userChannelID uint) {
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	var user model.User
+	if err := model.DB.First(&user, userID).Error; err != nil {
+		return
+	}
+	system := "Generate a concise title for this conversation. Return only the title, no quotes, no markdown. Use the same language as the user when possible. Keep it under 16 words."
+	result, err := ExecuteServerChatCompletion(nil, &user, ChatExecutorRequest{
+		ModelName:     modelName,
+		UserChannelID: userChannelID,
+		Messages: []ChatExecutorMessage{{
+			Role:    "user",
+			Content: firstMessage,
+		}},
+		System:      system,
+		MaxTokens:   64,
+		Temperature: advancedChatFloatPtr(0.2),
+		Context:     ctx,
+	})
+	if err != nil {
+		return
+	}
+	title := normalizeAdvancedChatGeneratedTitle(result.Content)
+	if title == "" {
+		return
+	}
+	_ = model.DB.Model(&AdvancedChatSession{}).
+		Where("id = ? AND user_id = ?", sessionID, userID).
+		Update("title", title).Error
+}
+
+func normalizeAdvancedChatGeneratedTitle(raw string) string {
+	title := strings.TrimSpace(raw)
+	title = strings.Trim(title, "\"'` \t\r\n")
+	title = strings.ReplaceAll(title, "\r", " ")
+	title = strings.ReplaceAll(title, "\n", " ")
+	title = strings.Join(strings.Fields(title), " ")
+	if len([]rune(title)) > 80 {
+		title = string([]rune(title)[:80])
+	}
+	return strings.TrimSpace(title)
+}
+
+func advancedChatFloatPtr(value float64) *float64 {
+	return &value
 }
 
 func finishPersistedAdvancedChatCompletionMessage(sessionID string, messageID string, userID uint, response advancedChatCompletionResponse) {

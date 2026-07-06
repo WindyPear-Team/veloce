@@ -175,6 +175,9 @@ func (api *advancedChatAPI) completeChat(c *gin.Context) {
 		c.JSON(status, gin.H{"error": message})
 		return
 	}
+	if input.UserChannelID == 0 && agent != nil && agent.UserChannelID > 0 {
+		input.UserChannelID = agent.UserChannelID
+	}
 	skillIDs := input.SkillIDs
 	mcpServerIDs := input.MCPServerIDs
 	if agent != nil {
