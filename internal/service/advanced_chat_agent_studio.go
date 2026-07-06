@@ -55,6 +55,7 @@ type advancedChatDelegatedAgentLoopOptions struct {
 	StatusAgentType    string
 	StatusAgentGroupID string
 	SandboxID          string
+	Stream             bool
 	ApprovalChecker    *advancedChatAgentStudioApprovalChecker
 }
 

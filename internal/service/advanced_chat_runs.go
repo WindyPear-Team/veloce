@@ -2048,6 +2048,7 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 						MCPBindings:       bindings,
 						ConnectorBindings: connectorBindings,
 						Observer:          observer,
+						Stream:            advancedChatPreparedGroupAgentStream(prepared.groupAgent),
 						Arguments:         arguments,
 						ApprovalChecker:   approvalChecker,
 						DisplayRound:      round + 1,
@@ -2361,6 +2362,10 @@ func preparedGroupAgentName(agent *advancedChatGroupAgent) string {
 		return ""
 	}
 	return strings.TrimSpace(agent.Name)
+}
+
+func advancedChatPreparedGroupAgentStream(agent *advancedChatGroupAgent) bool {
+	return agent != nil && agent.Stream
 }
 
 func failAdvancedChatRun(runID string, sessionID string, userID uint, assistantMessageID string, message string) {

@@ -51,6 +51,7 @@ type advancedChatGroupAgent struct {
 	UserChannelID uint     `json:"user_channel_id,omitempty"`
 	SkillIDs      []string `json:"skill_ids,omitempty"`
 	MCPServerIDs  []string `json:"mcp_server_ids,omitempty"`
+	Stream        bool     `json:"stream,omitempty"`
 }
 
 func (api *advancedChatAPI) listAgentGroups(c *gin.Context) {
@@ -288,6 +289,7 @@ func normalizeAdvancedChatGroupAgents(input []advancedChatGroupAgent) []advanced
 			UserChannelID: agent.UserChannelID,
 			SkillIDs:      uniqueStringsLocal(agent.SkillIDs),
 			MCPServerIDs:  uniqueStringsLocal(agent.MCPServerIDs),
+			Stream:        agent.Stream,
 		})
 		seen[id] = struct{}{}
 		if len(result) >= 40 {
@@ -659,7 +661,7 @@ func executeAdvancedChatAgentDelegate(ctx context.Context, user *model.User, inp
 		if prompt := advancedChatAgentStudioPrompt(agent.Type, input.ConnectorDevice != nil); prompt != "" {
 			systemParts = append(systemParts, prompt)
 		}
-		messages := append([]ChatExecutorMessage{}, input.Messages...)
+		messages := advancedChatMessagesForDelegatedAgent(input.Messages)
 		taskText := "Delegated goal:\n" + goal
 		if caller := strings.TrimSpace(input.CallerAgentName); caller != "" {
 			taskText = "Message source: agent " + caller + " via CPS delegation.\n\n" + taskText
@@ -698,6 +700,7 @@ func executeAdvancedChatAgentDelegate(ctx context.Context, user *model.User, inp
 			StatusAgentType:    normalizeAdvancedChatAgentType(agent.Type),
 			StatusAgentGroupID: group.ID,
 			SandboxID:          advancedChatAgentStudioSandboxID(input.RunID, group.ID, agent.ID),
+			Stream:             agent.Stream,
 			ApprovalChecker:    advancedChatAgentStudioApprovalCheckerForGroupValue(group),
 			DisplayRound:       input.DisplayRound,
 		})
@@ -777,6 +780,12 @@ func runAdvancedChatDelegatedAgentLoop(ctx context.Context, user *model.User, mo
 	lastToolStatus := ""
 	observer := advancedChatDelegatedModelObserver(options, user.ID)
 	for round := 0; round < 6; round++ {
+		var onTextDelta func(string) error
+		if options.Stream {
+			onTextDelta = func(delta string) error {
+				return nil
+			}
+		}
 		result, err := executeAdvancedChatModelRequestWithRetry(ctx, user, ChatExecutorRequest{
 			Context:       ctx,
 			ModelName:     modelName,
@@ -785,10 +794,8 @@ func runAdvancedChatDelegatedAgentLoop(ctx context.Context, user *model.User, mo
 			System:        system,
 			Tools:         tools,
 			MaxTokens:     0,
-			Stream:        true,
-			OnTextDelta: func(delta string) error {
-				return nil
-			},
+			Stream:        options.Stream,
+			OnTextDelta:   onTextDelta,
 		}, observer, func() bool { return true })
 		if err != nil {
 			return strings.TrimSpace(lastContent), err
@@ -949,6 +956,7 @@ func runAdvancedChatDelegatedAgentLoop(ctx context.Context, user *model.User, mo
 					ConnectorBindings:  connectorBindings,
 					Observer:           options.Observer,
 					OnApprovalRequired: options.OnApprovalRequired,
+					Stream:             options.Stream,
 					Arguments:          arguments,
 					ApprovalChecker:    options.ApprovalChecker,
 					DisplayRound:       advancedChatDelegatedDisplayRound(options, round+1),
@@ -1117,6 +1125,7 @@ type advancedChatAgentSplitInput struct {
 	ConnectorBindings  map[string]advancedChatConnectorToolBinding
 	Observer           advancedChatCompletionObserver
 	OnApprovalRequired func(context.Context, MessageChannelConnectorApproval) error
+	Stream             bool
 	Arguments          map[string]interface{}
 	ApprovalChecker    *advancedChatAgentStudioApprovalChecker
 	DisplayRound       int
@@ -1151,7 +1160,7 @@ func executeAdvancedChatAgentSplit(ctx context.Context, user *model.User, input 
 				"agent_type": "worker",
 				"goal":       task.Goal,
 			})
-			messages := append([]ChatExecutorMessage{}, input.Messages...)
+			messages := advancedChatMessagesForDelegatedAgent(input.Messages)
 			taskText := "Split agent goal:\n" + task.Goal
 			if strings.TrimSpace(task.Context) != "" {
 				taskText += "\n\nAdditional context:\n" + strings.TrimSpace(task.Context)
@@ -1175,6 +1184,7 @@ func executeAdvancedChatAgentSplit(ctx context.Context, user *model.User, input 
 				StatusAgentName:    label,
 				StatusAgentType:    "worker",
 				SandboxID:          advancedChatAgentStudioSandboxID(input.RunID, strings.TrimSpace(input.ToolCallID), label),
+				Stream:             input.Stream,
 				ApprovalChecker:    input.ApprovalChecker,
 				DisplayRound:       input.DisplayRound,
 			})
@@ -1194,6 +1204,22 @@ func executeAdvancedChatAgentSplit(ctx context.Context, user *model.User, input 
 		return "", err
 	}
 	return string(data), nil
+}
+
+func advancedChatMessagesForDelegatedAgent(messages []ChatExecutorMessage) []ChatExecutorMessage {
+	result := append([]ChatExecutorMessage{}, messages...)
+	if len(result) == 0 {
+		return result
+	}
+	last := &result[len(result)-1]
+	if strings.ToLower(strings.TrimSpace(last.Role)) != "assistant" || len(last.ToolCalls) == 0 {
+		return result
+	}
+	if strings.TrimSpace(last.Content) == "" && len(last.Parts) == 0 {
+		return result[:len(result)-1]
+	}
+	last.ToolCalls = nil
+	return result
 }
 
 type advancedChatSplitTask struct {

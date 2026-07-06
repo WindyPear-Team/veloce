@@ -249,6 +249,32 @@ func TestAgentStudioSandboxArguments(t *testing.T) {
 	}
 }
 
+func TestDelegatedAgentMessagesDropPendingToolCalls(t *testing.T) {
+	messages := []ChatExecutorMessage{
+		{Role: "user", Content: "do work"},
+		{Role: "assistant", Content: "", ToolCalls: []map[string]interface{}{{"id": "call-1", "type": "function"}}},
+	}
+	sanitized := advancedChatMessagesForDelegatedAgent(messages)
+	if len(sanitized) != 1 {
+		t.Fatalf("expected pending empty assistant tool call message to be dropped, got %d messages", len(sanitized))
+	}
+	if len(messages[1].ToolCalls) == 0 {
+		t.Fatal("sanitizing delegated messages must not mutate the original message slice")
+	}
+
+	messages = []ChatExecutorMessage{
+		{Role: "user", Content: "do work"},
+		{Role: "assistant", Content: "I will delegate this.", ToolCalls: []map[string]interface{}{{"id": "call-1", "type": "function"}}},
+	}
+	sanitized = advancedChatMessagesForDelegatedAgent(messages)
+	if len(sanitized) != 2 {
+		t.Fatalf("expected assistant text to be preserved, got %d messages", len(sanitized))
+	}
+	if len(sanitized[1].ToolCalls) != 0 || sanitized[1].Content != "I will delegate this." {
+		t.Fatalf("expected pending tool calls to be stripped while preserving text, got %+v", sanitized[1])
+	}
+}
+
 func TestAgentStudioSubAgentStatusHelpers(t *testing.T) {
 	payload := map[string]interface{}{
 		"task_id":    "task-1",
@@ -330,6 +356,7 @@ func TestNormalizeAdvancedChatGroupAgentsPreservesMemberTools(t *testing.T) {
 		ChatAgentID:  "1",
 		SkillIDs:     []string{"skill-a", "skill-a", "skill-b"},
 		MCPServerIDs: []string{"mcp-a", "", "mcp-b", "mcp-a"},
+		Stream:       true,
 	}})
 	if len(agents) != 1 {
 		t.Fatalf("expected one normalized agent, got %d", len(agents))
@@ -339,5 +366,14 @@ func TestNormalizeAdvancedChatGroupAgentsPreservesMemberTools(t *testing.T) {
 	}
 	if got := strings.Join(agents[0].MCPServerIDs, ","); got != "mcp-a,mcp-b" {
 		t.Fatalf("mcp server ids were not preserved and deduplicated, got %q", got)
+	}
+	if !agents[0].Stream {
+		t.Fatal("stream setting was not preserved")
+	}
+	if !advancedChatPreparedGroupAgentStream(&agents[0]) {
+		t.Fatal("prepared group agent stream helper should return true for streaming agents")
+	}
+	if advancedChatPreparedGroupAgentStream(nil) {
+		t.Fatal("prepared group agent stream helper should return false without an agent")
 	}
 }
