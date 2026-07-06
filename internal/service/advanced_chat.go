@@ -63,14 +63,15 @@ type AdvancedChatAgentStudio struct {
 }
 
 type AdvancedChatUserSettings struct {
-	ID                 uint       `gorm:"primaryKey" json:"id"`
-	UserID             uint       `gorm:"uniqueIndex;not null" json:"user_id"`
-	User               model.User `gorm:"foreignKey:UserID" json:"-"`
-	CustomMCPServers   string     `gorm:"type:text;not null" json:"custom_mcp_servers"`
-	TitleModelName     string     `gorm:"size:100;not null;default:''" json:"title_model_name"`
-	TitleUserChannelID uint       `gorm:"index" json:"title_user_channel_id"`
-	CreatedAt          time.Time  `json:"created_at"`
-	UpdatedAt          time.Time  `json:"updated_at"`
+	ID                   uint       `gorm:"primaryKey" json:"id"`
+	UserID               uint       `gorm:"uniqueIndex;not null" json:"user_id"`
+	User                 model.User `gorm:"foreignKey:UserID" json:"-"`
+	CustomMCPServers     string     `gorm:"type:text;not null" json:"custom_mcp_servers"`
+	TitleModelName       string     `gorm:"size:100;not null;default:''" json:"title_model_name"`
+	TitleUserChannelID   uint       `gorm:"index" json:"title_user_channel_id"`
+	TitleGenerationScope string     `gorm:"size:20;not null;default:'recent'" json:"title_generation_scope"`
+	CreatedAt            time.Time  `json:"created_at"`
+	UpdatedAt            time.Time  `json:"updated_at"`
 }
 
 type AdvancedChatSkill struct {
@@ -153,6 +154,7 @@ type advancedChatUserSettingsResponse struct {
 	DeliverySystemSMTPEnabled            bool                    `json:"delivery_system_smtp_enabled"`
 	TitleModelName                       string                  `json:"title_model_name"`
 	TitleUserChannelID                   uint                    `json:"title_user_channel_id,omitempty"`
+	TitleGenerationScope                 string                  `json:"title_generation_scope"`
 }
 
 type advancedChatAdminSettingsInput struct {
@@ -182,8 +184,9 @@ type advancedChatUserMCPInput struct {
 }
 
 type advancedChatUserSettingsInput struct {
-	TitleModelName     string `json:"title_model_name"`
-	TitleUserChannelID uint   `json:"title_user_channel_id"`
+	TitleModelName       string `json:"title_model_name"`
+	TitleUserChannelID   uint   `json:"title_user_channel_id"`
+	TitleGenerationScope string `json:"title_generation_scope"`
 }
 
 type advancedChatSkillInput struct {
@@ -257,6 +260,7 @@ func registerAdvancedChatUserRoutes(group *gin.RouterGroup) {
 	group.POST("/advanced-chat/sessions", api.saveSession)
 	group.GET("/advanced-chat/sessions/:id", api.getSession)
 	group.PUT("/advanced-chat/sessions/:id", api.saveSession)
+	group.POST("/advanced-chat/sessions/:id/title/regenerate", api.regenerateSessionTitle)
 	group.DELETE("/advanced-chat/sessions/:id", api.deleteSession)
 	group.GET("/advanced-chat/runs/:id", api.getRun)
 	group.GET("/advanced-chat/runs/:id/events", api.listRunEvents)
@@ -422,10 +426,12 @@ func (api *advancedChatAPI) updateUserSettings(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Title model is too long"})
 		return
 	}
+	titleScope := normalizeAdvancedChatTitleGenerationScope(input.TitleGenerationScope)
 	settings := ensureAdvancedChatUserSettings(user.ID)
 	if err := model.DB.Model(&settings).Updates(map[string]interface{}{
-		"title_model_name":      titleModel,
-		"title_user_channel_id": input.TitleUserChannelID,
+		"title_model_name":       titleModel,
+		"title_user_channel_id":  input.TitleUserChannelID,
+		"title_generation_scope": titleScope,
 	}).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save settings"})
 		return
@@ -982,6 +988,7 @@ func currentAdvancedChatUserSettings(userID uint) advancedChatUserSettingsRespon
 		DeliverySystemSMTPEnabled:            advancedChatDeliverySystemSMTPEnabled(),
 		TitleModelName:                       strings.TrimSpace(userSettings.TitleModelName),
 		TitleUserChannelID:                   userSettings.TitleUserChannelID,
+		TitleGenerationScope:                 normalizeAdvancedChatTitleGenerationScope(userSettings.TitleGenerationScope),
 	}
 	if !advancedChatPremiumFeaturesAvailable() {
 		settings.FileStorageEnabled = false
@@ -1002,7 +1009,17 @@ func ensureAdvancedChatUserSettings(userID uint) AdvancedChatUserSettings {
 		settings.CustomMCPServers = "[]"
 		_ = model.DB.Model(&settings).Update("custom_mcp_servers", settings.CustomMCPServers).Error
 	}
+	settings.TitleGenerationScope = normalizeAdvancedChatTitleGenerationScope(settings.TitleGenerationScope)
 	return settings
+}
+
+func normalizeAdvancedChatTitleGenerationScope(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "all":
+		return "all"
+	default:
+		return "recent"
+	}
 }
 
 func mergeAdvancedChatMCPServers(groups ...[]AdvancedChatMCPServer) []AdvancedChatMCPServer {

@@ -2525,6 +2525,57 @@ func createPersistedAdvancedChatCompletionSession(userID uint, input advancedCha
 	return sessionID, assistantMessageID, http.StatusOK, "", nil
 }
 
+func (api *advancedChatAPI) regenerateSessionTitle(c *gin.Context) {
+	user, ok := currentAdvancedChatUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+	sessionID := normalizeAdvancedChatSessionID(c.Param("id"))
+	if sessionID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid session id"})
+		return
+	}
+	settings := ensureAdvancedChatUserSettings(user.ID)
+	modelName := strings.TrimSpace(settings.TitleModelName)
+	if modelName == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Title model is not configured"})
+		return
+	}
+	content, err := advancedChatSessionTitleSource(user.ID, sessionID, settings.TitleGenerationScope)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Session not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load session"})
+		return
+	}
+	if strings.TrimSpace(content) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Session has no content"})
+		return
+	}
+	title, err := generateAdvancedChatTitle(user.ID, content, modelName, settings.TitleUserChannelID)
+	if err != nil {
+		writeAdvancedChatCompletionError(c, err)
+		return
+	}
+	if title == "" {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "Failed to generate title"})
+		return
+	}
+	if err := model.DB.Model(&AdvancedChatSession{}).Where("id = ? AND user_id = ?", sessionID, user.ID).Update("title", title).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save title"})
+		return
+	}
+	session, err := advancedChatSessionResponseFor(user.ID, sessionID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load session"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"title": title, "session": session})
+}
+
 func maybeStartAdvancedChatTitleGeneration(userID uint, sessionID string, messages []advancedChatCompletionMessage) {
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" || len(messages) != 1 {
@@ -2539,15 +2590,25 @@ func maybeStartAdvancedChatTitleGeneration(userID uint, sessionID string, messag
 	if modelName == "" {
 		return
 	}
-	go generateAdvancedChatSessionTitle(userID, sessionID, content, modelName, settings.TitleUserChannelID)
+	go generateAndSaveAdvancedChatSessionTitle(userID, sessionID, content, modelName, settings.TitleUserChannelID)
 }
 
-func generateAdvancedChatSessionTitle(userID uint, sessionID string, firstMessage string, modelName string, userChannelID uint) {
+func generateAndSaveAdvancedChatSessionTitle(userID uint, sessionID string, content string, modelName string, userChannelID uint) {
+	title, err := generateAdvancedChatTitle(userID, content, modelName, userChannelID)
+	if err != nil || title == "" {
+		return
+	}
+	_ = model.DB.Model(&AdvancedChatSession{}).
+		Where("id = ? AND user_id = ?", sessionID, userID).
+		Update("title", title).Error
+}
+
+func generateAdvancedChatTitle(userID uint, content string, modelName string, userChannelID uint) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 	var user model.User
 	if err := model.DB.First(&user, userID).Error; err != nil {
-		return
+		return "", err
 	}
 	system := "Generate a concise title for this conversation. Return only the title, no quotes, no markdown. Use the same language as the user when possible. Keep it under 16 words."
 	result, err := ExecuteServerChatCompletion(nil, &user, ChatExecutorRequest{
@@ -2555,7 +2616,7 @@ func generateAdvancedChatSessionTitle(userID uint, sessionID string, firstMessag
 		UserChannelID: userChannelID,
 		Messages: []ChatExecutorMessage{{
 			Role:    "user",
-			Content: firstMessage,
+			Content: content,
 		}},
 		System:      system,
 		MaxTokens:   64,
@@ -2563,15 +2624,45 @@ func generateAdvancedChatSessionTitle(userID uint, sessionID string, firstMessag
 		Context:     ctx,
 	})
 	if err != nil {
-		return
+		return "", err
 	}
-	title := normalizeAdvancedChatGeneratedTitle(result.Content)
-	if title == "" {
-		return
+	return normalizeAdvancedChatGeneratedTitle(result.Content), nil
+}
+
+func advancedChatSessionTitleSource(userID uint, sessionID string, scope string) (string, error) {
+	var session AdvancedChatSession
+	if err := model.DB.Where("id = ? AND user_id = ?", sessionID, userID).First(&session).Error; err != nil {
+		return "", err
 	}
-	_ = model.DB.Model(&AdvancedChatSession{}).
-		Where("id = ? AND user_id = ?", sessionID, userID).
-		Update("title", title).Error
+	var messages []AdvancedChatMessage
+	if err := model.DB.Where("session_id = ? AND user_id = ?", sessionID, userID).Order("sort_order ASC, created_at ASC").Find(&messages).Error; err != nil {
+		return "", err
+	}
+	if normalizeAdvancedChatTitleGenerationScope(scope) == "recent" && len(messages) > 12 {
+		messages = messages[len(messages)-12:]
+	}
+	limit := 12000
+	if normalizeAdvancedChatTitleGenerationScope(scope) == "recent" {
+		limit = 6000
+	}
+	parts := make([]string, 0, len(messages))
+	for _, message := range messages {
+		content := strings.TrimSpace(message.Content)
+		if content == "" {
+			continue
+		}
+		role := "Assistant"
+		if message.Role == "user" {
+			role = "User"
+		}
+		parts = append(parts, role+": "+content)
+	}
+	source := strings.Join(parts, "\n\n")
+	runes := []rune(source)
+	if len(runes) > limit {
+		runes = runes[len(runes)-limit:]
+	}
+	return strings.TrimSpace(string(runes)), nil
 }
 
 func normalizeAdvancedChatGeneratedTitle(raw string) string {

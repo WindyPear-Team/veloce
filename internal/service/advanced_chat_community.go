@@ -60,11 +60,13 @@ func RegisterCommunityAdvancedChatUserRoutes(group *gin.RouterGroup) {
 	}
 	api := &advancedChatAPI{}
 	group.GET("/advanced-chat/settings", api.getUserSettings)
+	group.PUT("/advanced-chat/settings", api.updateUserSettings)
 	group.POST("/advanced-chat/completions", api.completeChat)
 	group.GET("/advanced-chat/sessions", api.listSessions)
 	group.POST("/advanced-chat/sessions", api.saveSession)
 	group.GET("/advanced-chat/sessions/:id", api.getSession)
 	group.PUT("/advanced-chat/sessions/:id", api.saveSession)
+	group.POST("/advanced-chat/sessions/:id/title/regenerate", api.regenerateSessionTitle)
 	group.DELETE("/advanced-chat/sessions/:id", api.deleteSession)
 	group.GET("/advanced-chat/runs/:id", api.getRun)
 	group.GET("/advanced-chat/runs/:id/events", api.listRunEvents)
