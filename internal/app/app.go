@@ -53,7 +53,9 @@ func Run() error {
 	logCleanupService.Start()
 
 	// Initialize Gin
-	r := gin.Default()
+	gin.SetMode(gin.ReleaseMode)
+	r := gin.New()
+	r.Use(gin.Recovery())
 	r.Use(requestBodyLimit(maxRequestBodyBytes))
 	r.Use(middleware.AuditMiddleware())
 	frontendFS, err := webui.DistFS()
