@@ -177,6 +177,10 @@ func buildOpenPaymentPaymentParams(c *gin.Context, cfg paymentConfig, order mode
 }
 
 func (api *PaymentAPI) OpenPaymentSubmit(c *gin.Context) {
+	if !paymentFeatureEnabled {
+		c.String(http.StatusNotFound, "payment requires premium edition")
+		return
+	}
 	cfg := currentPaymentConfig()
 	if cfg.Provider != paymentProviderOpenPayment {
 		c.String(http.StatusNotFound, "not found")

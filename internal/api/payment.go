@@ -30,6 +30,16 @@ const (
 
 type PaymentAPI struct{}
 
+var paymentFeatureEnabled bool
+
+func EnablePaymentFeature() {
+	paymentFeatureEnabled = true
+}
+
+func PaymentFeatureEnabled() bool {
+	return paymentFeatureEnabled
+}
+
 type paymentConfig struct {
 	Enabled               bool
 	Provider              string
@@ -77,6 +87,17 @@ type paymentOrderResponse struct {
 }
 
 func (api *PaymentAPI) Config(c *gin.Context) {
+	if !paymentFeatureEnabled {
+		c.JSON(http.StatusOK, paymentConfigResponse{
+			Enabled:             false,
+			CurrencyDisplayName: firstNonEmptyString(settingString("payment_currency_display_name", "$"), "$"),
+			USDToRMBRate:        settingDecimal("payment_usd_to_rmb_rate", "7.20").String(),
+			MinRechargeAmount:   settingDecimal("payment_min_recharge_amount", "1").String(),
+			RechargePresets:     []string{},
+			Methods:             []string{},
+		})
+		return
+	}
 	cfg := currentPaymentConfig()
 	c.JSON(http.StatusOK, paymentConfigResponse{
 		Enabled:             cfg.Enabled,
@@ -89,6 +110,9 @@ func (api *PaymentAPI) Config(c *gin.Context) {
 }
 
 func (api *PaymentAPI) CreateOrder(c *gin.Context) {
+	if !requirePaymentFeature(c) {
+		return
+	}
 	user, ok := currentUser(c)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
@@ -157,6 +181,9 @@ func (api *PaymentAPI) CreateOrder(c *gin.Context) {
 }
 
 func (api *PaymentAPI) ListOrders(c *gin.Context) {
+	if !requirePaymentFeature(c) {
+		return
+	}
 	user, ok := currentUser(c)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
@@ -200,6 +227,9 @@ func (api *PaymentAPI) ListOrders(c *gin.Context) {
 }
 
 func (api *PaymentAPI) GetOrder(c *gin.Context) {
+	if !requirePaymentFeature(c) {
+		return
+	}
 	user, ok := currentUser(c)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
@@ -214,6 +244,10 @@ func (api *PaymentAPI) GetOrder(c *gin.Context) {
 }
 
 func (api *PaymentAPI) Notify(c *gin.Context) {
+	if !paymentFeatureEnabled {
+		c.String(http.StatusNotFound, "payment requires premium edition")
+		return
+	}
 	ok, err := handlePaymentCallback(c)
 	if err != nil {
 		c.String(http.StatusBadRequest, "fail")
@@ -227,6 +261,10 @@ func (api *PaymentAPI) Notify(c *gin.Context) {
 }
 
 func (api *PaymentAPI) Return(c *gin.Context) {
+	if !paymentFeatureEnabled {
+		c.Redirect(http.StatusFound, "/dashboard/wallet?payment=failed")
+		return
+	}
 	ok, _ := handlePaymentCallback(c)
 	status := "failed"
 	if ok {
@@ -298,6 +336,17 @@ func handleYipayCallback(c *gin.Context) (bool, error) {
 }
 
 func currentPaymentConfig() paymentConfig {
+	if !paymentFeatureEnabled {
+		return paymentConfig{
+			Enabled:             false,
+			Provider:            paymentProviderYipay,
+			CurrencyDisplayName: firstNonEmptyString(settingString("payment_currency_display_name", "$"), "$"),
+			USDToRMBRate:        settingDecimal("payment_usd_to_rmb_rate", "7.20"),
+			MinRechargeAmount:   settingDecimal("payment_min_recharge_amount", "1"),
+			RechargePresets:     []string{},
+			Methods:             []string{},
+		}
+	}
 	return paymentConfig{
 		Enabled:               settingBool("payment_enabled", false),
 		Provider:              normalizePaymentProvider(settingString("payment_gateway_provider", paymentProviderYipay)),
@@ -318,6 +367,14 @@ func currentPaymentConfig() paymentConfig {
 		OpenPaymentNotifyURL:  "",
 		OpenPaymentReturnURL:  "",
 	}
+}
+
+func requirePaymentFeature(c *gin.Context) bool {
+	if paymentFeatureEnabled {
+		return true
+	}
+	c.JSON(http.StatusForbidden, gin.H{"error": "Payment requires premium edition"})
+	return false
 }
 
 func normalizePaymentProvider(provider string) string {

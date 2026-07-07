@@ -317,6 +317,10 @@ func (api *SystemAPI) UpdateSettings(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "Message channel requires premium edition"})
 		return
 	}
+	if input.PaymentEnabled != nil && *input.PaymentEnabled && !PaymentFeatureEnabled() {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Payment requires premium edition"})
+		return
+	}
 
 	var authAgreementMode string
 	if input.AuthAgreementMode != nil {
@@ -602,7 +606,7 @@ func currentPublicSystemSettings() systemSettingsResponse {
 		CheckInRandomEnabled:                 settingBool("checkin_random_enabled", false),
 		CheckInRandomMin:                     settingString("checkin_random_min", "0"),
 		CheckInRandomMax:                     settingString("checkin_random_max", "0"),
-		PaymentEnabled:                       settingBool("payment_enabled", false),
+		PaymentEnabled:                       PaymentFeatureEnabled() && settingBool("payment_enabled", false),
 		PaymentCurrencyDisplayName:           settingString("payment_currency_display_name", "$"),
 		PaymentUSDToRMBRate:                  settingString("payment_usd_to_rmb_rate", "7.20"),
 		PaymentMinRechargeAmount:             settingString("payment_min_recharge_amount", "1"),
