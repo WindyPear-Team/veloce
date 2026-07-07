@@ -29,6 +29,7 @@ const (
 
 type systemSettingsResponse struct {
 	Edition                              string `json:"edition"`
+	SystemMode                           string `json:"system_mode"`
 	SiteName                             string `json:"site_name"`
 	BaseURL                              string `json:"base_url"`
 	IconURL                              string `json:"icon_url"`
@@ -160,6 +161,7 @@ type systemSettingsResponse struct {
 }
 
 type systemSettingsInput struct {
+	SystemMode                           *string `json:"system_mode"`
 	SiteName                             *string `json:"site_name"`
 	BaseURL                              *string `json:"base_url"`
 	IconURL                              *string `json:"icon_url"`
@@ -305,6 +307,11 @@ func (api *SystemAPI) UpdateSettings(c *gin.Context) {
 		return
 	}
 
+	var systemMode string
+	if input.SystemMode != nil {
+		systemMode = service.NormalizeSystemMode(*input.SystemMode)
+	}
+
 	var chatPageMode string
 	if input.ChatPageMode != nil {
 		chatPageMode = normalizeChatPageMode(*input.ChatPageMode)
@@ -352,6 +359,12 @@ func (api *SystemAPI) UpdateSettings(c *gin.Context) {
 			return
 		}
 		if err := model.SetSystemSetting("site_name", siteName); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update system settings"})
+			return
+		}
+	}
+	if input.SystemMode != nil {
+		if err := model.SetSystemSetting("system_mode", systemMode); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update system settings"})
 			return
 		}
@@ -523,6 +536,7 @@ func (api *SystemAPI) UpdateSettings(c *gin.Context) {
 func currentPublicSystemSettings() systemSettingsResponse {
 	return systemSettingsResponse{
 		Edition:                              service.CurrentEdition(),
+		SystemMode:                           service.CurrentSystemMode(),
 		SiteName:                             settingString("site_name", "flai"),
 		BaseURL:                              settingString("base_url", ""),
 		IconURL:                              settingString("icon_url", ""),
@@ -606,7 +620,7 @@ func currentPublicSystemSettings() systemSettingsResponse {
 		CheckInRandomEnabled:                 settingBool("checkin_random_enabled", false),
 		CheckInRandomMin:                     settingString("checkin_random_min", "0"),
 		CheckInRandomMax:                     settingString("checkin_random_max", "0"),
-		PaymentEnabled:                       PaymentFeatureEnabled() && settingBool("payment_enabled", false),
+		PaymentEnabled:                       !service.PersonalModeEnabled() && PaymentFeatureEnabled() && settingBool("payment_enabled", false),
 		PaymentCurrencyDisplayName:           settingString("payment_currency_display_name", "$"),
 		PaymentUSDToRMBRate:                  settingString("payment_usd_to_rmb_rate", "7.20"),
 		PaymentMinRechargeAmount:             settingString("payment_min_recharge_amount", "1"),
@@ -4007,6 +4021,12 @@ func apiKeyUsageStats(apiKeyID uint, userID uint, usageResetAt *time.Time) usage
 }
 
 func validateAPIKeyUserChannel(userChannelIDs []uint) (uint, error) {
+	if service.PersonalModeEnabled() {
+		if len(userChannelIDs) == 0 {
+			return 0, nil
+		}
+		return userChannelIDs[0], nil
+	}
 	if len(userChannelIDs) != 1 || userChannelIDs[0] == 0 {
 		return 0, errors.New("API key must be bound to exactly one user channel")
 	}

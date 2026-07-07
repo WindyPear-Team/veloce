@@ -164,6 +164,9 @@ func APIKeyAllowsIP(apiKey *model.APIKey, clientIP string) bool {
 }
 
 func APIKeyAllowsUserChannel(apiKey *model.APIKey, userChannelID *uint) bool {
+	if PersonalModeEnabled() {
+		return true
+	}
 	if apiKey == nil {
 		return true
 	}
@@ -179,6 +182,9 @@ func APIKeyQuotaExceeded(apiKey *model.APIKey, cost decimal.Decimal) (bool, erro
 }
 
 func APIKeyQuotaExceededInTx(tx *gorm.DB, apiKey *model.APIKey, cost decimal.Decimal) (bool, error) {
+	if PersonalModeEnabled() {
+		return false, nil
+	}
 	if apiKey == nil || apiKey.QuotaLimit.LessThanOrEqual(decimal.Zero) {
 		return false, nil
 	}

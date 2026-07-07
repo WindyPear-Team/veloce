@@ -32,6 +32,17 @@ func (s *ProxyService) HandleTokenBalance(c *gin.Context) {
 		return
 	}
 	apiKey := currentAPIKey(c)
+	if PersonalModeEnabled() {
+		c.JSON(http.StatusOK, gin.H{
+			"success":         true,
+			"remain_balance":  decimal.NewFromInt(-1),
+			"remain_credits":  balanceCredits(decimal.NewFromInt(-1)),
+			"used_balance":    decimal.Zero,
+			"used_credits":    0,
+			"unlimited_quota": true,
+		})
+		return
+	}
 	if apiKey == nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success":         true,
@@ -70,6 +81,16 @@ func (s *ProxyService) HandleUserBalance(c *gin.Context) {
 	user, ok := currentUserFromContext(c)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, authErrorResponse(http.StatusUnauthorized, "Invalid authentication credentials", "authentication_error"))
+		return
+	}
+	if PersonalModeEnabled() {
+		c.JSON(http.StatusOK, gin.H{
+			"success":        true,
+			"remain_balance": decimal.NewFromInt(-1),
+			"remain_credits": balanceCredits(decimal.NewFromInt(-1)),
+			"used_balance":   decimal.Zero,
+			"used_credits":   0,
+		})
 		return
 	}
 	var used decimal.Decimal

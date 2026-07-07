@@ -1065,7 +1065,7 @@ func (s *ProxyService) resolveTarget(c *gin.Context, modelName string) (*proxyTa
 		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "No enabled model configuration for this model"})
 		return nil, false
 	}
-	if user.Balance.LessThanOrEqual(decimal.Zero) {
+	if !PersonalModeEnabled() && user.Balance.LessThanOrEqual(decimal.Zero) {
 		c.JSON(http.StatusPaymentRequired, gin.H{"error": "Insufficient balance"})
 		return nil, false
 	}
@@ -1443,6 +1443,9 @@ func applyReferralCommission(tx *gorm.DB, user *model.User, tokenLogID uint, cos
 }
 
 func userChannelMultiplier(channel *model.Channel) decimal.Decimal {
+	if PersonalModeEnabled() {
+		return decimal.NewFromInt(1)
+	}
 	if channel == nil || channel.UserChannel.ID == 0 || channel.UserChannel.Multiplier.IsZero() {
 		return decimal.NewFromInt(1)
 	}
@@ -1450,6 +1453,9 @@ func userChannelMultiplier(channel *model.Channel) decimal.Decimal {
 }
 
 func effectiveUserGroupMultiplier(user *model.User, channelID uint, modelConfigID uint) (decimal.Decimal, error) {
+	if PersonalModeEnabled() {
+		return decimal.NewFromInt(1), nil
+	}
 	multipliers, err := activeGroupMultipliers(user, channelID, modelConfigID)
 	if err != nil {
 		return decimal.Zero, err
@@ -1604,6 +1610,9 @@ func apiKeyAllowedUserChannels(apiKey *model.APIKey) string {
 }
 
 func requiredAPIKeyUserChannels(apiKey *model.APIKey) ([]uint, bool) {
+	if PersonalModeEnabled() {
+		return nil, true
+	}
 	if apiKey == nil {
 		return nil, true
 	}

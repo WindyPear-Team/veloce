@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/WindyPear-Team/flai/internal/model"
+	"github.com/WindyPear-Team/flai/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
@@ -87,7 +88,7 @@ type paymentOrderResponse struct {
 }
 
 func (api *PaymentAPI) Config(c *gin.Context) {
-	if !paymentFeatureEnabled {
+	if !paymentFeatureEnabled || service.PersonalModeEnabled() {
 		c.JSON(http.StatusOK, paymentConfigResponse{
 			Enabled:             false,
 			CurrencyDisplayName: firstNonEmptyString(settingString("payment_currency_display_name", "$"), "$"),
@@ -244,7 +245,7 @@ func (api *PaymentAPI) GetOrder(c *gin.Context) {
 }
 
 func (api *PaymentAPI) Notify(c *gin.Context) {
-	if !paymentFeatureEnabled {
+	if !paymentFeatureEnabled || service.PersonalModeEnabled() {
 		c.String(http.StatusNotFound, "payment requires premium edition")
 		return
 	}
@@ -261,7 +262,7 @@ func (api *PaymentAPI) Notify(c *gin.Context) {
 }
 
 func (api *PaymentAPI) Return(c *gin.Context) {
-	if !paymentFeatureEnabled {
+	if !paymentFeatureEnabled || service.PersonalModeEnabled() {
 		c.Redirect(http.StatusFound, "/dashboard/wallet?payment=failed")
 		return
 	}
@@ -336,7 +337,7 @@ func handleYipayCallback(c *gin.Context) (bool, error) {
 }
 
 func currentPaymentConfig() paymentConfig {
-	if !paymentFeatureEnabled {
+	if !paymentFeatureEnabled || service.PersonalModeEnabled() {
 		return paymentConfig{
 			Enabled:             false,
 			Provider:            paymentProviderYipay,
@@ -370,7 +371,7 @@ func currentPaymentConfig() paymentConfig {
 }
 
 func requirePaymentFeature(c *gin.Context) bool {
-	if paymentFeatureEnabled {
+	if paymentFeatureEnabled && !service.PersonalModeEnabled() {
 		return true
 	}
 	c.JSON(http.StatusForbidden, gin.H{"error": "Payment requires premium edition"})

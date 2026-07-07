@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/WindyPear-Team/flai/internal/model"
+	"github.com/WindyPear-Team/flai/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
@@ -177,7 +178,7 @@ func buildOpenPaymentPaymentParams(c *gin.Context, cfg paymentConfig, order mode
 }
 
 func (api *PaymentAPI) OpenPaymentSubmit(c *gin.Context) {
-	if !paymentFeatureEnabled {
+	if !paymentFeatureEnabled || service.PersonalModeEnabled() {
 		c.String(http.StatusNotFound, "payment requires premium edition")
 		return
 	}
