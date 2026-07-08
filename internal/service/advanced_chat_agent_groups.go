@@ -21,7 +21,6 @@ const (
 	advancedChatAgentDelegateToolName = "agent_delegate"
 	advancedChatAgentSplitToolName    = "agent_split"
 	advancedChatDelegatedToolWait     = 45 * time.Second
-	advancedChatDelegatedAgentTimeout = agentGroupRequestTimeout
 )
 
 var advancedChatAgentGroupIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,80}$`)
@@ -849,7 +848,7 @@ func appendAdvancedChatAgentStudioMutationLog(content string, mutations []advanc
 }
 
 func newAdvancedChatDelegatedAgentContext(runID string, userID uint) (context.Context, context.CancelFunc) {
-	ctx, cancel := context.WithTimeout(context.Background(), advancedChatDelegatedAgentTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(advancedChatAgentGroupRunTimeoutSeconds())*time.Second)
 	runID = strings.TrimSpace(runID)
 	if runID == "" || userID == 0 {
 		return ctx, cancel

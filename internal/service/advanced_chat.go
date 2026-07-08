@@ -117,6 +117,8 @@ type advancedChatAdminSettingsResponse struct {
 	FileStorageAutoSaveVideosEnabled     bool                    `json:"file_storage_auto_save_videos_enabled"`
 	BuiltinMCPServers                    []AdvancedChatMCPServer `json:"builtin_mcp_servers"`
 	AssistantModeEnabled                 bool                    `json:"assistant_mode_enabled"`
+	AssistantRunTimeoutSeconds           int                     `json:"assistant_run_timeout_seconds"`
+	AgentGroupRunTimeoutSeconds          int                     `json:"agent_group_run_timeout_seconds"`
 	AssistantMCPToolsEnabled             bool                    `json:"assistant_mcp_tools_enabled"`
 	AssistantConnectorListFilesEnabled   bool                    `json:"assistant_connector_list_files_enabled"`
 	AssistantConnectorReadFileEnabled    bool                    `json:"assistant_connector_read_file_enabled"`
@@ -168,6 +170,8 @@ type advancedChatAdminSettingsInput struct {
 	FileStorageAutoSaveVideosEnabled     *bool                   `json:"file_storage_auto_save_videos_enabled"`
 	BuiltinMCPServers                    []AdvancedChatMCPServer `json:"builtin_mcp_servers"`
 	AssistantModeEnabled                 *bool                   `json:"assistant_mode_enabled"`
+	AssistantRunTimeoutSeconds           *int                    `json:"assistant_run_timeout_seconds"`
+	AgentGroupRunTimeoutSeconds          *int                    `json:"agent_group_run_timeout_seconds"`
 	AssistantMCPToolsEnabled             *bool                   `json:"assistant_mcp_tools_enabled"`
 	AssistantConnectorListFilesEnabled   *bool                   `json:"assistant_connector_list_files_enabled"`
 	AssistantConnectorReadFileEnabled    *bool                   `json:"assistant_connector_read_file_enabled"`
@@ -201,6 +205,8 @@ const (
 	advancedChatFileStorageAutoSaveVideosEnabledKey     = "advanced_chat_file_storage_auto_save_videos_enabled"
 	advancedChatBuiltinMCPServersKey                    = "advanced_chat_builtin_mcp_servers"
 	advancedChatAssistantModeEnabledKey                 = "advanced_chat_assistant_mode_enabled"
+	advancedChatAssistantRunTimeoutSecondsKey           = "advanced_chat_assistant_run_timeout_seconds"
+	advancedChatAgentGroupRunTimeoutSecondsKey          = "advanced_chat_agent_group_run_timeout_seconds"
 	advancedChatAssistantMCPToolsEnabledKey             = "advanced_chat_assistant_mcp_tools_enabled"
 	advancedChatAssistantConnectorListFilesEnabledKey   = "advanced_chat_assistant_connector_list_files_enabled"
 	advancedChatAssistantConnectorReadFileEnabledKey    = "advanced_chat_assistant_connector_read_file_enabled"
@@ -216,6 +222,10 @@ const (
 	advancedChatDefaultAttachmentMaxMB                  = 10
 	advancedChatDefaultFileStorageTotalMB               = 100
 	advancedChatDefaultAttachmentTypes                  = "text/plain,text/markdown,application/json,text/csv,image/png,image/jpeg,application/pdf"
+	advancedChatDefaultAssistantRunTimeoutSeconds       = 1800
+	advancedChatDefaultAgentGroupRunTimeoutSeconds      = 3600
+	advancedChatMinAssistantRunTimeoutSeconds           = 300
+	advancedChatMaxAssistantRunTimeoutSeconds           = 86400
 	advancedChatMCPModeBackend                          = "backend"
 	advancedChatMCPModeFrontend                         = "frontend"
 )
@@ -351,6 +361,27 @@ func (api *advancedChatAPI) updateAdminSettings(c *gin.Context) {
 			return
 		}
 		if err := model.SetSystemSetting(advancedChatFileStorageTotalMBKey, strconv.Itoa(*input.FileStorageTotalMB)); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update advanced chat settings"})
+			return
+		}
+	}
+
+	if input.AssistantRunTimeoutSeconds != nil {
+		if !validAdvancedChatRunTimeoutSeconds(*input.AssistantRunTimeoutSeconds) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Assistant run timeout must be between 300 and 86400 seconds"})
+			return
+		}
+		if err := model.SetSystemSetting(advancedChatAssistantRunTimeoutSecondsKey, strconv.Itoa(*input.AssistantRunTimeoutSeconds)); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update advanced chat settings"})
+			return
+		}
+	}
+	if input.AgentGroupRunTimeoutSeconds != nil {
+		if !validAdvancedChatRunTimeoutSeconds(*input.AgentGroupRunTimeoutSeconds) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Studio run timeout must be between 300 and 86400 seconds"})
+			return
+		}
+		if err := model.SetSystemSetting(advancedChatAgentGroupRunTimeoutSecondsKey, strconv.Itoa(*input.AgentGroupRunTimeoutSeconds)); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update advanced chat settings"})
 			return
 		}
@@ -845,6 +876,8 @@ func currentAdvancedChatAdminSettings() advancedChatAdminSettingsResponse {
 		FileStorageAutoSaveVideosEnabled:     advancedChatFileStorageAutoSaveVideosEnabled(),
 		BuiltinMCPServers:                    advancedChatBuiltinMCPServers(true),
 		AssistantModeEnabled:                 advancedChatAssistantModeEnabled(),
+		AssistantRunTimeoutSeconds:           advancedChatAssistantRunTimeoutSeconds(),
+		AgentGroupRunTimeoutSeconds:          advancedChatAgentGroupRunTimeoutSeconds(),
 		AssistantMCPToolsEnabled:             advancedChatAssistantMCPToolsEnabled(),
 		AssistantConnectorListFilesEnabled:   advancedChatAssistantConnectorListFilesEnabled(),
 		AssistantConnectorReadFileEnabled:    advancedChatAssistantConnectorReadFileEnabled(),
@@ -971,6 +1004,28 @@ func advancedChatAssistantModeEnabled() bool {
 	return advancedChatSettingBool(advancedChatAssistantModeEnabledKey, true)
 }
 
+func advancedChatAssistantRunTimeoutSeconds() int {
+	return advancedChatSettingInt(
+		advancedChatAssistantRunTimeoutSecondsKey,
+		advancedChatDefaultAssistantRunTimeoutSeconds,
+		advancedChatMinAssistantRunTimeoutSeconds,
+		advancedChatMaxAssistantRunTimeoutSeconds,
+	)
+}
+
+func advancedChatAgentGroupRunTimeoutSeconds() int {
+	return advancedChatSettingInt(
+		advancedChatAgentGroupRunTimeoutSecondsKey,
+		advancedChatDefaultAgentGroupRunTimeoutSeconds,
+		advancedChatMinAssistantRunTimeoutSeconds,
+		advancedChatMaxAssistantRunTimeoutSeconds,
+	)
+}
+
+func validAdvancedChatRunTimeoutSeconds(value int) bool {
+	return value >= advancedChatMinAssistantRunTimeoutSeconds && value <= advancedChatMaxAssistantRunTimeoutSeconds
+}
+
 func advancedChatAssistantMCPToolsEnabled() bool {
 	return advancedChatSettingBool(advancedChatAssistantMCPToolsEnabledKey, true)
 }
@@ -1079,6 +1134,20 @@ func advancedChatSettingBool(key string, fallback bool) bool {
 	default:
 		return fallback
 	}
+}
+
+func advancedChatSettingInt(key string, fallback, min, max int) int {
+	value, err := strconv.Atoi(strings.TrimSpace(model.GetSystemSetting(key, strconv.Itoa(fallback))))
+	if err != nil {
+		return fallback
+	}
+	if value < min {
+		return min
+	}
+	if value > max {
+		return max
+	}
+	return value
 }
 
 func advancedChatBuiltinMCPServers(includeHeaders bool) []AdvancedChatMCPServer {
