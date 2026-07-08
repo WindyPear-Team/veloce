@@ -88,12 +88,17 @@ type AdvancedChatSkill struct {
 }
 
 type AdvancedChatMCPServer struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	URL         string `json:"url,omitempty"`
-	Headers     string `json:"headers,omitempty"`
-	Enabled     bool   `json:"enabled"`
-	RequestMode string `json:"request_mode"`
+	ID          string            `json:"id"`
+	Name        string            `json:"name"`
+	Type        string            `json:"type,omitempty"`
+	URL         string            `json:"url,omitempty"`
+	Headers     string            `json:"headers,omitempty"`
+	Command     string            `json:"command,omitempty"`
+	Args        []string          `json:"args,omitempty"`
+	Env         map[string]string `json:"env,omitempty"`
+	Cwd         string            `json:"cwd,omitempty"`
+	Enabled     bool              `json:"enabled"`
+	RequestMode string            `json:"request_mode"`
 }
 
 type advancedChatAPI struct{}
@@ -228,6 +233,8 @@ const (
 	advancedChatMaxAssistantRunTimeoutSeconds           = 86400
 	advancedChatMCPModeBackend                          = "backend"
 	advancedChatMCPModeFrontend                         = "frontend"
+	advancedChatMCPTypeHTTP                             = "http"
+	advancedChatMCPTypeConnector                        = "connector"
 )
 
 func initAdvancedChatFeatures() error {
@@ -1231,10 +1238,6 @@ func normalizeMCPServerList(input []AdvancedChatMCPServer, requestMode string, i
 		if name == "" || len([]rune(name)) > 100 {
 			return nil, false
 		}
-		endpoint := strings.TrimSpace(item.URL)
-		if endpoint == "" || len(endpoint) > 2000 || !validMCPServerURL(endpoint) {
-			return nil, false
-		}
 		id := strings.TrimSpace(item.ID)
 		if id == "" {
 			id = "mcp-" + strconv.FormatInt(now+int64(index), 36)
@@ -1246,8 +1249,31 @@ func normalizeMCPServerList(input []AdvancedChatMCPServer, requestMode string, i
 			return nil, false
 		}
 		seenIDs[id] = struct{}{}
+		serverType := normalizeMCPServerType(item.Type)
+		mode := requestMode
+		if serverType == advancedChatMCPTypeConnector {
+			mode = advancedChatMCPTypeConnector
+		}
+		endpoint := ""
 		headers := ""
-		if includeHeaders {
+		command := ""
+		args := []string(nil)
+		env := map[string]string(nil)
+		cwd := ""
+		if serverType == advancedChatMCPTypeHTTP {
+			endpoint = strings.TrimSpace(item.URL)
+			if endpoint == "" || len(endpoint) > 2000 || !validMCPServerURL(endpoint) {
+				return nil, false
+			}
+		}
+		if serverType == advancedChatMCPTypeConnector {
+			var ok bool
+			command, args, env, cwd, ok = normalizeConnectorMCPCommand(item)
+			if !ok {
+				return nil, false
+			}
+		}
+		if includeHeaders && serverType == advancedChatMCPTypeHTTP {
 			headers = strings.TrimSpace(item.Headers)
 			if len(headers) > 4000 {
 				return nil, false
@@ -1256,13 +1282,64 @@ func normalizeMCPServerList(input []AdvancedChatMCPServer, requestMode string, i
 		servers = append(servers, AdvancedChatMCPServer{
 			ID:          id,
 			Name:        name,
+			Type:        serverType,
 			URL:         endpoint,
 			Headers:     headers,
+			Command:     command,
+			Args:        args,
+			Env:         env,
+			Cwd:         cwd,
 			Enabled:     item.Enabled,
-			RequestMode: requestMode,
+			RequestMode: mode,
 		})
 	}
 	return servers, true
+}
+
+func normalizeMCPServerType(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case advancedChatMCPTypeConnector:
+		return advancedChatMCPTypeConnector
+	default:
+		return advancedChatMCPTypeHTTP
+	}
+}
+
+func normalizeConnectorMCPCommand(item AdvancedChatMCPServer) (string, []string, map[string]string, string, bool) {
+	command := strings.TrimSpace(item.Command)
+	if command == "" || len(command) > 300 {
+		return "", nil, nil, "", false
+	}
+	if len(item.Args) > 64 {
+		return "", nil, nil, "", false
+	}
+	args := make([]string, 0, len(item.Args))
+	for _, arg := range item.Args {
+		arg = strings.TrimSpace(arg)
+		if len(arg) > 1000 {
+			return "", nil, nil, "", false
+		}
+		args = append(args, arg)
+	}
+	env := map[string]string(nil)
+	if len(item.Env) > 50 {
+		return "", nil, nil, "", false
+	}
+	if len(item.Env) > 0 {
+		env = make(map[string]string, len(item.Env))
+		for key, value := range item.Env {
+			key = strings.TrimSpace(key)
+			if key == "" || len(key) > 120 || len(value) > 4000 || strings.ContainsAny(key, "=\x00") || strings.Contains(value, "\x00") {
+				return "", nil, nil, "", false
+			}
+			env[key] = value
+		}
+	}
+	cwd := strings.TrimSpace(item.Cwd)
+	if len(cwd) > 1000 || strings.Contains(cwd, "\x00") {
+		return "", nil, nil, "", false
+	}
+	return command, args, env, cwd, true
 }
 
 func validMCPServerURL(raw string) bool {

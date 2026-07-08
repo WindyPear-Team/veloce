@@ -82,7 +82,7 @@ type advancedChatCompletionToolCall struct {
 
 type mcpToolBinding struct {
 	Server AdvancedChatMCPServer
-	Client *mcpClient
+	Client mcpToolClient
 	Tool   mcpTool
 }
 
@@ -236,7 +236,7 @@ func (api *advancedChatAPI) completeChat(c *gin.Context) {
 			return
 		}
 	}
-	tools, bindings, err := listAdvancedChatMCPTools(ctx, servers)
+	tools, bindings, err := listAdvancedChatMCPTools(ctx, user.ID, "", nil, servers)
 	if err != nil {
 		message := "Failed to load MCP tools: " + err.Error()
 		if streamWriter != nil {
@@ -505,11 +505,17 @@ func loadAdvancedChatMCPServersForCall(userID uint, ids []string) ([]AdvancedCha
 	return result, nil
 }
 
-func listAdvancedChatMCPTools(ctx context.Context, servers []AdvancedChatMCPServer) ([]ChatExecutorTool, map[string]mcpToolBinding, error) {
+func listAdvancedChatMCPTools(ctx context.Context, userID uint, runID string, connectorDevice *AdvancedChatConnectorDevice, servers []AdvancedChatMCPServer) ([]ChatExecutorTool, map[string]mcpToolBinding, error) {
 	tools := []ChatExecutorTool{}
 	bindings := map[string]mcpToolBinding{}
 	for _, server := range servers {
-		client := newMCPClient(server.URL, parseMCPHeaders(server.Headers))
+		var client mcpToolClient
+		switch normalizeMCPServerType(server.Type) {
+		case advancedChatMCPTypeConnector:
+			client = newConnectorMCPClient(userID, runID, connectorDevice, server)
+		default:
+			client = newMCPClient(server.URL, parseMCPHeaders(server.Headers))
+		}
 		serverTools, err := client.listTools(ctx)
 		if err != nil {
 			return nil, nil, fmt.Errorf("%s: %w", server.Name, err)

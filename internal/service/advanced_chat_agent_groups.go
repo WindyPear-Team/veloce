@@ -672,7 +672,7 @@ func executeAdvancedChatAgentDelegate(ctx context.Context, user *model.User, inp
 		tools := append([]ChatExecutorTool{}, input.ConnectorTools...)
 		mcpBindings := map[string]mcpToolBinding{}
 		if len(servers) > 0 {
-			mcpTools, bindings, err := listAdvancedChatMCPTools(delegatedCtx, servers)
+			mcpTools, bindings, err := listAdvancedChatMCPTools(delegatedCtx, user.ID, input.RunID, input.ConnectorDevice, servers)
 			if err != nil {
 				return "", fmt.Errorf("failed to load delegated MCP tools: %w", err)
 			}

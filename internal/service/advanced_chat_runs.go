@@ -1743,7 +1743,7 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 	}
 	if advancedChatAssistantMCPToolsEnabled() {
 		var err error
-		mcpTools, bindings, err = listAdvancedChatMCPTools(ctx, prepared.servers)
+		mcpTools, bindings, err = listAdvancedChatMCPTools(ctx, user.ID, prepared.runID, prepared.connectorDevice, prepared.servers)
 		if err != nil {
 			return nil, fmt.Errorf("Failed to load MCP tools: %w", err)
 		}

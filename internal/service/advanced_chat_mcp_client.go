@@ -37,6 +37,11 @@ type mcpToolResult struct {
 	IsError bool
 }
 
+type mcpToolClient interface {
+	listTools(ctx context.Context) ([]mcpTool, error)
+	callTool(ctx context.Context, name string, arguments map[string]interface{}) (mcpToolResult, error)
+}
+
 // mcpClient talks to a single MCP server over Streamable HTTP: every request is
 // an HTTP POST of a JSON-RPC message to the server URL, and the response is
 // either a JSON object or an SSE stream carrying the JSON-RPC response. The
@@ -150,6 +155,10 @@ func (client *mcpClient) callTool(ctx context.Context, name string, arguments ma
 	if err != nil {
 		return mcpToolResult{}, err
 	}
+	return parseMCPToolCallResult(result)
+}
+
+func parseMCPToolCallResult(result json.RawMessage) (mcpToolResult, error) {
 	var payload struct {
 		Content []struct {
 			Type string `json:"type"`
