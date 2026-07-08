@@ -2923,6 +2923,7 @@ type userChannelCatalogItem struct {
 	Description         string                              `json:"description"`
 	Enabled             bool                                `json:"enabled"`
 	Models              []string                            `json:"models"`
+	ModelIcons          map[string]string                   `json:"model_icons"`
 	VideoBillingConfigs map[string]model.VideoBillingConfig `json:"video_billing_configs"`
 }
 
@@ -2992,12 +2993,16 @@ func (api *UserChannelAPI) Catalog(c *gin.Context) {
 	response := make([]userChannelCatalogItem, 0, len(channels))
 	for _, channel := range channels {
 		modelSet := map[string]struct{}{}
+		modelIcons := map[string]string{}
 		videoBillingConfigs := map[string]model.VideoBillingConfig{}
 		for _, upstream := range channel.Channels {
 			for _, modelConfig := range upstream.Models {
 				modelName := strings.TrimSpace(modelConfig.Model.ModelName)
 				if modelName != "" {
 					modelSet[modelName] = struct{}{}
+					if iconURL := strings.TrimSpace(modelConfig.Model.ProviderIconURL); iconURL != "" {
+						modelIcons[modelName] = iconURL
+					}
 					if modelConfig.Model.QuotaType == model.QuotaTypeVideoResolutionDuration {
 						videoBillingConfigs[modelName] = model.MultiplyVideoBillingConfig(
 							modelConfig.Model.VideoBillingConfig,
@@ -3018,6 +3023,7 @@ func (api *UserChannelAPI) Catalog(c *gin.Context) {
 			Description:         channel.Description,
 			Enabled:             channel.Enabled,
 			Models:              models,
+			ModelIcons:          modelIcons,
 			VideoBillingConfigs: videoBillingConfigs,
 		})
 	}
