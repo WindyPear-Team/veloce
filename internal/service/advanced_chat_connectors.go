@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"net/http"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 
@@ -193,6 +194,23 @@ type advancedChatConnectorTaskApprovalResponse struct {
 	CreatedAt             time.Time              `json:"created_at"`
 }
 
+type advancedChatConnectorDeviceTaskResponse struct {
+	ID                    string                 `json:"id"`
+	DeviceID              string                 `json:"device_id"`
+	RunID                 string                 `json:"run_id"`
+	Action                string                 `json:"action"`
+	WorkspacePath         string                 `json:"workspace_path"`
+	WorkspaceUnrestricted bool                   `json:"workspace_unrestricted"`
+	Payload               map[string]interface{} `json:"payload"`
+	Status                string                 `json:"status"`
+	Result                string                 `json:"result,omitempty"`
+	ErrorMessage          string                 `json:"error_message,omitempty"`
+	StartedAt             *time.Time             `json:"started_at,omitempty"`
+	FinishedAt            *time.Time             `json:"finished_at,omitempty"`
+	CreatedAt             time.Time              `json:"created_at"`
+	UpdatedAt             time.Time              `json:"updated_at"`
+}
+
 type advancedChatConnectorTaskResultInput struct {
 	Success  bool   `json:"success"`
 	Result   string `json:"result"`
@@ -205,6 +223,10 @@ type advancedChatConnectorTaskResultInput struct {
 
 type advancedChatConnectorTaskDecisionInput struct {
 	Approved bool `json:"approved"`
+}
+
+type advancedChatConnectorMCPProcessStopInput struct {
+	Key string `json:"key"`
 }
 
 type advancedChatWorkspaceSkillsRefreshInput struct {
@@ -267,6 +289,19 @@ func (api *advancedChatAPI) listConnectorDevices(c *gin.Context) {
 		responses = append(responses, advancedChatConnectorDeviceResponseFromModel(device))
 	}
 	c.JSON(http.StatusOK, responses)
+}
+
+func (api *advancedChatAPI) getConnectorDevice(c *gin.Context) {
+	user, ok := currentAdvancedChatUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+	device, found := loadConnectorDeviceForResponse(c, user.ID)
+	if !found {
+		return
+	}
+	c.JSON(http.StatusOK, advancedChatConnectorDeviceResponseFromModel(device))
 }
 
 func (api *advancedChatAPI) createConnectorToken(c *gin.Context) {
@@ -389,6 +424,131 @@ func (api *advancedChatAPI) updateConnectorDevice(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, advancedChatConnectorDeviceResponseFromModel(device))
+}
+
+func (api *advancedChatAPI) listConnectorDeviceTasks(c *gin.Context) {
+	user, ok := currentAdvancedChatUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+	device, found := loadConnectorDeviceForResponse(c, user.ID)
+	if !found {
+		return
+	}
+	limit := 50
+	if raw := strings.TrimSpace(c.Query("limit")); raw != "" {
+		if value, err := strconv.Atoi(raw); err == nil && value > 0 && value <= 200 {
+			limit = value
+		}
+	}
+	var tasks []AdvancedChatConnectorTask
+	if err := model.DB.
+		Where("user_id = ? AND device_id = ?", user.ID, device.ID).
+		Order("created_at DESC").
+		Limit(limit).
+		Find(&tasks).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list connector tasks"})
+		return
+	}
+	responses := make([]advancedChatConnectorDeviceTaskResponse, 0, len(tasks))
+	for _, task := range tasks {
+		responses = append(responses, advancedChatConnectorDeviceTaskResponseFromModel(task))
+	}
+	c.JSON(http.StatusOK, responses)
+}
+
+func (api *advancedChatAPI) cancelConnectorDeviceTask(c *gin.Context) {
+	user, ok := currentAdvancedChatUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+	device, found := loadConnectorDeviceForResponse(c, user.ID)
+	if !found {
+		return
+	}
+	taskID := strings.TrimSpace(c.Param("task_id"))
+	if taskID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Task id is required"})
+		return
+	}
+	now := time.Now()
+	update := model.DB.Model(&AdvancedChatConnectorTask{}).
+		Where("id = ? AND user_id = ? AND device_id = ? AND status IN ?", taskID, user.ID, device.ID, []string{
+			advancedChatConnectorTaskStatusPendingApproval,
+			advancedChatConnectorTaskStatusQueued,
+			advancedChatConnectorTaskStatusRunning,
+		}).
+		Updates(map[string]interface{}{
+			"status":        advancedChatConnectorTaskStatusFailed,
+			"error_message": "cancelled by user",
+			"finished_at":   &now,
+			"updated_at":    now,
+		})
+	if update.Error != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to cancel connector task"})
+		return
+	}
+	if update.RowsAffected == 0 {
+		c.JSON(http.StatusConflict, gin.H{"error": "Connector task is not active or was not found"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+func (api *advancedChatAPI) listConnectorDeviceMCPProcesses(c *gin.Context) {
+	user, ok := currentAdvancedChatUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+	device, found := loadOnlineConnectorDeviceForManagement(c, user.ID)
+	if !found {
+		return
+	}
+	result, ok := callConnectorManagementTask(c, user.ID, device.ID, "list_mcp_processes", map[string]interface{}{})
+	if !ok {
+		return
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(result), &payload); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "Invalid connector MCP process response"})
+		return
+	}
+	c.JSON(http.StatusOK, payload)
+}
+
+func (api *advancedChatAPI) stopConnectorDeviceMCPProcess(c *gin.Context) {
+	user, ok := currentAdvancedChatUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+	device, found := loadOnlineConnectorDeviceForManagement(c, user.ID)
+	if !found {
+		return
+	}
+	var input advancedChatConnectorMCPProcessStopInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	key := strings.TrimSpace(input.Key)
+	if key == "" || len(key) > 80 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "MCP process key is required"})
+		return
+	}
+	result, ok := callConnectorManagementTask(c, user.ID, device.ID, "stop_mcp_process", map[string]interface{}{"key": key})
+	if !ok {
+		return
+	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal([]byte(result), &payload); err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": "Invalid connector MCP process response"})
+		return
+	}
+	c.JSON(http.StatusOK, payload)
 }
 
 func (api *advancedChatAPI) listPendingConnectorTasks(c *gin.Context) {
@@ -772,7 +932,7 @@ func (api *advancedChatAPI) connectorTaskResult(c *gin.Context) {
 	result := normalizeConnectorTaskResultText(input)
 	errMessage := normalizeConnectorTaskErrorMessage(input)
 	update := model.DB.Model(&AdvancedChatConnectorTask{}).
-		Where("id = ? AND user_id = ? AND device_id = ?", c.Param("id"), device.UserID, device.ID).
+		Where("id = ? AND user_id = ? AND device_id = ? AND status = ?", c.Param("id"), device.UserID, device.ID, advancedChatConnectorTaskStatusRunning).
 		Updates(map[string]interface{}{
 			"status":        status,
 			"result":        result,
@@ -785,7 +945,7 @@ func (api *advancedChatAPI) connectorTaskResult(c *gin.Context) {
 		return
 	}
 	if update.RowsAffected == 0 {
-		c.JSON(http.StatusNotFound, gin.H{"error": "Task not found"})
+		c.JSON(http.StatusOK, gin.H{"ok": true, "ignored": true})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
@@ -907,6 +1067,29 @@ func advancedChatConnectorTaskApprovalResponseFromModel(task AdvancedChatConnect
 	}
 }
 
+func advancedChatConnectorDeviceTaskResponseFromModel(task AdvancedChatConnectorTask) advancedChatConnectorDeviceTaskResponse {
+	payload := map[string]interface{}{}
+	if strings.TrimSpace(task.Payload) != "" {
+		_ = json.Unmarshal([]byte(task.Payload), &payload)
+	}
+	return advancedChatConnectorDeviceTaskResponse{
+		ID:                    task.ID,
+		DeviceID:              task.DeviceID,
+		RunID:                 task.RunID,
+		Action:                task.Action,
+		WorkspacePath:         task.WorkspacePath,
+		WorkspaceUnrestricted: strings.TrimSpace(task.WorkspacePath) == "",
+		Payload:               stripAdvancedChatConnectorPreviewFields(payload),
+		Status:                task.Status,
+		Result:                task.Result,
+		ErrorMessage:          task.ErrorMessage,
+		StartedAt:             task.StartedAt,
+		FinishedAt:            task.FinishedAt,
+		CreatedAt:             task.CreatedAt,
+		UpdatedAt:             task.UpdatedAt,
+	}
+}
+
 func advancedChatConnectorDeviceResponseFromModel(device AdvancedChatConnectorDevice) advancedChatConnectorDeviceResponse {
 	online := advancedChatConnectorDeviceOnline(device)
 	status := device.Status
@@ -929,6 +1112,55 @@ func advancedChatConnectorDeviceResponseFromModel(device AdvancedChatConnectorDe
 		CreatedAt:  device.CreatedAt,
 		UpdatedAt:  device.UpdatedAt,
 	}
+}
+
+func loadConnectorDeviceForResponse(c *gin.Context, userID uint) (AdvancedChatConnectorDevice, bool) {
+	deviceID := strings.TrimSpace(c.Param("id"))
+	if deviceID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Device id is required"})
+		return AdvancedChatConnectorDevice{}, false
+	}
+	var device AdvancedChatConnectorDevice
+	if err := model.DB.Where("id = ? AND user_id = ?", deviceID, userID).First(&device).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Device not found"})
+			return AdvancedChatConnectorDevice{}, false
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load connector device"})
+		return AdvancedChatConnectorDevice{}, false
+	}
+	return device, true
+}
+
+func loadOnlineConnectorDeviceForManagement(c *gin.Context, userID uint) (AdvancedChatConnectorDevice, bool) {
+	device, ok := loadConnectorDeviceForResponse(c, userID)
+	if !ok {
+		return AdvancedChatConnectorDevice{}, false
+	}
+	if !advancedChatConnectorDeviceOnline(device) {
+		c.JSON(http.StatusConflict, gin.H{"error": "Connector device is offline"})
+		return AdvancedChatConnectorDevice{}, false
+	}
+	return device, true
+}
+
+func callConnectorManagementTask(c *gin.Context, userID uint, deviceID string, action string, payload map[string]interface{}) (string, bool) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 20*time.Second)
+	defer cancel()
+	task, err := createAdvancedChatRawConnectorTask(userID, "", advancedChatConnectorToolBinding{
+		DeviceID: deviceID,
+		Action:   action,
+	}, payload, false)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create connector management task"})
+		return "", false
+	}
+	result, err := waitAdvancedChatConnectorTask(ctx, task.ID, userID)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return "", false
+	}
+	return result, true
 }
 
 func advancedChatStaticSiteResponseFromModel(site AdvancedChatStaticSite, device AdvancedChatConnectorDevice) advancedChatStaticSiteResponse {
@@ -2075,7 +2307,33 @@ func stripAdvancedChatConnectorPreviewFields(payload map[string]interface{}) map
 		if key == advancedChatConnectorPreviewOldContent || key == advancedChatConnectorPreviewOldContentAvailable || key == advancedChatConnectorPreviewToolCallID || key == advancedChatConnectorTaskID || key == advancedChatAgentStudioSandboxIDArg || key == advancedChatAgentStudioSandboxBackendArg || key == "packages" {
 			continue
 		}
+		if key == "server" {
+			sanitized[key] = stripAdvancedChatConnectorMCPServerPayload(value)
+			continue
+		}
 		sanitized[key] = value
+	}
+	return sanitized
+}
+
+func stripAdvancedChatConnectorMCPServerPayload(value interface{}) interface{} {
+	server, ok := value.(map[string]interface{})
+	if !ok {
+		return value
+	}
+	sanitized := make(map[string]interface{}, len(server))
+	for key, item := range server {
+		if key == "env" {
+			if env, ok := item.(map[string]interface{}); ok && len(env) > 0 {
+				redacted := make(map[string]interface{}, len(env))
+				for envKey := range env {
+					redacted[envKey] = "********"
+				}
+				sanitized[key] = redacted
+				continue
+			}
+		}
+		sanitized[key] = item
 	}
 	return sanitized
 }
@@ -2118,7 +2376,7 @@ func expandAdvancedChatConnectorToolArguments(binding advancedChatConnectorToolB
 
 func advancedChatConnectorTaskRequiresApproval(binding advancedChatConnectorToolBinding, arguments map[string]interface{}) bool {
 	switch binding.Action {
-	case "list_files", "read_file", "file_sha256", "web_search", "web_fetch", "list_agent_skills", "read_agent_skill", "list_windows_drives":
+	case "list_files", "read_file", "file_sha256", "web_search", "web_fetch", "list_agent_skills", "read_agent_skill", "read_agent_skill_resource", "sync_agent_skills", "list_windows_drives":
 		return false
 	case "list_static_sites":
 		return false
