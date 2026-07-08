@@ -192,13 +192,6 @@ type advancedChatUserSettingsInput struct {
 	TitleGenerationScope string `json:"title_generation_scope"`
 }
 
-type advancedChatSkillInput struct {
-	Name         string   `json:"name"`
-	Description  string   `json:"description"`
-	Prompt       string   `json:"prompt"`
-	MCPServerIDs []string `json:"mcp_server_ids"`
-}
-
 const (
 	advancedChatAttachmentMaxMBKey                      = "advanced_chat_attachment_max_mb"
 	advancedChatAttachmentAllowedTypesKey               = "advanced_chat_attachment_allowed_types"
@@ -233,6 +226,8 @@ func initAdvancedChatFeatures() error {
 		&AdvancedChatAgentStudio{},
 		&AdvancedChatUserSettings{},
 		&AdvancedChatSkill{},
+		&AdvancedChatSkillPackage{},
+		&AdvancedChatPackagedSkill{},
 		&AdvancedChatSession{},
 		&AdvancedChatMessage{},
 		&AdvancedChatRun{},
@@ -302,6 +297,9 @@ func registerAdvancedChatUserRoutes(group *gin.RouterGroup) {
 	group.POST("/advanced-chat/skills", api.createSkill)
 	group.PUT("/advanced-chat/skills/:id", api.updateSkill)
 	group.DELETE("/advanced-chat/skills/:id", api.deleteSkill)
+	group.GET("/advanced-chat/skill-packages", api.listSkillPackages)
+	group.POST("/advanced-chat/skill-packages", api.uploadSkillPackage)
+	group.DELETE("/advanced-chat/skill-packages/:id", api.deleteSkillPackage)
 	group.GET("/advanced-chat/deliveries", api.listDeliveries)
 	group.POST("/advanced-chat/deliveries", api.createDelivery)
 	group.PUT("/advanced-chat/deliveries/:id", api.updateDelivery)
@@ -614,144 +612,47 @@ func (api *advancedChatAPI) listSkills(c *gin.Context) {
 		return
 	}
 
-	var skills []AdvancedChatSkill
-	if err := model.DB.Where("user_id = ?", user.ID).Order("created_at ASC").Find(&skills).Error; err != nil {
+	var skills []AdvancedChatPackagedSkill
+	if err := model.DB.Where("user_id = ? AND enabled = ?", user.ID, true).Order("created_at ASC").Find(&skills).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list skills"})
 		return
 	}
-	for i := range skills {
-		skills[i].MCPServers = decodeMCPServerIDs(skills[i].MCPServerIDs)
+	result := make([]advancedChatPackagedSkillBrief, 0, len(skills))
+	for _, skill := range skills {
+		result = append(result, advancedChatPackagedSkillBrief{
+			ID:          skill.ID,
+			PackageID:   skill.PackageID,
+			Name:        skill.Name,
+			Description: skill.Description,
+			Source:      skill.Source,
+			SkillPath:   skill.SkillPath,
+			RootPath:    skill.RootPath,
+			Enabled:     skill.Enabled,
+			Size:        skill.Size,
+			Hash:        skill.Hash,
+			CreatedAt:   skill.CreatedAt,
+			UpdatedAt:   skill.UpdatedAt,
+		})
 	}
-	c.JSON(http.StatusOK, skills)
+	c.JSON(http.StatusOK, result)
 }
 
 func (api *advancedChatAPI) createSkill(c *gin.Context) {
-	user, ok := currentAdvancedChatUser(c)
-	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-		return
-	}
-
-	var input advancedChatSkillInput
-	if err := c.ShouldBindJSON(&input); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	skill, ok := advancedChatSkillFromInput(c, user.ID, input)
-	if !ok {
-		return
-	}
-	if err := model.DB.Create(&skill).Error; err != nil {
-		if isAdvancedChatUniqueConstraintError(err) {
-			c.JSON(http.StatusConflict, gin.H{"error": "Skill name already exists"})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create skill"})
-		return
-	}
-	skill.MCPServers = decodeMCPServerIDs(skill.MCPServerIDs)
-	c.JSON(http.StatusOK, skill)
+	c.JSON(http.StatusGone, gin.H{"error": "Manual skills are no longer supported. Upload a skill package instead."})
 }
 
 func (api *advancedChatAPI) updateSkill(c *gin.Context) {
-	user, ok := currentAdvancedChatUser(c)
-	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-		return
-	}
-
-	var skill AdvancedChatSkill
-	if err := model.DB.Where("id = ? AND user_id = ?", c.Param("id"), user.ID).First(&skill).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			c.JSON(http.StatusNotFound, gin.H{"error": "Skill not found"})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load skill"})
-		return
-	}
-
-	var input advancedChatSkillInput
-	if err := c.ShouldBindJSON(&input); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	next, ok := advancedChatSkillFromInput(c, user.ID, input)
-	if !ok {
-		return
-	}
-	if err := model.DB.Model(&skill).Updates(map[string]interface{}{
-		"name":           next.Name,
-		"description":    next.Description,
-		"prompt":         next.Prompt,
-		"mcp_server_ids": next.MCPServerIDs,
-	}).Error; err != nil {
-		if isAdvancedChatUniqueConstraintError(err) {
-			c.JSON(http.StatusConflict, gin.H{"error": "Skill name already exists"})
-			return
-		}
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update skill"})
-		return
-	}
-	model.DB.First(&skill, skill.ID)
-	skill.MCPServers = decodeMCPServerIDs(skill.MCPServerIDs)
-	c.JSON(http.StatusOK, skill)
+	c.JSON(http.StatusGone, gin.H{"error": "Manual skills are no longer supported. Upload a skill package instead."})
 }
 
 func (api *advancedChatAPI) deleteSkill(c *gin.Context) {
-	user, ok := currentAdvancedChatUser(c)
-	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
-		return
-	}
-	if err := model.DB.Where("id = ? AND user_id = ?", c.Param("id"), user.ID).Delete(&AdvancedChatSkill{}).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete skill"})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"message": "Skill deleted"})
+	c.JSON(http.StatusGone, gin.H{"error": "Manual skills are no longer supported. Delete the containing skill package instead."})
 }
 
-func advancedChatSkillFromInput(c *gin.Context, userID uint, input advancedChatSkillInput) (AdvancedChatSkill, bool) {
-	name := strings.TrimSpace(input.Name)
-	if name == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Skill name is required"})
-		return AdvancedChatSkill{}, false
-	}
-	if len([]rune(name)) > 100 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Skill name is too long"})
-		return AdvancedChatSkill{}, false
-	}
-	description := strings.TrimSpace(input.Description)
-	if len([]rune(description)) > 2000 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Skill description is too long"})
-		return AdvancedChatSkill{}, false
-	}
-	prompt := strings.TrimSpace(input.Prompt)
-	if len([]rune(prompt)) > 20000 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Skill prompt is too long"})
-		return AdvancedChatSkill{}, false
-	}
-	serverIDs, ok := normalizeSkillMCPServerIDs(c, userID, input.MCPServerIDs)
-	if !ok {
-		return AdvancedChatSkill{}, false
-	}
-	encoded, err := json.Marshal(serverIDs)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to encode MCP servers"})
-		return AdvancedChatSkill{}, false
-	}
-	return AdvancedChatSkill{
-		UserID:       userID,
-		Name:         name,
-		Description:  description,
-		Prompt:       prompt,
-		MCPServerIDs: string(encoded),
-	}, true
-}
-
-// normalizeSkillMCPServerIDs validates referenced MCP server ids against the
-// set of servers available to the user (admin builtin + user custom) and
+// normalizeAdvancedChatMCPServerIDs validates referenced MCP server ids against
+// the set of servers available to the user (admin builtin + user custom) and
 // returns a deduplicated, order-preserving list.
-func normalizeSkillMCPServerIDs(c *gin.Context, userID uint, ids []string) ([]string, bool) {
+func normalizeAdvancedChatMCPServerIDs(c *gin.Context, userID uint, ids []string) ([]string, bool) {
 	if len(ids) > 20 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Too many MCP servers"})
 		return nil, false
@@ -831,7 +732,7 @@ func advancedChatAgentFromInput(c *gin.Context, userID uint, input advancedChatA
 			return AdvancedChatAgent{}, false
 		}
 	}
-	mcpServerIDs, ok := normalizeSkillMCPServerIDs(c, userID, input.MCPServerIDs)
+	mcpServerIDs, ok := normalizeAdvancedChatMCPServerIDs(c, userID, input.MCPServerIDs)
 	if !ok {
 		return AdvancedChatAgent{}, false
 	}

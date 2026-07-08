@@ -12,6 +12,7 @@ var (
 	Environment  string
 	Port         string
 	DBPath       string
+	DataPath     string
 	JWTSecret    string
 	OIDCIssuer   string
 	OIDCClientID string
@@ -31,6 +32,7 @@ func Init() {
 	Environment = getEnv("APP_ENV", "development")
 	Port = getEnv("PORT", "8080")
 	DBPath = getEnv("DB_PATH", "flai.db")
+	DataPath = getEnv("DATA_PATH", "data")
 	JWTSecret = getEnv("JWT_SECRET", "change-me-please")
 	if requiresSecureSecrets(Environment) && JWTSecret == "change-me-please" {
 		log.Fatal("JWT_SECRET must be set to a secure value outside development")

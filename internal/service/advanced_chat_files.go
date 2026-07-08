@@ -13,13 +13,16 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"os"
 	"path"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
+	"github.com/WindyPear-Team/flai/internal/config"
 	"github.com/WindyPear-Team/flai/internal/model"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -46,6 +49,7 @@ type AdvancedChatFile struct {
 	MIMEType    string     `gorm:"size:120;not null" json:"mime_type"`
 	Size        int64      `gorm:"not null" json:"size"`
 	Data        []byte     `gorm:"type:blob;not null" json:"-"`
+	StoragePath string     `gorm:"type:text;not null;default:''" json:"-"`
 	TextExtract string     `gorm:"type:text;not null" json:"-"`
 	Hash        string     `gorm:"index;size:64;not null" json:"-"`
 	Source      string     `gorm:"size:60;not null" json:"source"`
@@ -216,7 +220,12 @@ func (api *advancedChatAPI) downloadFile(c *gin.Context) {
 		name = "file"
 	}
 	c.Header("Content-Disposition", `attachment; filename="`+name+`"; filename*=UTF-8''`+url.PathEscape(file.Name))
-	c.Data(http.StatusOK, file.MIMEType, file.Data)
+	data, err := advancedChatFileData(file)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to read file"})
+		return
+	}
+	c.Data(http.StatusOK, file.MIMEType, data)
 }
 
 func (api *advancedChatAPI) deleteFile(c *gin.Context) {
@@ -229,10 +238,16 @@ func (api *advancedChatAPI) deleteFile(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "File storage is disabled"})
 		return
 	}
-	if err := model.DB.Where("id = ? AND user_id = ?", c.Param("id"), user.ID).Delete(&AdvancedChatFile{}).Error; err != nil {
+	var file AdvancedChatFile
+	if err := model.DB.Where("id = ? AND user_id = ?", c.Param("id"), user.ID).First(&file).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "File not found"})
+		return
+	}
+	if err := model.DB.Where("id = ? AND user_id = ?", file.ID, user.ID).Delete(&AdvancedChatFile{}).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete file"})
 		return
 	}
+	_ = removeAdvancedChatStoragePath(file.StoragePath)
 	c.JSON(http.StatusOK, gin.H{
 		"message":         "File deleted",
 		"used_bytes":      advancedChatFileStorageUsedBytes(user.ID),
@@ -268,20 +283,33 @@ func storeAdvancedChatFile(userID uint, input advancedChatFileStoreInput) (Advan
 		sourceKey = source + ":" + id
 	}
 	hash := sha256.Sum256(input.Data)
+	storagePath := advancedChatFileStoragePath(userID, id, name)
 	file := AdvancedChatFile{
 		ID:          id,
 		UserID:      userID,
 		Name:        name,
 		MIMEType:    mimeType,
 		Size:        size,
-		Data:        input.Data,
+		Data:        []byte{},
+		StoragePath: storagePath,
 		TextExtract: advancedChatFileTextExtract(input.Data, mimeType, name),
 		Hash:        hex.EncodeToString(hash[:]),
 		Source:      source,
 		SourceKey:   sourceKey,
 	}
 
-	err := model.DB.Transaction(func(tx *gorm.DB) error {
+	tempPath, err := writeAdvancedChatStorageFileTemp(storagePath, input.Data)
+	if err != nil {
+		return AdvancedChatFile{}, http.StatusInternalServerError, "Failed to save file", err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = os.Remove(tempPath)
+		}
+	}()
+
+	err = model.DB.Transaction(func(tx *gorm.DB) error {
 		var existing AdvancedChatFile
 		if err := tx.Where("user_id = ? AND source_key = ?", userID, sourceKey).First(&existing).Error; err == nil {
 			file = existing
@@ -297,7 +325,14 @@ func storeAdvancedChatFile(userID uint, input advancedChatFileStoreInput) (Advan
 			Scan(&used).Error; err != nil {
 			return err
 		}
-		if used+size > advancedChatFileStorageTotalBytes() {
+		var packageUsed int64
+		if err := tx.Model(&AdvancedChatSkillPackage{}).
+			Where("user_id = ?", userID).
+			Select("COALESCE(SUM(size), 0)").
+			Scan(&packageUsed).Error; err != nil {
+			return err
+		}
+		if used+packageUsed+size > advancedChatFileStorageTotalBytes() {
 			return errAdvancedChatFileInsufficient
 		}
 		return tx.Create(&file).Error
@@ -313,6 +348,16 @@ func storeAdvancedChatFile(userID uint, input advancedChatFileStoreInput) (Advan
 			}
 		}
 		return AdvancedChatFile{}, http.StatusInternalServerError, "Failed to save file", err
+	}
+	if file.ID == id {
+		if err := commitAdvancedChatStorageFile(tempPath, storagePath); err != nil {
+			_ = model.DB.Where("id = ? AND user_id = ?", file.ID, userID).Delete(&AdvancedChatFile{}).Error
+			return AdvancedChatFile{}, http.StatusInternalServerError, "Failed to save file", err
+		}
+		committed = true
+	} else {
+		_ = os.Remove(tempPath)
+		committed = true
 	}
 	return file, http.StatusOK, "", nil
 }
@@ -384,10 +429,14 @@ func advancedChatImageAttachmentParts(userID uint, content string) []ChatExecuto
 		if !ok || !strings.HasPrefix(strings.ToLower(file.MIMEType), "image/") || file.Size > advancedChatVisionAttachmentMaxBytes {
 			continue
 		}
+		data, err := advancedChatFileData(file)
+		if err != nil || int64(len(data)) != file.Size {
+			continue
+		}
 		parts = append(parts, ChatExecutorContentPart{
 			Type:     "image",
 			MIMEType: file.MIMEType,
-			Data:     base64.StdEncoding.EncodeToString(file.Data),
+			Data:     base64.StdEncoding.EncodeToString(data),
 		})
 	}
 	return parts
@@ -450,6 +499,109 @@ func advancedChatFileStorageTotalBytes() int64 {
 	return int64(advancedChatFileStorageTotalMB()) * 1024 * 1024
 }
 
+func advancedChatStorageRoot() string {
+	root := strings.TrimSpace(config.DataPath)
+	if root == "" {
+		root = "data"
+	}
+	return filepath.Clean(root)
+}
+
+func advancedChatStorageAbsPath(relativePath string) (string, error) {
+	relativePath = strings.TrimSpace(strings.ReplaceAll(relativePath, "\\", "/"))
+	if relativePath == "" || strings.HasPrefix(relativePath, "/") || strings.Contains(relativePath, "\x00") {
+		return "", errors.New("invalid storage path")
+	}
+	cleaned := path.Clean("/" + relativePath)
+	cleaned = strings.TrimPrefix(cleaned, "/")
+	if cleaned == "" || cleaned == "." || strings.HasPrefix(cleaned, "../") {
+		return "", errors.New("invalid storage path")
+	}
+	root, err := filepath.Abs(advancedChatStorageRoot())
+	if err != nil {
+		return "", err
+	}
+	target, err := filepath.Abs(filepath.Join(root, filepath.FromSlash(cleaned)))
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(root, target)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+		return "", errors.New("storage path escapes data root")
+	}
+	return target, nil
+}
+
+func advancedChatFileStoragePath(userID uint, fileID string, name string) string {
+	return path.Join("advanced-chat", "files", strconv.FormatUint(uint64(userID), 10), fileID, sanitizeAdvancedChatFileName(name, ""))
+}
+
+func writeAdvancedChatStorageFileTemp(relativePath string, data []byte) (string, error) {
+	target, err := advancedChatStorageAbsPath(relativePath)
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Dir(target)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	temp, err := os.CreateTemp(dir, ".tmp-*")
+	if err != nil {
+		return "", err
+	}
+	tempPath := temp.Name()
+	if _, err := temp.Write(data); err != nil {
+		_ = temp.Close()
+		_ = os.Remove(tempPath)
+		return "", err
+	}
+	if err := temp.Close(); err != nil {
+		_ = os.Remove(tempPath)
+		return "", err
+	}
+	return tempPath, nil
+}
+
+func commitAdvancedChatStorageFile(tempPath string, relativePath string) error {
+	target, err := advancedChatStorageAbsPath(relativePath)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return err
+	}
+	if err := os.Rename(tempPath, target); err != nil {
+		return err
+	}
+	return nil
+}
+
+func advancedChatFileData(file AdvancedChatFile) ([]byte, error) {
+	if strings.TrimSpace(file.StoragePath) != "" {
+		target, err := advancedChatStorageAbsPath(file.StoragePath)
+		if err != nil {
+			return nil, err
+		}
+		return os.ReadFile(target)
+	}
+	return file.Data, nil
+}
+
+func removeAdvancedChatStoragePath(relativePath string) error {
+	if strings.TrimSpace(relativePath) == "" {
+		return nil
+	}
+	target, err := advancedChatStorageAbsPath(relativePath)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	_ = os.Remove(filepath.Dir(target))
+	return nil
+}
+
 func advancedChatFileStorageUsedBytes(userID uint) int64 {
 	var used int64
 	if err := model.DB.Model(&AdvancedChatFile{}).
@@ -458,7 +610,7 @@ func advancedChatFileStorageUsedBytes(userID uint) int64 {
 		Scan(&used).Error; err != nil {
 		return 0
 	}
-	return used
+	return used + advancedChatSkillPackageStorageUsedBytes(userID)
 }
 
 func advancedChatFileStorageRemainingBytes(userID uint) int64 {

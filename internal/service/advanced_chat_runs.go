@@ -251,7 +251,7 @@ type preparedAdvancedChatAssistantRun struct {
 	runID                    string
 	maxToolRounds            int
 	agent                    *AdvancedChatAgent
-	skills                   []AdvancedChatSkill
+	skills                   []advancedChatRuntimeSkill
 	workspaceSkills          []advancedChatWorkspaceSkill
 	agentGroups              []advancedChatAgentGroup
 	agentGroup               *advancedChatAgentGroup
@@ -966,7 +966,7 @@ func prepareAdvancedChatAssistantRun(ctx context.Context, userID uint, input adv
 	var agent *AdvancedChatAgent
 	var groupAgent *advancedChatGroupAgent
 	var selectedGroup *advancedChatAgentGroup
-	skills := []AdvancedChatSkill{}
+	skills := []advancedChatRuntimeSkill{}
 	servers := []AdvancedChatMCPServer{}
 	agentGroups := []advancedChatAgentGroup{}
 	var err error
@@ -1242,7 +1242,7 @@ func saveAdvancedChatSessionSnapshot(userID uint, sessionID string, input advanc
 	if agent != nil {
 		skillIDs = uniqueStringsLocal(append(decodeStringList(agent.SkillIDs), skillIDs...))
 	}
-	skills := []AdvancedChatSkill{}
+	skills := []advancedChatRuntimeSkill{}
 	if len(skillIDs) > 0 {
 		var err error
 		skills, err = loadAdvancedChatSkills(userID, skillIDs)
@@ -1763,6 +1763,10 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 	if len(connectorTools) > 0 {
 		tools = append(tools, connectorTools...)
 	}
+	hasSkillCatalog := len(prepared.skills) > 0 || len(prepared.workspaceSkills) > 0
+	if hasSkillCatalog {
+		tools = append(tools, advancedChatSkillTools(true)...)
+	}
 	if len(prepared.agentGroups) > 0 && studioCanDelegate {
 		tools = append(tools, advancedChatAgentDelegateTool(prepared.agentGroups))
 	}
@@ -1906,6 +1910,8 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 			interruptExists := toolCall.Name == advancedChatAgentStudioInterruptToolName && studioRoleActive
 			queryStatusExists := toolCall.Name == advancedChatAgentStudioQueryStatusToolName && studioRoleActive
 			resumeExists := toolCall.Name == advancedChatAgentStudioResumeToolName && studioRoleActive
+			activateSkillExists := toolCall.Name == advancedChatActivateSkillToolName && hasSkillCatalog
+			readSkillResourceExists := toolCall.Name == advancedChatReadSkillResourceToolName && hasSkillCatalog
 			detail := advancedChatCompletionToolCall{ID: toolCall.ID, Round: round + 1, Name: toolCall.Name, Status: "running"}
 			precreatedConnectorTaskID := ""
 			var precreateConnectorTaskErr error
@@ -1937,6 +1943,12 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 			} else if resumeExists {
 				detail.Server = "agent studio"
 				detail.Tool = "resume_sub_agents"
+			} else if activateSkillExists {
+				detail.Server = "skills"
+				detail.Tool = advancedChatActivateSkillToolName
+			} else if readSkillResourceExists {
+				detail.Server = "skills"
+				detail.Tool = advancedChatReadSkillResourceToolName
 			}
 			arguments, argumentsErr := parseToolArguments(toolCall.Arguments)
 			if argumentsErr == nil {
@@ -2169,6 +2181,36 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 					if err != nil {
 						detail.Status = "error"
 						toolResultText = "Sub-agent resume failed: " + err.Error()
+					} else {
+						detail.Status = "ok"
+					}
+				}
+			} else if activateSkillExists {
+				detail.Server = "skills"
+				detail.Tool = advancedChatActivateSkillToolName
+				if argumentsErr != nil {
+					detail.Status = "invalid_arguments"
+					toolResultText = "Invalid skill activation arguments: " + argumentsErr.Error()
+				} else {
+					toolResultText, err = activateAdvancedChatSkill(ctx, user.ID, prepared.connectorDevice, prepared.connectorWorkspace, prepared.workspaceSkills, arguments)
+					if err != nil {
+						detail.Status = "error"
+						toolResultText = "Skill activation failed: " + err.Error()
+					} else {
+						detail.Status = "ok"
+					}
+				}
+			} else if readSkillResourceExists {
+				detail.Server = "skills"
+				detail.Tool = advancedChatReadSkillResourceToolName
+				if argumentsErr != nil {
+					detail.Status = "invalid_arguments"
+					toolResultText = "Invalid skill resource arguments: " + argumentsErr.Error()
+				} else {
+					toolResultText, err = readAdvancedChatSkillResource(ctx, user.ID, prepared.connectorDevice, prepared.connectorWorkspace, prepared.workspaceSkills, arguments)
+					if err != nil {
+						detail.Status = "error"
+						toolResultText = "Skill resource read failed: " + err.Error()
 					} else {
 						detail.Status = "ok"
 					}

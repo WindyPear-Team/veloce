@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -87,6 +86,13 @@ type mcpToolBinding struct {
 	Server AdvancedChatMCPServer
 	Client *mcpClient
 	Tool   mcpTool
+}
+
+type advancedChatRuntimeSkill struct {
+	ID          string
+	Name        string
+	Description string
+	Source      string
 }
 
 type advancedChatSSEWriter struct {
@@ -444,25 +450,35 @@ func loadAdvancedChatAgent(userID uint, rawID string) (*AdvancedChatAgent, error
 	return &agent, nil
 }
 
-func loadAdvancedChatSkills(userID uint, rawIDs []string) ([]AdvancedChatSkill, error) {
+func loadAdvancedChatSkills(userID uint, rawIDs []string) ([]advancedChatRuntimeSkill, error) {
 	ids := uniqueStringsLocal(rawIDs)
 	if len(ids) == 0 {
-		return []AdvancedChatSkill{}, nil
+		return []advancedChatRuntimeSkill{}, nil
 	}
-	var skills []AdvancedChatSkill
-	if err := model.DB.Where("user_id = ? AND id IN ?", userID, ids).Find(&skills).Error; err != nil {
+	var packaged []AdvancedChatPackagedSkill
+	if err := model.DB.Where("user_id = ? AND enabled = ? AND id IN ?", userID, true, ids).Find(&packaged).Error; err != nil {
 		return nil, err
 	}
-	sort.Slice(skills, func(i, j int) bool { return skills[i].ID < skills[j].ID })
+	byID := map[string]AdvancedChatPackagedSkill{}
+	for _, skill := range packaged {
+		byID[skill.ID] = skill
+	}
+	skills := make([]advancedChatRuntimeSkill, 0, len(packaged))
+	for _, id := range ids {
+		if skill, ok := byID[id]; ok {
+			skills = append(skills, advancedChatRuntimeSkill{
+				ID:          skill.ID,
+				Name:        skill.Name,
+				Description: skill.Description,
+				Source:      skill.Source,
+			})
+		}
+	}
 	return skills, nil
 }
 
-func skillMCPIDs(skills []AdvancedChatSkill) []string {
-	ids := []string{}
-	for _, skill := range skills {
-		ids = append(ids, decodeMCPServerIDs(skill.MCPServerIDs)...)
-	}
-	return ids
+func skillMCPIDs(skills []advancedChatRuntimeSkill) []string {
+	return []string{}
 }
 
 func loadAdvancedChatMCPServersForCall(userID uint, ids []string) ([]AdvancedChatMCPServer, error) {
@@ -624,32 +640,13 @@ func normalizeAssistantToolCalls(message map[string]interface{}) []map[string]in
 	return result
 }
 
-func buildAdvancedChatCompletionSystemPrompt(agent *AdvancedChatAgent, skills []AdvancedChatSkill, workspaceSkills []advancedChatWorkspaceSkill, mode string) string {
+func buildAdvancedChatCompletionSystemPrompt(agent *AdvancedChatAgent, skills []advancedChatRuntimeSkill, workspaceSkills []advancedChatWorkspaceSkill, mode string) string {
 	sections := []string{}
 	if agent != nil && strings.TrimSpace(agent.Prompt) != "" {
 		sections = append(sections, strings.TrimSpace(agent.Prompt))
 	}
-	for _, skill := range skills {
-		if strings.TrimSpace(skill.Prompt) != "" {
-			sections = append(sections, "[Skill: "+skill.Name+"]\n"+strings.TrimSpace(skill.Prompt))
-		}
-	}
-	for _, skill := range workspaceSkills {
-		if strings.TrimSpace(skill.Content) != "" {
-			header := "[Connector Skill: " + skill.Name + "]"
-			if strings.TrimSpace(skill.Path) != "" {
-				header += "\nPath: " + skill.Path
-			}
-			if skill.Truncated {
-				header += "\nNote: this skill file was truncated by the connector size limit."
-			}
-			sections = append(sections, header+"\n"+strings.TrimSpace(skill.Content))
-		}
-	}
-	if len(workspaceSkills) > 0 {
-		sections = append(sections, strings.TrimSpace(`Connector skills were loaded from the selected workspace .agents directory and the user-level veloce/.agents directory when available.
-Follow these connector skills when they are relevant to the user's task.
-If a connector skill defines scripts, commands, checks, or other executable steps, run them through the available workspace connector command tool rather than claiming they were run.`))
+	if catalog := advancedChatSkillCatalogPrompt(skills, workspaceSkills); catalog != "" {
+		sections = append(sections, catalog)
 	}
 	if mode == advancedChatModeAssistant || mode == advancedChatModeAgentGroup {
 		sections = append(sections, assistantModeSystemPrompt())

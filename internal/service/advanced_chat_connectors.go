@@ -213,12 +213,13 @@ type advancedChatWorkspaceSkillsRefreshInput struct {
 }
 
 type advancedChatWorkspaceSkillResponse struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Path      string `json:"path"`
-	Content   string `json:"content"`
-	Size      int    `json:"size"`
-	Truncated bool   `json:"truncated"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Path        string `json:"path"`
+	Content     string `json:"content"`
+	Size        int    `json:"size"`
+	Truncated   bool   `json:"truncated"`
 }
 
 type advancedChatConnectorToolBinding struct {
@@ -231,12 +232,14 @@ type advancedChatConnectorToolBinding struct {
 }
 
 type advancedChatWorkspaceSkill struct {
-	ID        string
-	Name      string
-	Path      string
-	Content   string
-	Size      int
-	Truncated bool
+	ID          string
+	Name        string
+	Description string
+	Path        string
+	Content     string
+	Resources   []string
+	Size        int
+	Truncated   bool
 }
 
 func registerAdvancedChatConnectorRoutes(group *gin.RouterGroup) {
@@ -667,12 +670,13 @@ func (api *advancedChatAPI) refreshWorkspaceSkills(c *gin.Context) {
 	responses := make([]advancedChatWorkspaceSkillResponse, 0, len(skills))
 	for _, skill := range skills {
 		responses = append(responses, advancedChatWorkspaceSkillResponse{
-			ID:        skill.ID,
-			Name:      skill.Name,
-			Path:      skill.Path,
-			Content:   skill.Content,
-			Size:      skill.Size,
-			Truncated: skill.Truncated,
+			ID:          skill.ID,
+			Name:        skill.Name,
+			Description: skill.Description,
+			Path:        skill.Path,
+			Content:     skill.Content,
+			Size:        skill.Size,
+			Truncated:   skill.Truncated,
 		})
 	}
 	c.JSON(http.StatusOK, gin.H{
@@ -1749,6 +1753,7 @@ func loadAdvancedChatWorkspaceSkillsForRun(ctx context.Context, userID uint, dev
 	if device == nil {
 		return []advancedChatWorkspaceSkill{}, nil
 	}
+	_ = syncAdvancedChatUploadedSkillsToConnector(ctx, userID, device)
 	binding := advancedChatConnectorToolBinding{
 		DeviceID:      device.ID,
 		DeviceName:    device.Name,
@@ -1764,6 +1769,88 @@ func loadAdvancedChatWorkspaceSkillsForRun(ctx context.Context, userID uint, dev
 	return parseAdvancedChatWorkspaceSkills(result)
 }
 
+func readAdvancedChatWorkspaceSkillForRun(ctx context.Context, userID uint, device *AdvancedChatConnectorDevice, workspacePath string, skill advancedChatWorkspaceSkill) (advancedChatWorkspaceSkill, error) {
+	if device == nil {
+		return advancedChatWorkspaceSkill{}, errors.New("connector device is not available")
+	}
+	binding := advancedChatConnectorToolBinding{
+		DeviceID:      device.ID,
+		DeviceName:    device.Name,
+		WorkspacePath: workspacePath,
+		Action:        "read_agent_skill",
+	}
+	readCtx, cancel := context.WithTimeout(ctx, advancedChatAgentSkillsLoadWait)
+	defer cancel()
+	result, err := callAdvancedChatConnectorTool(readCtx, userID, "", binding, map[string]interface{}{
+		"id":        skill.ID,
+		"path":      skill.Path,
+		"max_bytes": advancedChatAgentSkillsMaxFileBytes,
+	})
+	if err != nil {
+		return advancedChatWorkspaceSkill{}, err
+	}
+	parsed, err := parseAdvancedChatWorkspaceSkillRead(result)
+	if err != nil {
+		return advancedChatWorkspaceSkill{}, err
+	}
+	if strings.TrimSpace(parsed.ID) == "" {
+		parsed.ID = skill.ID
+	}
+	if strings.TrimSpace(parsed.Path) == "" {
+		parsed.Path = skill.Path
+	}
+	if strings.TrimSpace(parsed.Name) == "" {
+		parsed.Name = skill.Name
+	}
+	if strings.TrimSpace(parsed.Description) == "" {
+		parsed.Description = skill.Description
+	}
+	return parsed, nil
+}
+
+func readAdvancedChatWorkspaceSkillResourceForRun(ctx context.Context, userID uint, device *AdvancedChatConnectorDevice, workspacePath string, skill advancedChatWorkspaceSkill, resourcePath string, maxBytes int) (string, error) {
+	if device == nil {
+		return "", errors.New("connector device is not available")
+	}
+	binding := advancedChatConnectorToolBinding{
+		DeviceID:      device.ID,
+		DeviceName:    device.Name,
+		WorkspacePath: workspacePath,
+		Action:        "read_agent_skill_resource",
+	}
+	readCtx, cancel := context.WithTimeout(ctx, advancedChatAgentSkillsLoadWait)
+	defer cancel()
+	result, err := callAdvancedChatConnectorTool(readCtx, userID, "", binding, map[string]interface{}{
+		"id":        skill.ID,
+		"path":      skill.Path,
+		"resource":  resourcePath,
+		"max_bytes": maxBytes,
+	})
+	if err != nil {
+		return "", err
+	}
+	return result, nil
+}
+
+func syncAdvancedChatUploadedSkillsToConnector(ctx context.Context, userID uint, device *AdvancedChatConnectorDevice) error {
+	if device == nil {
+		return nil
+	}
+	payload, err := advancedChatUploadedSkillsSyncPayload(userID)
+	if err != nil {
+		return err
+	}
+	binding := advancedChatConnectorToolBinding{
+		DeviceID:   device.ID,
+		DeviceName: device.Name,
+		Action:     "sync_agent_skills",
+	}
+	syncCtx, cancel := context.WithTimeout(ctx, advancedChatAgentSkillsLoadWait)
+	defer cancel()
+	_, err = callAdvancedChatConnectorTool(syncCtx, userID, "", binding, payload)
+	return err
+}
+
 func parseAdvancedChatWorkspaceSkills(raw string) ([]advancedChatWorkspaceSkill, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -1771,12 +1858,14 @@ func parseAdvancedChatWorkspaceSkills(raw string) ([]advancedChatWorkspaceSkill,
 	}
 	var payload struct {
 		Skills []struct {
-			ID        string `json:"id"`
-			Name      string `json:"name"`
-			Path      string `json:"path"`
-			Content   string `json:"content"`
-			Size      int    `json:"size"`
-			Truncated bool   `json:"truncated"`
+			ID          string   `json:"id"`
+			Name        string   `json:"name"`
+			Description string   `json:"description"`
+			Path        string   `json:"path"`
+			Content     string   `json:"content"`
+			Resources   []string `json:"resource_paths"`
+			Size        int      `json:"size"`
+			Truncated   bool     `json:"truncated"`
 		} `json:"skills"`
 		Truncated      bool `json:"truncated"`
 		TotalBytesRead int  `json:"total_bytes_read"`
@@ -1793,16 +1882,16 @@ func parseAdvancedChatWorkspaceSkills(raw string) ([]advancedChatWorkspaceSkill,
 	for _, skill := range payload.Skills {
 		path := sanitizeWorkspaceSkillPath(skill.Path)
 		content := strings.TrimSpace(skill.Content)
-		if path == "" || content == "" || seenPaths[path] {
+		if path == "" || seenPaths[path] {
 			continue
 		}
 		size := len([]byte(content))
-		if size > advancedChatAgentSkillsMaxFileBytes {
+		if content != "" && size > advancedChatAgentSkillsMaxFileBytes {
 			content = truncateBytes(content, advancedChatAgentSkillsMaxFileBytes)
 			size = len([]byte(content))
 			skill.Truncated = true
 		}
-		if totalBytes+size > advancedChatAgentSkillsMaxTotalBytes {
+		if content != "" && totalBytes+size > advancedChatAgentSkillsMaxTotalBytes {
 			break
 		}
 		name := strings.TrimSpace(skill.Name)
@@ -1812,6 +1901,15 @@ func parseAdvancedChatWorkspaceSkills(raw string) ([]advancedChatWorkspaceSkill,
 		if len([]rune(name)) > 120 {
 			name = string([]rune(name)[:120])
 		}
+		description := strings.TrimSpace(skill.Description)
+		if description == "" && content != "" {
+			if manifest, _, _, _, ok := parseAdvancedChatSkillManifest(content); ok {
+				description = strings.TrimSpace(manifest.Description)
+			}
+		}
+		if len([]rune(description)) > 2000 {
+			description = string([]rune(description)[:2000])
+		}
 		id := strings.TrimSpace(skill.ID)
 		if len([]rune(id)) > 120 {
 			id = string([]rune(id)[:120])
@@ -1819,15 +1917,78 @@ func parseAdvancedChatWorkspaceSkills(raw string) ([]advancedChatWorkspaceSkill,
 		seenPaths[path] = true
 		totalBytes += size
 		result = append(result, advancedChatWorkspaceSkill{
-			ID:        id,
-			Name:      name,
-			Path:      path,
-			Content:   content,
-			Size:      size,
-			Truncated: skill.Truncated,
+			ID:          id,
+			Name:        name,
+			Description: description,
+			Path:        path,
+			Content:     content,
+			Resources:   sanitizeWorkspaceSkillResourcePaths(skill.Resources),
+			Size:        size,
+			Truncated:   skill.Truncated,
 		})
 	}
 	return result, nil
+}
+
+func parseAdvancedChatWorkspaceSkillRead(raw string) (advancedChatWorkspaceSkill, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return advancedChatWorkspaceSkill{}, errors.New("connector returned empty skill")
+	}
+	var payload struct {
+		ID          string   `json:"id"`
+		Name        string   `json:"name"`
+		Description string   `json:"description"`
+		Path        string   `json:"path"`
+		Content     string   `json:"content"`
+		Resources   []string `json:"resource_paths"`
+		Size        int      `json:"size"`
+		Truncated   bool     `json:"truncated"`
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return advancedChatWorkspaceSkill{}, err
+	}
+	content := strings.TrimSpace(payload.Content)
+	if content == "" {
+		return advancedChatWorkspaceSkill{}, errors.New("connector skill content is empty")
+	}
+	if len([]byte(content)) > advancedChatAgentSkillsMaxFileBytes {
+		content = truncateBytes(content, advancedChatAgentSkillsMaxFileBytes)
+		payload.Truncated = true
+	}
+	description := strings.TrimSpace(payload.Description)
+	if description == "" {
+		if manifest, _, _, _, ok := parseAdvancedChatSkillManifest(content); ok {
+			description = strings.TrimSpace(manifest.Description)
+		}
+	}
+	return advancedChatWorkspaceSkill{
+		ID:          strings.TrimSpace(payload.ID),
+		Name:        truncateRunes(payload.Name, 120),
+		Description: truncateRunes(description, 2000),
+		Path:        sanitizeWorkspaceSkillPath(payload.Path),
+		Content:     content,
+		Resources:   sanitizeWorkspaceSkillResourcePaths(payload.Resources),
+		Size:        len([]byte(content)),
+		Truncated:   payload.Truncated,
+	}, nil
+}
+
+func sanitizeWorkspaceSkillResourcePaths(paths []string) []string {
+	result := make([]string, 0, len(paths))
+	seen := map[string]bool{}
+	for _, item := range paths {
+		path := sanitizeWorkspaceSkillPath(item)
+		if path == "" || strings.EqualFold(path, "SKILL.md") || seen[path] {
+			continue
+		}
+		seen[path] = true
+		result = append(result, path)
+		if len(result) >= 100 {
+			break
+		}
+	}
+	return result
 }
 
 func sanitizeWorkspaceSkillPath(path string) string {
@@ -1911,7 +2072,7 @@ func stripAdvancedChatConnectorPreviewFields(payload map[string]interface{}) map
 	}
 	sanitized := make(map[string]interface{}, len(payload))
 	for key, value := range payload {
-		if key == advancedChatConnectorPreviewOldContent || key == advancedChatConnectorPreviewOldContentAvailable || key == advancedChatConnectorPreviewToolCallID || key == advancedChatConnectorTaskID || key == advancedChatAgentStudioSandboxIDArg || key == advancedChatAgentStudioSandboxBackendArg {
+		if key == advancedChatConnectorPreviewOldContent || key == advancedChatConnectorPreviewOldContentAvailable || key == advancedChatConnectorPreviewToolCallID || key == advancedChatConnectorTaskID || key == advancedChatAgentStudioSandboxIDArg || key == advancedChatAgentStudioSandboxBackendArg || key == "packages" {
 			continue
 		}
 		sanitized[key] = value
@@ -1957,7 +2118,7 @@ func expandAdvancedChatConnectorToolArguments(binding advancedChatConnectorToolB
 
 func advancedChatConnectorTaskRequiresApproval(binding advancedChatConnectorToolBinding, arguments map[string]interface{}) bool {
 	switch binding.Action {
-	case "list_files", "read_file", "file_sha256", "web_search", "web_fetch", "list_agent_skills", "list_windows_drives":
+	case "list_files", "read_file", "file_sha256", "web_search", "web_fetch", "list_agent_skills", "read_agent_skill", "list_windows_drives":
 		return false
 	case "list_static_sites":
 		return false

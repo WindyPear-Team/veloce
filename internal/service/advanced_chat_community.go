@@ -16,6 +16,8 @@ func InitCommunityAdvancedChatFeatures() error {
 		&AdvancedChatAgent{},
 		&AdvancedChatUserSettings{},
 		&AdvancedChatSkill{},
+		&AdvancedChatSkillPackage{},
+		&AdvancedChatPackagedSkill{},
 		&AdvancedChatSession{},
 		&AdvancedChatMessage{},
 		&AdvancedChatRun{},
@@ -99,6 +101,9 @@ func RegisterCommunityAdvancedChatUserRoutes(group *gin.RouterGroup) {
 	group.POST("/advanced-chat/skills", api.createSkill)
 	group.PUT("/advanced-chat/skills/:id", api.updateSkill)
 	group.DELETE("/advanced-chat/skills/:id", api.deleteSkill)
+	group.GET("/advanced-chat/skill-packages", api.listSkillPackages)
+	group.POST("/advanced-chat/skill-packages", api.uploadSkillPackage)
+	group.DELETE("/advanced-chat/skill-packages/:id", api.deleteSkillPackage)
 }
 
 func RegisterCommunityAdvancedChatPublicRoutes(group *gin.RouterGroup) {
