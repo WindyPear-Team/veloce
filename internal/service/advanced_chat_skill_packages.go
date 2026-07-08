@@ -91,6 +91,25 @@ type advancedChatSkillPackageResponse struct {
 	UpdatedAt  time.Time                        `json:"updated_at"`
 }
 
+type advancedChatSkillPackageDetailResponse struct {
+	advancedChatSkillPackageResponse
+	Files []advancedChatSkillPackageFileResponse `json:"files"`
+}
+
+type advancedChatSkillPackageFileResponse struct {
+	Path    string `json:"path"`
+	Size    int64  `json:"size"`
+	Skill   bool   `json:"skill"`
+	ModTime string `json:"mod_time,omitempty"`
+}
+
+type advancedChatSkillPackageFileContentResponse struct {
+	Path      string `json:"path"`
+	Content   string `json:"content"`
+	Size      int64  `json:"size"`
+	Truncated bool   `json:"truncated"`
+}
+
 type advancedChatPackagedSkillBrief struct {
 	ID          string    `json:"id"`
 	PackageID   string    `json:"package_id"`
@@ -104,6 +123,13 @@ type advancedChatPackagedSkillBrief struct {
 	Hash        string    `json:"hash"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+type advancedChatSkillDetailResponse struct {
+	advancedChatPackagedSkillBrief
+	PackageName       string                                 `json:"package_name"`
+	PackageSourceName string                                 `json:"package_source_name"`
+	Files             []advancedChatSkillPackageFileResponse `json:"files"`
 }
 
 type advancedChatSkillManifest struct {
@@ -189,6 +215,143 @@ func (api *advancedChatAPI) listSkillPackages(c *gin.Context) {
 		"used_bytes":      advancedChatFileStorageUsedBytes(user.ID),
 		"total_bytes":     advancedChatFileStorageTotalBytes(),
 		"remaining_bytes": advancedChatFileStorageRemainingBytes(user.ID),
+	})
+}
+
+func (api *advancedChatAPI) getSkillPackage(c *gin.Context) {
+	user, ok := currentAdvancedChatUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+	pkg, skills, found := loadAdvancedChatSkillPackageForResponse(c, user.ID)
+	if !found {
+		return
+	}
+	files, err := listAdvancedChatSkillPackageFiles(pkg, skills)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list skill package files"})
+		return
+	}
+	c.JSON(http.StatusOK, advancedChatSkillPackageDetailResponse{
+		advancedChatSkillPackageResponse: advancedChatSkillPackageResponseFromModel(pkg, skills),
+		Files:                            files,
+	})
+}
+
+func (api *advancedChatAPI) readSkillPackageFile(c *gin.Context) {
+	user, ok := currentAdvancedChatUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+	pkg, _, found := loadAdvancedChatSkillPackageForResponse(c, user.ID)
+	if !found {
+		return
+	}
+	filePath := strings.TrimSpace(c.Query("path"))
+	if filePath == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "File path is required"})
+		return
+	}
+	normalized, err := normalizeAdvancedChatSkillPackagePath(filePath)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid file path"})
+		return
+	}
+	root, err := advancedChatStorageAbsPath(pkg.StoragePath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load skill package"})
+		return
+	}
+	target := filepath.Join(root, filepath.FromSlash(normalized))
+	rel, err := filepath.Rel(root, target)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid file path"})
+		return
+	}
+	info, err := os.Stat(target)
+	if err != nil || info.IsDir() || !info.Mode().IsRegular() {
+		c.JSON(http.StatusNotFound, gin.H{"error": "File not found"})
+		return
+	}
+	content, truncated, err := readAdvancedChatSkillPackageFilePreview(pkg, normalized, advancedChatSkillResourceMaxBytes)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to read skill package file"})
+		return
+	}
+	c.JSON(http.StatusOK, advancedChatSkillPackageFileContentResponse{
+		Path:      normalized,
+		Content:   content,
+		Size:      info.Size(),
+		Truncated: truncated,
+	})
+}
+
+func (api *advancedChatAPI) getSkill(c *gin.Context) {
+	user, ok := currentAdvancedChatUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+	skill, pkg, found := loadAdvancedChatSkillForResponse(c, user.ID)
+	if !found {
+		return
+	}
+	files, err := listAdvancedChatPackagedSkillFiles(pkg, skill)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list skill files"})
+		return
+	}
+	c.JSON(http.StatusOK, advancedChatSkillDetailResponse{
+		advancedChatPackagedSkillBrief: advancedChatPackagedSkillBriefFromModel(skill),
+		PackageName:                    pkg.Name,
+		PackageSourceName:              pkg.SourceName,
+		Files:                          files,
+	})
+}
+
+func (api *advancedChatAPI) readSkillFile(c *gin.Context) {
+	user, ok := currentAdvancedChatUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+	skill, pkg, found := loadAdvancedChatSkillForResponse(c, user.ID)
+	if !found {
+		return
+	}
+	filePath := strings.TrimSpace(c.Query("path"))
+	if filePath == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "File path is required"})
+		return
+	}
+	packagePath, err := advancedChatSkillPackagePathForSkillFile(skill, filePath)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid file path"})
+		return
+	}
+	root, err := advancedChatStorageAbsPath(pkg.StoragePath)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load skill"})
+		return
+	}
+	target := filepath.Join(root, filepath.FromSlash(packagePath))
+	info, err := os.Stat(target)
+	if err != nil || info.IsDir() || !info.Mode().IsRegular() {
+		c.JSON(http.StatusNotFound, gin.H{"error": "File not found"})
+		return
+	}
+	content, truncated, err := readAdvancedChatSkillPackageFilePreview(pkg, packagePath, advancedChatSkillResourceMaxBytes)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to read skill file"})
+		return
+	}
+	c.JSON(http.StatusOK, advancedChatSkillPackageFileContentResponse{
+		Path:      filePath,
+		Content:   content,
+		Size:      info.Size(),
+		Truncated: truncated,
 	})
 }
 
@@ -612,20 +775,7 @@ func marshalSkillManifestField(value interface{}) string {
 func advancedChatSkillPackageResponseFromModel(pkg AdvancedChatSkillPackage, skills []AdvancedChatPackagedSkill) advancedChatSkillPackageResponse {
 	briefs := make([]advancedChatPackagedSkillBrief, 0, len(skills))
 	for _, skill := range skills {
-		briefs = append(briefs, advancedChatPackagedSkillBrief{
-			ID:          skill.ID,
-			PackageID:   skill.PackageID,
-			Name:        skill.Name,
-			Description: skill.Description,
-			Source:      skill.Source,
-			SkillPath:   skill.SkillPath,
-			RootPath:    skill.RootPath,
-			Enabled:     skill.Enabled,
-			Size:        skill.Size,
-			Hash:        skill.Hash,
-			CreatedAt:   skill.CreatedAt,
-			UpdatedAt:   skill.UpdatedAt,
-		})
+		briefs = append(briefs, advancedChatPackagedSkillBriefFromModel(skill))
 	}
 	return advancedChatSkillPackageResponse{
 		ID:         pkg.ID,
@@ -640,6 +790,220 @@ func advancedChatSkillPackageResponseFromModel(pkg AdvancedChatSkillPackage, ski
 		CreatedAt:  pkg.CreatedAt,
 		UpdatedAt:  pkg.UpdatedAt,
 	}
+}
+
+func advancedChatPackagedSkillBriefFromModel(skill AdvancedChatPackagedSkill) advancedChatPackagedSkillBrief {
+	return advancedChatPackagedSkillBrief{
+		ID:          skill.ID,
+		PackageID:   skill.PackageID,
+		Name:        skill.Name,
+		Description: skill.Description,
+		Source:      skill.Source,
+		SkillPath:   skill.SkillPath,
+		RootPath:    skill.RootPath,
+		Enabled:     skill.Enabled,
+		Size:        skill.Size,
+		Hash:        skill.Hash,
+		CreatedAt:   skill.CreatedAt,
+		UpdatedAt:   skill.UpdatedAt,
+	}
+}
+
+func loadAdvancedChatSkillForResponse(c *gin.Context, userID uint) (AdvancedChatPackagedSkill, AdvancedChatSkillPackage, bool) {
+	skillID := strings.TrimSpace(c.Param("id"))
+	if skillID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Skill id is required"})
+		return AdvancedChatPackagedSkill{}, AdvancedChatSkillPackage{}, false
+	}
+	var skill AdvancedChatPackagedSkill
+	if err := model.DB.Where("id = ? AND user_id = ? AND enabled = ?", skillID, userID, true).First(&skill).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Skill not found"})
+			return AdvancedChatPackagedSkill{}, AdvancedChatSkillPackage{}, false
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load skill"})
+		return AdvancedChatPackagedSkill{}, AdvancedChatSkillPackage{}, false
+	}
+	var pkg AdvancedChatSkillPackage
+	if err := model.DB.Where("id = ? AND user_id = ? AND status = ?", skill.PackageID, userID, "ready").First(&pkg).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Skill package not found"})
+			return AdvancedChatPackagedSkill{}, AdvancedChatSkillPackage{}, false
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load skill package"})
+		return AdvancedChatPackagedSkill{}, AdvancedChatSkillPackage{}, false
+	}
+	return skill, pkg, true
+}
+
+func loadAdvancedChatSkillPackageForResponse(c *gin.Context, userID uint) (AdvancedChatSkillPackage, []AdvancedChatPackagedSkill, bool) {
+	packageID := strings.TrimSpace(c.Param("id"))
+	if packageID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Skill package id is required"})
+		return AdvancedChatSkillPackage{}, nil, false
+	}
+	var pkg AdvancedChatSkillPackage
+	if err := model.DB.Where("id = ? AND user_id = ?", packageID, userID).First(&pkg).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Skill package not found"})
+			return AdvancedChatSkillPackage{}, nil, false
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load skill package"})
+		return AdvancedChatSkillPackage{}, nil, false
+	}
+	var skills []AdvancedChatPackagedSkill
+	if err := model.DB.Where("package_id = ? AND user_id = ?", packageID, userID).Order("created_at ASC").Find(&skills).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list packaged skills"})
+		return AdvancedChatSkillPackage{}, nil, false
+	}
+	return pkg, skills, true
+}
+
+func listAdvancedChatPackagedSkillFiles(pkg AdvancedChatSkillPackage, skill AdvancedChatPackagedSkill) ([]advancedChatSkillPackageFileResponse, error) {
+	root, err := advancedChatStorageAbsPath(pkg.StoragePath)
+	if err != nil {
+		return nil, err
+	}
+	base := root
+	if strings.TrimSpace(skill.RootPath) != "" {
+		base = filepath.Join(root, filepath.FromSlash(strings.Trim(strings.TrimSpace(skill.RootPath), "/")))
+	}
+	files := []advancedChatSkillPackageFileResponse{}
+	err = filepath.WalkDir(base, func(filePath string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil || entry.IsDir() {
+			return walkErr
+		}
+		if entry.Type()&os.ModeSymlink != 0 || !entry.Type().IsRegular() {
+			return nil
+		}
+		rel, err := filepath.Rel(base, filePath)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		if _, err := normalizeAdvancedChatSkillPackagePath(rel); err != nil {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		files = append(files, advancedChatSkillPackageFileResponse{
+			Path:    rel,
+			Size:    info.Size(),
+			Skill:   strings.EqualFold(rel, "SKILL.md"),
+			ModTime: info.ModTime().Format(time.RFC3339),
+		})
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(files, func(i, j int) bool {
+		if files[i].Skill != files[j].Skill {
+			return files[i].Skill
+		}
+		return files[i].Path < files[j].Path
+	})
+	return files, nil
+}
+
+func advancedChatSkillPackagePathForSkillFile(skill AdvancedChatPackagedSkill, relativePath string) (string, error) {
+	relativePath, err := normalizeAdvancedChatSkillPackagePath(relativePath)
+	if err != nil {
+		return "", err
+	}
+	base := strings.Trim(strings.TrimSpace(skill.RootPath), "/")
+	if base != "" {
+		return path.Join(base, relativePath), nil
+	}
+	return relativePath, nil
+}
+
+func listAdvancedChatSkillPackageFiles(pkg AdvancedChatSkillPackage, skills []AdvancedChatPackagedSkill) ([]advancedChatSkillPackageFileResponse, error) {
+	root, err := advancedChatStorageAbsPath(pkg.StoragePath)
+	if err != nil {
+		return nil, err
+	}
+	skillPaths := map[string]bool{}
+	for _, skill := range skills {
+		if path := strings.TrimSpace(skill.SkillPath); path != "" {
+			skillPaths[path] = true
+		}
+	}
+	files := []advancedChatSkillPackageFileResponse{}
+	err = filepath.WalkDir(root, func(filePath string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil || entry.IsDir() {
+			return walkErr
+		}
+		if entry.Type()&os.ModeSymlink != 0 || !entry.Type().IsRegular() {
+			return nil
+		}
+		rel, err := filepath.Rel(root, filePath)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		if _, err := normalizeAdvancedChatSkillPackagePath(rel); err != nil {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		files = append(files, advancedChatSkillPackageFileResponse{
+			Path:    rel,
+			Size:    info.Size(),
+			Skill:   skillPaths[rel],
+			ModTime: info.ModTime().Format(time.RFC3339),
+		})
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	sort.Slice(files, func(i, j int) bool {
+		leftSkill := files[i].Skill
+		rightSkill := files[j].Skill
+		if leftSkill != rightSkill {
+			return leftSkill
+		}
+		return files[i].Path < files[j].Path
+	})
+	return files, nil
+}
+
+func readAdvancedChatSkillPackageFilePreview(pkg AdvancedChatSkillPackage, relativePath string, maxBytes int) (string, bool, error) {
+	if maxBytes <= 0 {
+		maxBytes = advancedChatSkillResourceMaxBytes
+	}
+	relativePath, err := normalizeAdvancedChatSkillPackagePath(relativePath)
+	if err != nil {
+		return "", false, err
+	}
+	root, err := advancedChatStorageAbsPath(pkg.StoragePath)
+	if err != nil {
+		return "", false, err
+	}
+	target := filepath.Join(root, filepath.FromSlash(relativePath))
+	rel, err := filepath.Rel(root, target)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+		return "", false, errors.New("skill file path escapes package root")
+	}
+	file, err := os.Open(target)
+	if err != nil {
+		return "", false, err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, int64(maxBytes)+1))
+	if err != nil {
+		return "", false, err
+	}
+	truncated := len(data) > maxBytes
+	if truncated {
+		data = data[:maxBytes]
+	}
+	return string(data), truncated, nil
 }
 
 func removeAdvancedChatStorageDir(relativePath string) error {

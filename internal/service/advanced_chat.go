@@ -316,10 +316,14 @@ func registerAdvancedChatUserRoutes(group *gin.RouterGroup) {
 	group.PUT("/advanced-chat/agents/:id", api.updateAgent)
 	group.DELETE("/advanced-chat/agents/:id", api.deleteAgent)
 	group.GET("/advanced-chat/skills", api.listSkills)
+	group.GET("/advanced-chat/skills/:id", api.getSkill)
+	group.GET("/advanced-chat/skills/:id/files", api.readSkillFile)
 	group.POST("/advanced-chat/skills", api.createSkill)
 	group.PUT("/advanced-chat/skills/:id", api.updateSkill)
 	group.DELETE("/advanced-chat/skills/:id", api.deleteSkill)
 	group.GET("/advanced-chat/skill-packages", api.listSkillPackages)
+	group.GET("/advanced-chat/skill-packages/:id", api.getSkillPackage)
+	group.GET("/advanced-chat/skill-packages/:id/files", api.readSkillPackageFile)
 	group.POST("/advanced-chat/skill-packages", api.uploadSkillPackage)
 	group.DELETE("/advanced-chat/skill-packages/:id", api.deleteSkillPackage)
 	group.GET("/advanced-chat/deliveries", api.listDeliveries)
@@ -510,11 +514,8 @@ func (api *advancedChatAPI) updateUserMCPServers(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to encode MCP servers"})
 		return
 	}
-	settings := AdvancedChatUserSettings{
-		UserID:           user.ID,
-		CustomMCPServers: string(data),
-	}
-	if err := model.DB.Where("user_id = ?", user.ID).Assign(settings).FirstOrCreate(&settings).Error; err != nil {
+	settings := ensureAdvancedChatUserSettings(user.ID)
+	if err := model.DB.Model(&settings).Update("custom_mcp_servers", string(data)).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save MCP servers"})
 		return
 	}
@@ -662,20 +663,7 @@ func (api *advancedChatAPI) listSkills(c *gin.Context) {
 	}
 	result := make([]advancedChatPackagedSkillBrief, 0, len(skills))
 	for _, skill := range skills {
-		result = append(result, advancedChatPackagedSkillBrief{
-			ID:          skill.ID,
-			PackageID:   skill.PackageID,
-			Name:        skill.Name,
-			Description: skill.Description,
-			Source:      skill.Source,
-			SkillPath:   skill.SkillPath,
-			RootPath:    skill.RootPath,
-			Enabled:     skill.Enabled,
-			Size:        skill.Size,
-			Hash:        skill.Hash,
-			CreatedAt:   skill.CreatedAt,
-			UpdatedAt:   skill.UpdatedAt,
-		})
+		result = append(result, advancedChatPackagedSkillBriefFromModel(skill))
 	}
 	c.JSON(http.StatusOK, result)
 }
@@ -960,8 +948,24 @@ func currentAdvancedChatUserSettings(userID uint) advancedChatUserSettingsRespon
 }
 
 func ensureAdvancedChatUserSettings(userID uint) AdvancedChatUserSettings {
-	settings := AdvancedChatUserSettings{UserID: userID, CustomMCPServers: "[]"}
-	_ = model.DB.Where("user_id = ?", userID).FirstOrCreate(&settings, AdvancedChatUserSettings{UserID: userID, CustomMCPServers: "[]"}).Error
+	var settings AdvancedChatUserSettings
+	err := model.DB.Where("user_id = ?", userID).First(&settings).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		settings = AdvancedChatUserSettings{
+			UserID:               userID,
+			CustomMCPServers:     "[]",
+			TitleGenerationScope: "recent",
+		}
+		if createErr := model.DB.Create(&settings).Error; createErr != nil {
+			_ = model.DB.Where("user_id = ?", userID).First(&settings).Error
+		}
+	} else if err != nil {
+		settings = AdvancedChatUserSettings{
+			UserID:               userID,
+			CustomMCPServers:     "[]",
+			TitleGenerationScope: "recent",
+		}
+	}
 	if strings.TrimSpace(settings.CustomMCPServers) == "" {
 		settings.CustomMCPServers = "[]"
 		_ = model.DB.Model(&settings).Update("custom_mcp_servers", settings.CustomMCPServers).Error
