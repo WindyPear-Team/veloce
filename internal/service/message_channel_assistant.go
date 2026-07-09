@@ -283,6 +283,31 @@ func DecideMessageChannelConnectorApproval(userID uint, runID string, approved b
 	return task.ID, true, nil
 }
 
+func RunMessageChannelConnectorAction(ctx context.Context, userID uint, runID string, deviceID string, workspacePath string, unrestricted bool, action string, arguments map[string]interface{}, autoApprove bool, commandPrefixes []string) (string, error) {
+	if userID == 0 {
+		return "", newChatExecutorError(401, "Unauthorized")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	device, resolvedWorkspacePath, err := loadMessageChannelConnectorForRun(userID, deviceID, workspacePath, unrestricted)
+	if err != nil {
+		return "", err
+	}
+	if device == nil {
+		return "", errors.New("connector device is required")
+	}
+	binding := advancedChatConnectorToolBinding{
+		DeviceID:        device.ID,
+		DeviceName:      device.Name,
+		WorkspacePath:   resolvedWorkspacePath,
+		Action:          strings.TrimSpace(action),
+		AutoApprove:     autoApprove,
+		CommandPrefixes: normalizeConnectorCommandPrefixes(commandPrefixes),
+	}
+	return callAdvancedChatConnectorToolExpanded(ctx, userID, runID, binding, arguments)
+}
+
 func loadMessageChannelConnectorForRun(userID uint, deviceID string, workspacePath string, unrestricted bool) (*AdvancedChatConnectorDevice, string, error) {
 	if !unrestricted {
 		return loadAdvancedChatConnectorForRun(userID, deviceID, workspacePath)
