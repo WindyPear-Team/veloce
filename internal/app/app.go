@@ -14,9 +14,11 @@ import (
 
 	webui "github.com/WindyPear-Team/flai-web"
 	"github.com/WindyPear-Team/flai/internal/api"
+	messagechannel "github.com/WindyPear-Team/flai/internal/channel"
 	"github.com/WindyPear-Team/flai/internal/config"
 	"github.com/WindyPear-Team/flai/internal/middleware"
 	"github.com/WindyPear-Team/flai/internal/model"
+	"github.com/WindyPear-Team/flai/internal/premium"
 	"github.com/WindyPear-Team/flai/internal/service"
 	"github.com/gin-gonic/gin"
 )
@@ -24,6 +26,7 @@ import (
 func Run() error {
 	// Initialize config
 	config.Init()
+	premium.Register()
 
 	// Initialize database
 	model.InitDB()
@@ -31,6 +34,9 @@ func Run() error {
 		return err
 	}
 	if err := service.InitCommunityAdvancedChatFeatures(); err != nil {
+		return err
+	}
+	if err := messagechannel.InitFeatures(); err != nil {
 		return err
 	}
 
@@ -592,12 +598,14 @@ func Run() error {
 		admin.GET("/stats", statsAPI.GetDashboardStats)
 		admin.GET("/channel-usage", statsAPI.GetChannelUsage)
 		service.RegisterCommunityAdvancedChatAdminRoutes(admin)
+		messagechannel.RegisterAdminRoutes(admin)
 		service.ApplyAdminRouteHooks(admin)
 	}
 
 	// User Self APIs
 	publicAPI := r.Group("/api")
 	service.RegisterCommunityAdvancedChatPublicRoutes(publicAPI)
+	messagechannel.RegisterPublicRoutes(publicAPI)
 	service.ApplyPublicAPIRouteHooks(publicAPI)
 
 	userGroup := r.Group("/api/user")
@@ -654,6 +662,7 @@ func Run() error {
 		userGroup.DELETE("/api-keys/:id", userAPI.DeleteAPIKey)
 		userGroup.POST("/api-key/rotate", userAPI.RotateAPIKey)
 		service.RegisterCommunityAdvancedChatUserRoutes(userGroup)
+		messagechannel.RegisterUserRoutes(userGroup)
 		service.ApplyUserRouteHooks(userGroup)
 	}
 
