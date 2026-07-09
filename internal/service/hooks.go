@@ -253,7 +253,7 @@ func AdvancedChatToolHandlerExists(name string) bool {
 func HandleAdvancedChatToolCall(ctx context.Context, input AdvancedChatToolCallInput) (string, error) {
 	handler, ok := advancedChatToolHandlers[input.Name]
 	if !ok {
-		return "", errors.New("advanced chat tool handler not found")
+		return "", errors.New("agent chat tool handler not found")
 	}
 	return handler(ctx, input)
 }

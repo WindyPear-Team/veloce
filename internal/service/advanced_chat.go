@@ -354,7 +354,7 @@ func (api *advancedChatAPI) updateAdminSettings(c *gin.Context) {
 			return
 		}
 		if err := model.SetSystemSetting(advancedChatAttachmentMaxMBKey, strconv.Itoa(*input.AttachmentMaxMB)); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update advanced chat settings"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update agent chat settings"})
 			return
 		}
 	}
@@ -366,7 +366,7 @@ func (api *advancedChatAPI) updateAdminSettings(c *gin.Context) {
 			return
 		}
 		if err := model.SetSystemSetting(advancedChatAttachmentAllowedTypesKey, strings.Join(types, ",")); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update advanced chat settings"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update agent chat settings"})
 			return
 		}
 	}
@@ -377,7 +377,7 @@ func (api *advancedChatAPI) updateAdminSettings(c *gin.Context) {
 			return
 		}
 		if err := model.SetSystemSetting(advancedChatFileStorageTotalMBKey, strconv.Itoa(*input.FileStorageTotalMB)); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update advanced chat settings"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update agent chat settings"})
 			return
 		}
 	}
@@ -388,7 +388,7 @@ func (api *advancedChatAPI) updateAdminSettings(c *gin.Context) {
 			return
 		}
 		if err := model.SetSystemSetting(advancedChatAssistantRunTimeoutSecondsKey, strconv.Itoa(*input.AssistantRunTimeoutSeconds)); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update advanced chat settings"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update agent chat settings"})
 			return
 		}
 	}
@@ -398,7 +398,7 @@ func (api *advancedChatAPI) updateAdminSettings(c *gin.Context) {
 			return
 		}
 		if err := model.SetSystemSetting(advancedChatAgentGroupRunTimeoutSecondsKey, strconv.Itoa(*input.AgentGroupRunTimeoutSeconds)); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update advanced chat settings"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update agent chat settings"})
 			return
 		}
 	}
@@ -419,7 +419,7 @@ func (api *advancedChatAPI) updateAdminSettings(c *gin.Context) {
 			return
 		}
 		if err := model.SetSystemSetting(advancedChatBuiltinMCPServersKey, string(data)); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update advanced chat settings"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update agent chat settings"})
 			return
 		}
 	}
@@ -447,7 +447,7 @@ func (api *advancedChatAPI) updateAdminSettings(c *gin.Context) {
 			continue
 		}
 		if err := model.SetSystemSetting(key, strconv.FormatBool(*value)); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update advanced chat settings"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update agent chat settings"})
 			return
 		}
 	}

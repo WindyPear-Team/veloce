@@ -36,8 +36,8 @@ const (
 )
 
 var (
-	errAdvancedChatFileStorageDisabled  = errors.New("advanced chat file storage disabled")
-	errAdvancedChatFileInsufficient     = errors.New("advanced chat file storage quota exceeded")
+	errAdvancedChatFileStorageDisabled  = errors.New("agent chat file storage disabled")
+	errAdvancedChatFileInsufficient     = errors.New("agent chat file storage quota exceeded")
 	advancedChatAttachmentFileIDPattern = regexp.MustCompile(`file_id=(acf-[A-Za-z0-9_-]+)`)
 )
 
@@ -758,7 +758,7 @@ func autoSaveAdvancedChatGeneratedAsset(ctx context.Context, input GeneratedAsse
 		defer cancel()
 		for index, candidate := range candidates {
 			if err := saveGeneratedAdvancedChatFile(workCtx, input.UserID, kind, input.Source, input.ModelName, index, candidate); err != nil {
-				log.Printf("advanced chat generated asset auto-save skipped: user_id=%d kind=%s error=%v", input.UserID, kind, err)
+				log.Printf("agent chat generated asset auto-save skipped: user_id=%d kind=%s error=%v", input.UserID, kind, err)
 			}
 		}
 		_ = ctx

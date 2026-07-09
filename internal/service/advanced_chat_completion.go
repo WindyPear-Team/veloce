@@ -364,7 +364,7 @@ func (api *advancedChatAPI) completeChat(c *gin.Context) {
 				detail.Server = binding.Server.Name
 				detail.Tool = binding.Tool.Name
 			} else if extensionExists {
-				detail.Server = "advanced chat"
+				detail.Server = "agent chat"
 				detail.Tool = toolCall.Name
 			}
 			arguments, argumentsErr := parseToolArguments(toolCall.Arguments)
@@ -400,7 +400,7 @@ func (api *advancedChatAPI) completeChat(c *gin.Context) {
 					}
 				}
 			} else if extensionExists {
-				detail.Server = "advanced chat"
+				detail.Server = "agent chat"
 				detail.Tool = toolCall.Name
 				if argumentsErr != nil {
 					detail.Status = "invalid_arguments"

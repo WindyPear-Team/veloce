@@ -1614,9 +1614,9 @@ func createAdvancedChatAssistantRun(userID uint, prepared preparedAdvancedChatAs
 }
 
 var (
-	errAdvancedChatRunActive       = errors.New("advanced chat run active")
-	errAdvancedChatSessionConflict = errors.New("advanced chat session conflict")
-	errAdvancedChatRunCancelled    = errors.New("advanced chat run cancelled")
+	errAdvancedChatRunActive       = errors.New("agent chat run active")
+	errAdvancedChatSessionConflict = errors.New("agent chat session conflict")
+	errAdvancedChatRunCancelled    = errors.New("agent chat run cancelled")
 	advancedChatRunCancels         sync.Map
 )
 
@@ -1976,7 +1976,7 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 				detail.Server = "skills"
 				detail.Tool = advancedChatReadSkillResourceToolName
 			} else if extensionExists {
-				detail.Server = "advanced chat"
+				detail.Server = "agent chat"
 				detail.Tool = toolCall.Name
 			}
 			arguments, argumentsErr := parseToolArguments(toolCall.Arguments)
@@ -2062,7 +2062,7 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 					}
 				}
 			} else if extensionExists {
-				detail.Server = "advanced chat"
+				detail.Server = "agent chat"
 				detail.Tool = toolCall.Name
 				if argumentsErr != nil {
 					detail.Status = "invalid_arguments"
