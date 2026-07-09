@@ -1364,6 +1364,9 @@ func appendAdvancedChatAgentTaskEvent(runID string, sessionID string, userID uin
 	if runID == "" {
 		return
 	}
+	if strings.HasPrefix(runID, "msgch-") {
+		return
+	}
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
 		var run AdvancedChatRun
@@ -1380,6 +1383,9 @@ func appendAdvancedChatAgentMessageEvent(options advancedChatDelegatedAgentLoopO
 	groupID := strings.TrimSpace(options.StatusAgentGroupID)
 	agentID := strings.TrimSpace(options.StatusAgentID)
 	content = strings.TrimSpace(content)
+	if strings.HasPrefix(runID, "msgch-") {
+		return
+	}
 	if runID == "" || groupID == "" || agentID == "" || content == "" {
 		return
 	}

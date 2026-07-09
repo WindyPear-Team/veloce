@@ -902,6 +902,10 @@ func advancedChatRunIsActive(status string) bool {
 }
 
 func ensureAdvancedChatRunNotCancelled(runID string, userID uint) error {
+	runID = strings.TrimSpace(runID)
+	if strings.HasPrefix(runID, "msgch-") {
+		return nil
+	}
 	var run AdvancedChatRun
 	if err := model.DB.Select("status").Where("id = ? AND user_id = ?", runID, userID).First(&run).Error; err != nil {
 		return err
