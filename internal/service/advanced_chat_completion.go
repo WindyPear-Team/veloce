@@ -248,6 +248,29 @@ func (api *advancedChatAPI) completeChat(c *gin.Context) {
 	}
 
 	systemPrompt := buildAdvancedChatCompletionSystemPrompt(agent, skills, nil, mode)
+	extension, err := BuildAdvancedChatRuntimeExtension(ctx, AdvancedChatRuntimeContext{
+		UserID:    user.ID,
+		Mode:      mode,
+		AgentID:   input.AgentID,
+		SessionID: persistedSessionID,
+	})
+	if err != nil {
+		message := "Failed to load assistant extensions: " + err.Error()
+		if streamWriter != nil {
+			streamWriter.sendError(message)
+		} else {
+			c.JSON(http.StatusBadGateway, gin.H{"error": message})
+		}
+		return
+	}
+	if strings.TrimSpace(extension.SystemPrompt) != "" {
+		if strings.TrimSpace(systemPrompt) == "" {
+			systemPrompt = extension.SystemPrompt
+		} else {
+			systemPrompt = strings.Join([]string{systemPrompt, extension.SystemPrompt}, "\n\n")
+		}
+	}
+	tools = append(tools, extension.Tools...)
 	executorMessages := make([]ChatExecutorMessage, 0, len(messages)+maxToolRounds*2)
 	for _, message := range messages {
 		executorMessages = append(executorMessages, advancedChatExecutorMessage(user.ID, message))
@@ -335,10 +358,14 @@ func (api *advancedChatAPI) completeChat(c *gin.Context) {
 		})
 		for _, toolCall := range result.ToolCalls {
 			binding, exists := bindings[toolCall.Name]
+			extensionExists := AdvancedChatToolHandlerExists(toolCall.Name)
 			detail := advancedChatCompletionToolCall{ID: toolCall.ID, Round: round + 1, Name: toolCall.Name, Status: "running"}
 			if exists {
 				detail.Server = binding.Server.Name
 				detail.Tool = binding.Tool.Name
+			} else if extensionExists {
+				detail.Server = "advanced chat"
+				detail.Tool = toolCall.Name
 			}
 			arguments, argumentsErr := parseToolArguments(toolCall.Arguments)
 			if argumentsErr == nil {
@@ -370,6 +397,29 @@ func (api *advancedChatAPI) completeChat(c *gin.Context) {
 							detail.Status = "error"
 							toolResultText = "Tool returned an error: " + toolResultText
 						}
+					}
+				}
+			} else if extensionExists {
+				detail.Server = "advanced chat"
+				detail.Tool = toolCall.Name
+				if argumentsErr != nil {
+					detail.Status = "invalid_arguments"
+					toolResultText = "Invalid tool arguments: " + argumentsErr.Error()
+				} else {
+					toolResult, err := HandleAdvancedChatToolCall(ctx, AdvancedChatToolCallInput{
+						UserID:    user.ID,
+						Mode:      mode,
+						AgentID:   input.AgentID,
+						SessionID: persistedSessionID,
+						Name:      toolCall.Name,
+						Arguments: arguments,
+					})
+					if err != nil {
+						detail.Status = "error"
+						toolResultText = "Tool call failed: " + err.Error()
+					} else {
+						detail.Status = "ok"
+						toolResultText = toolResult
 					}
 				}
 			}

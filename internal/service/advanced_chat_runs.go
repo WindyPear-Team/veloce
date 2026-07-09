@@ -1789,6 +1789,20 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 		tools = append(tools, advancedChatDeliveryTool(deliveryToolName))
 	}
 	systemPrompt := buildAdvancedChatCompletionSystemPrompt(prepared.agent, prepared.skills, prepared.workspaceSkills, prepared.mode)
+	extension, err := BuildAdvancedChatRuntimeExtension(ctx, AdvancedChatRuntimeContext{
+		UserID:       user.ID,
+		Mode:         prepared.mode,
+		AgentID:      prepared.input.AgentID,
+		AgentGroupID: prepared.input.AgentGroupID,
+		SessionID:    prepared.input.SessionID,
+		RunID:        prepared.runID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("Failed to load assistant extensions: %w", err)
+	}
+	if len(extension.Tools) > 0 {
+		tools = append(tools, extension.Tools...)
+	}
 	if groupPrompt := advancedChatAgentGroupChatSystemPrompt(prepared.agentGroup, prepared.groupAgent); groupPrompt != "" {
 		if strings.TrimSpace(systemPrompt) == "" {
 			systemPrompt = groupPrompt
@@ -1834,6 +1848,13 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 			systemPrompt = deliveryPrompt
 		} else {
 			systemPrompt = strings.Join([]string{systemPrompt, deliveryPrompt}, "\n\n")
+		}
+	}
+	if strings.TrimSpace(extension.SystemPrompt) != "" {
+		if strings.TrimSpace(systemPrompt) == "" {
+			systemPrompt = extension.SystemPrompt
+		} else {
+			systemPrompt = strings.Join([]string{systemPrompt, extension.SystemPrompt}, "\n\n")
 		}
 	}
 	executorMessages := make([]ChatExecutorMessage, 0, len(prepared.messages)+prepared.maxToolRounds*2)
@@ -1916,6 +1937,7 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 			resumeExists := toolCall.Name == advancedChatAgentStudioResumeToolName && studioRoleActive
 			activateSkillExists := toolCall.Name == advancedChatActivateSkillToolName && hasSkillCatalog
 			readSkillResourceExists := toolCall.Name == advancedChatReadSkillResourceToolName && hasSkillCatalog
+			extensionExists := AdvancedChatToolHandlerExists(toolCall.Name)
 			detail := advancedChatCompletionToolCall{ID: toolCall.ID, Round: round + 1, Name: toolCall.Name, Status: "running"}
 			precreatedConnectorTaskID := ""
 			var precreateConnectorTaskErr error
@@ -1953,6 +1975,9 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 			} else if readSkillResourceExists {
 				detail.Server = "skills"
 				detail.Tool = advancedChatReadSkillResourceToolName
+			} else if extensionExists {
+				detail.Server = "advanced chat"
+				detail.Tool = toolCall.Name
 			}
 			arguments, argumentsErr := parseToolArguments(toolCall.Arguments)
 			if argumentsErr == nil {
@@ -2034,6 +2059,29 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 					} else {
 						detail.Status = "ok"
 						toolResultText = toolResult
+					}
+				}
+			} else if extensionExists {
+				detail.Server = "advanced chat"
+				detail.Tool = toolCall.Name
+				if argumentsErr != nil {
+					detail.Status = "invalid_arguments"
+					toolResultText = "Invalid tool arguments: " + argumentsErr.Error()
+				} else {
+					toolResultText, err = HandleAdvancedChatToolCall(ctx, AdvancedChatToolCallInput{
+						UserID:    user.ID,
+						Mode:      prepared.mode,
+						AgentID:   prepared.input.AgentID,
+						SessionID: prepared.input.SessionID,
+						RunID:     prepared.runID,
+						Name:      toolCall.Name,
+						Arguments: arguments,
+					})
+					if err != nil {
+						detail.Status = "error"
+						toolResultText = "Tool call failed: " + err.Error()
+					} else {
+						detail.Status = "ok"
 					}
 				}
 			} else if deliveryExists {

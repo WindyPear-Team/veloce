@@ -610,7 +610,7 @@ func advancedChatFileStorageUsedBytes(userID uint) int64 {
 		Scan(&used).Error; err != nil {
 		return 0
 	}
-	return used + advancedChatSkillPackageStorageUsedBytes(userID)
+	return used + advancedChatSkillPackageStorageUsedBytes(userID) + ApplyAdvancedChatStorageUsageHooks(userID)
 }
 
 func advancedChatFileStorageRemainingBytes(userID uint) int64 {
@@ -619,6 +619,18 @@ func advancedChatFileStorageRemainingBytes(userID uint) int64 {
 		return 0
 	}
 	return remaining
+}
+
+func AdvancedChatFileStorageUsedBytes(userID uint) int64 {
+	return advancedChatFileStorageUsedBytes(userID)
+}
+
+func AdvancedChatFileStorageTotalBytes() int64 {
+	return advancedChatFileStorageTotalBytes()
+}
+
+func AdvancedChatFileStorageRemainingBytes(userID uint) int64 {
+	return advancedChatFileStorageRemainingBytes(userID)
 }
 
 func sanitizeAdvancedChatFileName(raw string, mimeType string) string {

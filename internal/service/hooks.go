@@ -21,6 +21,9 @@ type MetaModelListHook func(*gin.Context) ([]string, error)
 type MetaModelResolveHook func(*gin.Context, MetaModelResolveInput) (MetaModelResolveResult, error)
 type MetaModelCatalogHook func(*gin.Context) ([]MetaModelCatalogItem, error)
 type GeneratedAssetHook func(context.Context, GeneratedAssetInput)
+type AdvancedChatStorageUsageHook func(userID uint) int64
+type AdvancedChatRuntimeExtensionHook func(context.Context, AdvancedChatRuntimeContext) (AdvancedChatRuntimeExtension, error)
+type AdvancedChatToolHandler func(context.Context, AdvancedChatToolCallInput) (string, error)
 
 type MetaModelResolveInput struct {
 	ModelName    string
@@ -61,6 +64,30 @@ type GeneratedAssetInput struct {
 	Source       string
 }
 
+type AdvancedChatRuntimeContext struct {
+	UserID       uint
+	Mode         string
+	AgentID      string
+	AgentGroupID string
+	SessionID    string
+	RunID        string
+}
+
+type AdvancedChatRuntimeExtension struct {
+	SystemPrompt string
+	Tools        []ChatExecutorTool
+}
+
+type AdvancedChatToolCallInput struct {
+	UserID    uint
+	Mode      string
+	AgentID   string
+	SessionID string
+	RunID     string
+	Name      string
+	Arguments map[string]interface{}
+}
+
 var startupHooks []StartupHook
 var publicAPIRouteHooks []RouteHook
 var adminRouteHooks []RouteHook
@@ -70,6 +97,9 @@ var metaModelListHook MetaModelListHook
 var metaModelResolveHook MetaModelResolveHook
 var metaModelCatalogHook MetaModelCatalogHook
 var generatedAssetHook GeneratedAssetHook
+var advancedChatStorageUsageHooks []AdvancedChatStorageUsageHook
+var advancedChatRuntimeExtensionHooks []AdvancedChatRuntimeExtensionHook
+var advancedChatToolHandlers = map[string]AdvancedChatToolHandler{}
 
 func RegisterStartupHook(hook StartupHook) {
 	startupHooks = append(startupHooks, hook)
@@ -140,6 +170,25 @@ func RegisterGeneratedAssetHook(hook GeneratedAssetHook) {
 	generatedAssetHook = hook
 }
 
+func RegisterAdvancedChatStorageUsageHook(hook AdvancedChatStorageUsageHook) {
+	if hook != nil {
+		advancedChatStorageUsageHooks = append(advancedChatStorageUsageHooks, hook)
+	}
+}
+
+func RegisterAdvancedChatRuntimeExtensionHook(hook AdvancedChatRuntimeExtensionHook) {
+	if hook != nil {
+		advancedChatRuntimeExtensionHooks = append(advancedChatRuntimeExtensionHooks, hook)
+	}
+}
+
+func RegisterAdvancedChatToolHandler(name string, handler AdvancedChatToolHandler) {
+	if name == "" || handler == nil {
+		return
+	}
+	advancedChatToolHandlers[name] = handler
+}
+
 func ListMetaModelNames(c *gin.Context) ([]string, error) {
 	if metaModelListHook == nil {
 		return nil, nil
@@ -159,6 +208,54 @@ func ApplyGeneratedAssetHook(ctx context.Context, input GeneratedAssetInput) {
 		return
 	}
 	generatedAssetHook(ctx, input)
+}
+
+func ApplyAdvancedChatStorageUsageHooks(userID uint) int64 {
+	var total int64
+	for _, hook := range advancedChatStorageUsageHooks {
+		if hook == nil {
+			continue
+		}
+		if used := hook(userID); used > 0 {
+			total += used
+		}
+	}
+	return total
+}
+
+func BuildAdvancedChatRuntimeExtension(ctx context.Context, input AdvancedChatRuntimeContext) (AdvancedChatRuntimeExtension, error) {
+	var result AdvancedChatRuntimeExtension
+	for _, hook := range advancedChatRuntimeExtensionHooks {
+		if hook == nil {
+			continue
+		}
+		next, err := hook(ctx, input)
+		if err != nil {
+			return result, err
+		}
+		if next.SystemPrompt != "" {
+			if result.SystemPrompt == "" {
+				result.SystemPrompt = next.SystemPrompt
+			} else {
+				result.SystemPrompt += "\n\n" + next.SystemPrompt
+			}
+		}
+		result.Tools = append(result.Tools, next.Tools...)
+	}
+	return result, nil
+}
+
+func AdvancedChatToolHandlerExists(name string) bool {
+	_, ok := advancedChatToolHandlers[name]
+	return ok
+}
+
+func HandleAdvancedChatToolCall(ctx context.Context, input AdvancedChatToolCallInput) (string, error) {
+	handler, ok := advancedChatToolHandlers[input.Name]
+	if !ok {
+		return "", errors.New("advanced chat tool handler not found")
+	}
+	return handler(ctx, input)
 }
 
 func ResolveMetaModel(c *gin.Context, input MetaModelResolveInput) (MetaModelResolveResult, error) {
