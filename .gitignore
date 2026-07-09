@@ -2,4 +2,11 @@ flai.db
 flai.exe
 flai.exe~
 dist/
-community/
+web/
+docs/
+app/
+ref/
+desktop/
+data/
+mobile/
+.env
