@@ -117,55 +117,6 @@ func (api *API) waitTencentChannelLogin(c *gin.Context) {
 	c.JSON(http.StatusOK, response)
 }
 
-func (api *API) tencentChannelNoticesStatus(c *gin.Context) {
-	api.runTencentChannelNoticeCommand(c, "tencent-channel-cli manage notices-status --json", false)
-}
-
-func (api *API) tencentChannelNoticesOn(c *gin.Context) {
-	integration, ok := api.loadTencentChannelNoticeIntegration(c)
-	if !ok {
-		return
-	}
-	sessionKey, ok := tencentChannelSessionKey(c, integration)
-	if !ok {
-		return
-	}
-	api.runTencentChannelNoticeCommand(c, "tencent-channel-cli manage notices-on --session-key "+sessionKey+" --json --yes", false)
-}
-
-func (api *API) tencentChannelNoticesConfirm(c *gin.Context) {
-	integration, ok := api.loadTencentChannelNoticeIntegration(c)
-	if !ok {
-		return
-	}
-	sessionKey, ok := tencentChannelSessionKey(c, integration)
-	if !ok {
-		return
-	}
-	api.runTencentChannelNoticeCommand(c, "tencent-channel-cli manage notices-on --session-key "+sessionKey+" --confirm --json --yes", false)
-}
-
-func (api *API) tencentChannelNoticesCheck(c *gin.Context) {
-	integration, ok := api.loadTencentChannelNoticeIntegration(c)
-	if !ok {
-		return
-	}
-	if _, ok := api.ensureTencentChannelCLI(c, integration); !ok {
-		return
-	}
-	result, err := runTencentChannelCLI(c.Request.Context(), integration, tencentChannelNoticePollCommand(providerConfig(integration)), 60)
-	payload := parseTencentChannelCLIJSON(result)
-	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": formatTencentChannelCLIError(err, result), "result": payload})
-		return
-	}
-	if cliErr := tencentChannelCLIResultError(payload); cliErr != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": cliErr.Error(), "result": payload})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"result": parseTencentChannelGatewayPollResult(result), "raw": payload})
-}
-
 func (api *API) tencentChannelGuilds(c *gin.Context) {
 	api.runTencentChannelReadCommand(c, "tencent-channel-cli manage get-my-join-guild-info --json")
 }
@@ -221,32 +172,6 @@ func (api *API) runTencentChannelReadCommand(c *gin.Context, command string) {
 	c.JSON(http.StatusOK, payload)
 }
 
-func (api *API) runTencentChannelNoticeCommand(c *gin.Context, command string, requireSession bool) {
-	integration, ok := api.loadTencentChannelNoticeIntegration(c)
-	if !ok {
-		return
-	}
-	if requireSession {
-		if _, ok := tencentChannelSessionKey(c, integration); !ok {
-			return
-		}
-	}
-	if _, ok := api.ensureTencentChannelCLI(c, integration); !ok {
-		return
-	}
-	result, err := runTencentChannelCLI(c.Request.Context(), integration, command, 60)
-	payload := parseTencentChannelCLIJSON(result)
-	if err != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": formatTencentChannelCLIError(err, result), "result": payload})
-		return
-	}
-	if cliErr := tencentChannelCLIResultError(payload); cliErr != nil {
-		c.JSON(http.StatusBadGateway, gin.H{"error": cliErr.Error(), "result": payload})
-		return
-	}
-	c.JSON(http.StatusOK, payload)
-}
-
 func (api *API) loadTencentChannelNoticeIntegration(c *gin.Context) (MessageChannelIntegration, bool) {
 	user, ok := currentUser(c)
 	if !ok {
@@ -257,26 +182,6 @@ func (api *API) loadTencentChannelNoticeIntegration(c *gin.Context) (MessageChan
 		return MessageChannelIntegration{}, false
 	}
 	return loadUserTencentChannelIntegration(c, user.ID)
-}
-
-func tencentChannelSessionKey(c *gin.Context, integration MessageChannelIntegration) (string, bool) {
-	var input struct {
-		SessionKey string `json:"session_key"`
-	}
-	_ = c.ShouldBindJSON(&input)
-	sessionKey := strings.TrimSpace(input.SessionKey)
-	if sessionKey == "" {
-		sessionKey = configString(providerConfig(integration), "session_key")
-	}
-	if sessionKey == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Tencent channel notice session_key is required"})
-		return "", false
-	}
-	if !regexp.MustCompile(`^[A-Za-z0-9:_-]{1,200}$`).MatchString(sessionKey) {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid Tencent channel notice session_key"})
-		return "", false
-	}
-	return sessionKey, true
 }
 
 func (api *API) ensureTencentChannelCLI(c *gin.Context, integration MessageChannelIntegration) (string, bool) {
@@ -334,9 +239,6 @@ func runTencentChannelCLI(ctx context.Context, integration MessageChannelIntegra
 			"tencent-channel-cli feed get-notices",
 			"tencent-channel-cli manage get-my-join-guild-info",
 			"tencent-channel-cli manage get-guild-channel-list",
-			"tencent-channel-cli manage notices-status",
-			"tencent-channel-cli manage notices-on",
-			"tencent-channel-cli manage check-new-notices",
 		},
 	)
 }

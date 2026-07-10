@@ -381,7 +381,6 @@ func tencentChannelGatewayPollPayload(config map[string]interface{}) map[string]
 		"cursor":        configString(config, "cursor"),
 		"watermark":     configString(config, "watermark"),
 		"cli_profile":   configString(config, "cli_profile"),
-		"session_key":   configString(config, "session_key"),
 		"max_events":    intConfig(config, "max_events", 20, 1, 100),
 		"json":          true,
 		"cli_flags":     []string{"--json"},
@@ -395,7 +394,6 @@ func tencentChannelConfiguredPayload(integration MessageChannelIntegration, inpu
 		"channel_id":  configString(config, "channel_id"),
 		"get_type":    intConfig(config, "default_get_type", 2, 1, 2),
 		"cli_profile": configString(config, "cli_profile"),
-		"session_key": configString(config, "session_key"),
 		"json":        true,
 		"cli_flags":   []string{"--json"},
 	}
@@ -616,7 +614,6 @@ func tencentChannelActionPayload(integration MessageChannelIntegration, inbound 
 		"guild_id":    configString(config, "guild_id"),
 		"channel_id":  configString(config, "channel_id"),
 		"cli_profile": configString(config, "cli_profile"),
-		"session_key": configString(config, "session_key"),
 		"json":        true,
 		"cli_flags":   []string{"--json"},
 	}
@@ -785,7 +782,6 @@ func tencentChannelGatewaySignature(integration MessageChannelIntegration) strin
 		configString(config, "guild_id"),
 		configString(config, "channel_id"),
 		configString(config, "cli_profile"),
-		configString(config, "session_key"),
 		tencentChannelConfigString(config, "gateway_enabled"),
 		tencentChannelConfigString(config, "poll_mentions"),
 		tencentChannelConfigString(config, "poll_posts"),
