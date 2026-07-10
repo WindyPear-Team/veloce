@@ -16,9 +16,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/WindyPear-Team/flai/internal/config"
-	"github.com/WindyPear-Team/flai/internal/model"
-	communityservice "github.com/WindyPear-Team/flai/internal/service"
+	"github.com/WindyPear-Team/veloce/internal/config"
+	"github.com/WindyPear-Team/veloce/internal/model"
+	communityservice "github.com/WindyPear-Team/veloce/internal/service"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )

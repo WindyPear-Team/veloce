@@ -12,14 +12,14 @@ import (
 	"strings"
 	"time"
 
-	webui "github.com/WindyPear-Team/flai-web"
-	"github.com/WindyPear-Team/flai/internal/api"
-	messagechannel "github.com/WindyPear-Team/flai/internal/channel"
-	"github.com/WindyPear-Team/flai/internal/config"
-	"github.com/WindyPear-Team/flai/internal/middleware"
-	"github.com/WindyPear-Team/flai/internal/model"
-	"github.com/WindyPear-Team/flai/internal/premium"
-	"github.com/WindyPear-Team/flai/internal/service"
+	webui "github.com/WindyPear-Team/veloce-web"
+	"github.com/WindyPear-Team/veloce/internal/api"
+	messagechannel "github.com/WindyPear-Team/veloce/internal/channel"
+	"github.com/WindyPear-Team/veloce/internal/config"
+	"github.com/WindyPear-Team/veloce/internal/middleware"
+	"github.com/WindyPear-Team/veloce/internal/model"
+	"github.com/WindyPear-Team/veloce/internal/premium"
+	"github.com/WindyPear-Team/veloce/internal/service"
 	"github.com/gin-gonic/gin"
 )
 

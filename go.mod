@@ -1,11 +1,11 @@
-module github.com/WindyPear-Team/flai
+module github.com/WindyPear-Team/veloce
 
 go 1.26.3
 
-replace github.com/WindyPear-Team/flai-web => ../web
+replace github.com/WindyPear-Team/veloce-web => ../web
 
 require (
-	github.com/WindyPear-Team/flai-web v0.0.0
+	github.com/WindyPear-Team/veloce-web v0.0.0
 	github.com/coreos/go-oidc/v3 v3.18.0
 	github.com/gin-gonic/gin v1.12.0
 	github.com/glebarez/sqlite v1.11.0

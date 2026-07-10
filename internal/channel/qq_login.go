@@ -17,7 +17,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/WindyPear-Team/flai/internal/model"
+	"github.com/WindyPear-Team/veloce/internal/model"
 	"github.com/gin-gonic/gin"
 	qrcode "github.com/skip2/go-qrcode"
 )

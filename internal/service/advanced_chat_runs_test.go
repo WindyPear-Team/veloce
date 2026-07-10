@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/WindyPear-Team/flai/internal/model"
+	"github.com/WindyPear-Team/veloce/internal/model"
 )
 
 func TestAdvancedChatModelRetryDelay(t *testing.T) {

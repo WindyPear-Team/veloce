@@ -6,7 +6,7 @@ import (
 	"log"
 	"strings"
 
-	"github.com/WindyPear-Team/flai/internal/config"
+	"github.com/WindyPear-Team/veloce/internal/config"
 	"github.com/glebarez/sqlite"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"

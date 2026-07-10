@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	communityservice "github.com/WindyPear-Team/flai/internal/service"
+	communityservice "github.com/WindyPear-Team/veloce/internal/service"
 )
 
 func TestParseMessageChannelApprovalDecision(t *testing.T) {

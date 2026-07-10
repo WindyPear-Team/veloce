@@ -9,7 +9,7 @@ import (
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 
-	"github.com/WindyPear-Team/flai/internal/model"
+	"github.com/WindyPear-Team/veloce/internal/model"
 )
 
 var ErrInsufficientBalance = errors.New("insufficient balance")

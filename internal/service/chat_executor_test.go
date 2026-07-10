@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/WindyPear-Team/flai/internal/model"
+	"github.com/WindyPear-Team/veloce/internal/model"
 )
 
 func TestPrepareServerChatRequestIncludesImageParts(t *testing.T) {

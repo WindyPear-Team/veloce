@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/WindyPear-Team/flai/internal/model"
-	"github.com/WindyPear-Team/flai/internal/service"
+	"github.com/WindyPear-Team/veloce/internal/model"
+	"github.com/WindyPear-Team/veloce/internal/service"
 	"github.com/gin-gonic/gin"
 )
 

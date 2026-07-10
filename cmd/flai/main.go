@@ -3,7 +3,7 @@ package main
 import (
 	"log"
 
-	"github.com/WindyPear-Team/flai/internal/app"
+	"github.com/WindyPear-Team/veloce/internal/app"
 )
 
 func main() {

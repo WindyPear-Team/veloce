@@ -12,10 +12,10 @@ import (
 	"time"
 	"unicode"
 
-	communityapi "github.com/WindyPear-Team/flai/internal/api"
-	communitymiddleware "github.com/WindyPear-Team/flai/internal/middleware"
-	"github.com/WindyPear-Team/flai/internal/model"
-	communityservice "github.com/WindyPear-Team/flai/internal/service"
+	communityapi "github.com/WindyPear-Team/veloce/internal/api"
+	communitymiddleware "github.com/WindyPear-Team/veloce/internal/middleware"
+	"github.com/WindyPear-Team/veloce/internal/model"
+	communityservice "github.com/WindyPear-Team/veloce/internal/service"
 	"github.com/gin-gonic/gin"
 )
 
