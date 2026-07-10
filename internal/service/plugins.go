@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -158,23 +159,14 @@ func (api *pluginAPI) installPlugin(c *gin.Context) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	if err := extractPluginPackage(src, file.Filename, file.Size, tmpDir); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	manifest, manifestRaw, err := readPluginManifest(tmpDir)
+	manifest, manifestRaw, wasmRel, err := prepareUploadedPlugin(c.Request.Context(), src, file.Filename, file.Size, tmpDir)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	manifest = normalizePluginManifest(manifest)
 	if err := validatePluginManifest(manifest); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
-	}
-	wasmRel := strings.TrimSpace(manifest.WASM)
-	if wasmRel == "" {
-		wasmRel = "plugin.wasm"
 	}
 	wasmPath := ""
 	if wasmRel != "" {
@@ -235,6 +227,53 @@ func (api *pluginAPI) installPlugin(c *gin.Context) {
 		recordPluginLog(user.ID, plugin.ID, "info", "wasm_init", "WASM plugin initialized", "")
 	}
 	c.JSON(http.StatusOK, gin.H{"plugin": pluginListResponse(plugin, true)})
+}
+
+func prepareUploadedPlugin(ctx context.Context, src io.Reader, filename string, size int64, tmpDir string) (PluginManifest, []byte, string, error) {
+	lower := strings.ToLower(strings.TrimSpace(filename))
+	if strings.HasSuffix(lower, ".wasm") {
+		wasmRel := "plugin.wasm"
+		wasmPath := filepath.Join(tmpDir, wasmRel)
+		if err := writeUploadedWASM(wasmPath, src); err != nil {
+			return PluginManifest{}, nil, "", err
+		}
+		manifest, raw, err := ReadPluginManifestFromWASM(ctx, wasmPath)
+		if err != nil {
+			return PluginManifest{}, raw, "", err
+		}
+		manifest = normalizePluginManifest(manifest)
+		manifest.WASM = wasmRel
+		return manifest, raw, wasmRel, nil
+	}
+
+	if err := extractPluginPackage(src, filename, size, tmpDir); err != nil {
+		return PluginManifest{}, nil, "", err
+	}
+	manifest, raw, err := readPluginManifest(tmpDir)
+	if err == nil {
+		manifest = normalizePluginManifest(manifest)
+		wasmRel := strings.TrimSpace(manifest.WASM)
+		if wasmRel == "" {
+			wasmRel = "plugin.wasm"
+		}
+		manifest.WASM = wasmRel
+		return manifest, raw, wasmRel, nil
+	}
+	wasmRel, err := discoverSingleWASM(tmpDir)
+	if err != nil {
+		return PluginManifest{}, nil, "", errors.New("plugin package must contain plugin.json or a single WASM with plugin_manifest export")
+	}
+	wasmPath, err := safePluginFilePath(tmpDir, wasmRel)
+	if err != nil {
+		return PluginManifest{}, nil, "", err
+	}
+	manifest, raw, err = ReadPluginManifestFromWASM(ctx, wasmPath)
+	if err != nil {
+		return PluginManifest{}, raw, "", err
+	}
+	manifest = normalizePluginManifest(manifest)
+	manifest.WASM = wasmRel
+	return manifest, raw, wasmRel, nil
 }
 
 func (api *pluginAPI) enablePlugin(c *gin.Context) {
@@ -485,6 +524,8 @@ func extractPluginPackage(src io.Reader, filename string, size int64, dest strin
 	name := strings.ToLower(strings.TrimSpace(filename))
 	limited := io.LimitReader(src, pluginMaxPackageBytes+1)
 	switch {
+	case strings.HasSuffix(name, ".wasm"):
+		return writeUploadedWASM(filepath.Join(dest, "plugin.wasm"), limited)
 	case strings.HasSuffix(name, ".zip"):
 		tmp, err := os.CreateTemp("", "plugin-*.zip")
 		if err != nil {
@@ -517,8 +558,51 @@ func extractPluginPackage(src io.Reader, filename string, size int64, dest strin
 		defer gz.Close()
 		return extractTar(tar.NewReader(gz), dest)
 	default:
-		return errors.New("plugin package must be .zip, .tar.gz, or .tgz")
+		return errors.New("plugin package must be .wasm, .zip, .tar.gz, or .tgz")
 	}
+}
+
+func writeUploadedWASM(target string, src io.Reader) error {
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return err
+	}
+	out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	written, err := io.Copy(out, io.LimitReader(src, pluginMaxPackageBytes+1))
+	if err != nil {
+		return err
+	}
+	if written > pluginMaxPackageBytes {
+		return errors.New("plugin WASM is too large")
+	}
+	return nil
+}
+
+func discoverSingleWASM(root string) (string, error) {
+	var found []string
+	if err := filepath.WalkDir(root, func(filePath string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".wasm") {
+			return nil
+		}
+		rel, err := filepath.Rel(root, filePath)
+		if err != nil {
+			return err
+		}
+		found = append(found, filepath.ToSlash(rel))
+		return nil
+	}); err != nil {
+		return "", err
+	}
+	if len(found) != 1 {
+		return "", fmt.Errorf("expected exactly one WASM file, found %d", len(found))
+	}
+	return found[0], nil
 }
 
 func extractZip(reader *zip.ReadCloser, dest string) error {

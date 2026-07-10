@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -23,8 +24,25 @@ func InitializePluginWASM(ctx context.Context, plugin model.Plugin) error {
 	if strings.TrimSpace(plugin.WASMPath) == "" {
 		return nil
 	}
-	_, err := runPluginWASM(ctx, plugin, "plugin_init")
+	_, err := runPluginWASM(ctx, plugin, "plugin_init", nil)
 	return err
+}
+
+func ReadPluginManifestFromWASM(ctx context.Context, wasmPath string) (PluginManifest, []byte, error) {
+	plugin := model.Plugin{ID: "manifest", WASMPath: wasmPath}
+	stdout, err := runPluginWASM(ctx, plugin, "plugin_manifest", nil)
+	if err != nil {
+		return PluginManifest{}, nil, err
+	}
+	raw := []byte(strings.TrimSpace(stdout))
+	if len(raw) == 0 {
+		return PluginManifest{}, nil, errors.New("plugin_manifest returned empty output")
+	}
+	var manifest PluginManifest
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		return PluginManifest{}, raw, fmt.Errorf("plugin_manifest returned invalid JSON: %w", err)
+	}
+	return manifest, raw, nil
 }
 
 // InvokePluginAction is the backend entry point for declarative frontend
@@ -40,17 +58,22 @@ func InvokePluginAction(ctx context.Context, plugin model.Plugin, userID uint, a
 		"payload": payload,
 	})
 	recordPluginLog(userID, plugin.ID, "info", "action_requested", "Plugin action requested", metadata)
-	stdout, err := runPluginWASM(ctx, plugin, "plugin_handle_action")
+	stdout, err := runPluginWASM(ctx, plugin, "plugin_handle_action", []byte(metadata))
 	if err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{
-		"ok":     true,
-		"stdout": stdout,
-	}, nil
+	stdout = strings.TrimSpace(stdout)
+	if stdout == "" {
+		return map[string]interface{}{"ok": true}, nil
+	}
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(stdout), &result); err != nil {
+		return nil, fmt.Errorf("plugin action returned invalid JSON: %w", err)
+	}
+	return result, nil
 }
 
-func runPluginWASM(ctx context.Context, plugin model.Plugin, functionName string) (string, error) {
+func runPluginWASM(ctx context.Context, plugin model.Plugin, functionName string, stdin []byte) (string, error) {
 	wasmPath := strings.TrimSpace(plugin.WASMPath)
 	if wasmPath == "" {
 		return "", nil
@@ -72,7 +95,7 @@ func runPluginWASM(ctx context.Context, plugin model.Plugin, functionName string
 	config := wazero.NewModuleConfig().
 		WithStdout(&stdout).
 		WithStderr(&stderr).
-		WithStdin(io.Reader(strings.NewReader("")))
+		WithStdin(io.Reader(bytes.NewReader(stdin)))
 	module, err := runtime.InstantiateWithConfig(runCtx, wasm, config)
 	if err != nil {
 		return stdout.String(), fmt.Errorf("failed to instantiate plugin WASM: %w%s", err, pluginStderrSuffix(stderr.String()))

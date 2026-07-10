@@ -1,14 +1,12 @@
 Veloce
 
-Community Edition
+Your better personal agent and ai site
 
-English | [简体中文](README_szh.md)
+English | [简体中文](README_zh.md)
 
-Veloce is an AI API gateway and marketplace designed for building AI platforms and developer ecosystems.
+Veloce is an AI API gateway and marketplace designed for building AI platforms and developer ecosystems, providing a production-ready foundation for AI API management, authentication, billing, and upstream provider management.
 
-This repository contains the Community Edition of Veloce, providing a production-ready foundation for AI API management, authentication, billing, and upstream provider management.
-
-Features
+## Features
 
 - OpenAI-compatible API gateway
 - Multiple upstream provider management
@@ -21,24 +19,12 @@ Features
 - Image generation support
 - Modern administration dashboard
 
-Repository Structure
+## Repository Structure
 
-community/    Community Edition backend
-web/          Frontend
+internal/    Internal code
+cmd/         Cli module
 
-Frontend
-
-The frontend source code is located in the "web" directory.
-
-Community Edition
-
-This repository contains the Community Edition of Veloce.
-
-For enterprise features, commercial support, and additional capabilities, you can purchase the Professional Edition at:
-
-https://tk.flweb.cn/buy
-
-Building
+## Building
 
 Requirements
 
@@ -47,26 +33,29 @@ Requirements
 - Yarn
 
 1. Build the Frontend
-
+```
 cd web
 yarn install
 yarn build
+```
 
-2. Build the Community Edition Backend
-
-cd ../community
+> Tips: You should put your frontend code in ../web
+2. Build the Backend
+```
+cd ../veloce
 go build
-
+```
 Or run it directly during development:
-
+```
 go run .
-
+```
 After the frontend has been built, the backend will serve the generated frontend assets.
 
-Configuration
+## Configuration
 
 Copy ".env.example" to ".env" and configure your environment.
 
+```
 APP_ENV=development
 PORT=8080
 DB_PATH=veloce.db
@@ -77,7 +66,8 @@ OIDC_CLIENT_SECRET=your-client-secret
 OIDC_REDIRECT_URL=http://localhost:8080/auth/callback
 BOOTSTRAP_ADMIN_OIDC_SUBS=
 BOOTSTRAP_ADMIN_EMAILS=
+```
 
-License
+## License
 
-See the LICENSE file for licensing information.
+We use AGPL. See the LICENSE file for licensing information.
