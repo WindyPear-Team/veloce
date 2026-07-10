@@ -329,6 +329,77 @@ type SystemSetting struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// Plugin stores an installed WASM plugin package.
+type Plugin struct {
+	ID              string    `gorm:"primaryKey;size:80" json:"id"`
+	Name            string    `gorm:"size:120;not null" json:"name"`
+	Version         string    `gorm:"size:50;not null" json:"version"`
+	Description     string    `gorm:"type:text" json:"description"`
+	Author          string    `gorm:"size:120" json:"author"`
+	Enabled         bool      `gorm:"default:false" json:"enabled"`
+	ManifestJSON    string    `gorm:"type:text;not null" json:"manifest_json"`
+	PermissionsJSON string    `gorm:"type:text" json:"permissions_json"`
+	HooksJSON       string    `gorm:"type:text" json:"hooks_json"`
+	FrontendJSON    string    `gorm:"type:text" json:"frontend_json"`
+	SettingsJSON    string    `gorm:"type:text" json:"settings_json"`
+	Path            string    `gorm:"size:500;not null" json:"path"`
+	WASMPath        string    `gorm:"size:500" json:"wasm_path"`
+	LastError       string    `gorm:"type:text" json:"last_error"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+// UserPluginState stores a user's enabled state for an installed plugin.
+type UserPluginState struct {
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	UserID    uint      `gorm:"uniqueIndex:idx_user_plugin_state;not null" json:"user_id"`
+	User      User      `gorm:"foreignKey:UserID" json:"-"`
+	PluginID  string    `gorm:"uniqueIndex:idx_user_plugin_state;size:80;not null" json:"plugin_id"`
+	Plugin    Plugin    `gorm:"foreignKey:PluginID" json:"plugin"`
+	Enabled   bool      `gorm:"default:false" json:"enabled"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// UserPluginConfig stores declarative plugin settings for a user.
+type UserPluginConfig struct {
+	ID         uint      `gorm:"primaryKey" json:"id"`
+	UserID     uint      `gorm:"uniqueIndex:idx_user_plugin_config;not null" json:"user_id"`
+	User       User      `gorm:"foreignKey:UserID" json:"-"`
+	PluginID   string    `gorm:"uniqueIndex:idx_user_plugin_config;size:80;not null" json:"plugin_id"`
+	Plugin     Plugin    `gorm:"foreignKey:PluginID" json:"plugin"`
+	ConfigJSON string    `gorm:"type:text" json:"config_json"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+// PluginKV stores plugin-owned key/value data.
+type PluginKV struct {
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	UserID    uint      `gorm:"uniqueIndex:idx_plugin_kv;not null" json:"user_id"`
+	User      User      `gorm:"foreignKey:UserID" json:"-"`
+	PluginID  string    `gorm:"uniqueIndex:idx_plugin_kv;size:80;not null" json:"plugin_id"`
+	Plugin    Plugin    `gorm:"foreignKey:PluginID" json:"plugin"`
+	Key       string    `gorm:"uniqueIndex:idx_plugin_kv;size:200;not null" json:"key"`
+	ValueJSON string    `gorm:"type:text" json:"value_json"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// PluginLog records plugin runtime and management events.
+type PluginLog struct {
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	UserID    *uint     `gorm:"index" json:"user_id,omitempty"`
+	User      User      `gorm:"foreignKey:UserID" json:"user,omitempty"`
+	PluginID  string    `gorm:"index;size:80" json:"plugin_id"`
+	Plugin    Plugin    `gorm:"foreignKey:PluginID" json:"plugin"`
+	Level     string    `gorm:"index;size:20;not null" json:"level"`
+	Event     string    `gorm:"index;size:100;not null" json:"event"`
+	Message   string    `gorm:"type:text" json:"message"`
+	Metadata  string    `gorm:"type:text" json:"metadata,omitempty"`
+	CreatedAt time.Time `gorm:"index" json:"created_at"`
+}
+
 // VideoTask tracks asynchronous video generation requests.
 type VideoTask struct {
 	ID                string          `gorm:"primaryKey;size:64" json:"id"`

@@ -50,6 +50,11 @@ func InitDB() {
 		&VideoTask{},
 		&TokenLog{},
 		&AuditLog{},
+		&Plugin{},
+		&UserPluginState{},
+		&UserPluginConfig{},
+		&PluginKV{},
+		&PluginLog{},
 	)
 	if err != nil {
 		log.Fatalf("failed to migrate database: %v", err)
