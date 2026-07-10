@@ -216,6 +216,8 @@ func RegisterUserRoutes(group *gin.RouterGroup) {
 	group.POST("/message-channels/:id/tencent-channel/notices/on", api.tencentChannelNoticesOn)
 	group.POST("/message-channels/:id/tencent-channel/notices/confirm", api.tencentChannelNoticesConfirm)
 	group.POST("/message-channels/:id/tencent-channel/notices/check", api.tencentChannelNoticesCheck)
+	group.POST("/message-channels/:id/tencent-channel/guilds", api.tencentChannelGuilds)
+	group.POST("/message-channels/:id/tencent-channel/channels", api.tencentChannelChannels)
 	group.POST("/message-channels/:id/tencent-channel/list-posts", api.tencentChannelListPosts)
 	group.POST("/message-channels/:id/tencent-channel/get-post", api.tencentChannelGetPost)
 	group.POST("/message-channels/:id/tencent-channel/get-comments", api.tencentChannelGetComments)

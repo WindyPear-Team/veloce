@@ -166,6 +166,61 @@ func (api *API) tencentChannelNoticesCheck(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"result": parseTencentChannelGatewayPollResult(result), "raw": payload})
 }
 
+func (api *API) tencentChannelGuilds(c *gin.Context) {
+	api.runTencentChannelReadCommand(c, "tencent-channel-cli manage get-my-join-guild-info --json")
+}
+
+func (api *API) tencentChannelChannels(c *gin.Context) {
+	integration, ok := api.loadTencentChannelNoticeIntegration(c)
+	if !ok {
+		return
+	}
+	var input struct {
+		GuildID string `json:"guild_id"`
+	}
+	_ = c.ShouldBindJSON(&input)
+	guildID := strings.TrimSpace(input.GuildID)
+	if !regexp.MustCompile(`^\d+$`).MatchString(guildID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Tencent channel guild_id is required"})
+		return
+	}
+	if _, ok := api.ensureTencentChannelCLI(c, integration); !ok {
+		return
+	}
+	result, err := runTencentChannelCLI(c.Request.Context(), integration, "tencent-channel-cli manage get-guild-channel-list --guild-id "+guildID+" --json", 60)
+	payload := parseTencentChannelCLIJSON(result)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": formatTencentChannelCLIError(err, result), "result": payload})
+		return
+	}
+	if cliErr := tencentChannelCLIResultError(payload); cliErr != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": cliErr.Error(), "result": payload})
+		return
+	}
+	c.JSON(http.StatusOK, payload)
+}
+
+func (api *API) runTencentChannelReadCommand(c *gin.Context, command string) {
+	integration, ok := api.loadTencentChannelNoticeIntegration(c)
+	if !ok {
+		return
+	}
+	if _, ok := api.ensureTencentChannelCLI(c, integration); !ok {
+		return
+	}
+	result, err := runTencentChannelCLI(c.Request.Context(), integration, command, 60)
+	payload := parseTencentChannelCLIJSON(result)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": formatTencentChannelCLIError(err, result), "result": payload})
+		return
+	}
+	if cliErr := tencentChannelCLIResultError(payload); cliErr != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": cliErr.Error(), "result": payload})
+		return
+	}
+	c.JSON(http.StatusOK, payload)
+}
+
 func (api *API) runTencentChannelNoticeCommand(c *gin.Context, command string, requireSession bool) {
 	integration, ok := api.loadTencentChannelNoticeIntegration(c)
 	if !ok {
@@ -277,6 +332,8 @@ func runTencentChannelCLI(ctx context.Context, integration MessageChannelIntegra
 			"tencent-channel-cli version",
 			"tencent-channel-cli login",
 			"tencent-channel-cli feed get-notices",
+			"tencent-channel-cli manage get-my-join-guild-info",
+			"tencent-channel-cli manage get-guild-channel-list",
 			"tencent-channel-cli manage notices-status",
 			"tencent-channel-cli manage notices-on",
 			"tencent-channel-cli manage check-new-notices",
