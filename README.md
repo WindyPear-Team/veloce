@@ -71,3 +71,7 @@ BOOTSTRAP_ADMIN_EMAILS=
 ## License
 
 We use AGPL. See the LICENSE file for licensing information.
+
+## Special thanks
+
+[Linuxdo](https://linux.do)
