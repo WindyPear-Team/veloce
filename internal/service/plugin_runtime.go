@@ -95,7 +95,9 @@ func runPluginWASM(ctx context.Context, plugin model.Plugin, functionName string
 	config := wazero.NewModuleConfig().
 		WithStdout(&stdout).
 		WithStderr(&stderr).
-		WithStdin(io.Reader(bytes.NewReader(stdin)))
+		WithStdin(io.Reader(bytes.NewReader(stdin))).
+		WithFSConfig(wazero.NewFSConfig()).
+		WithStartFunctions("_initialize")
 	module, err := runtime.InstantiateWithConfig(runCtx, wasm, config)
 	if err != nil {
 		return stdout.String(), fmt.Errorf("failed to instantiate plugin WASM: %w%s", err, pluginStderrSuffix(stderr.String()))

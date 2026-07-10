@@ -1,19 +1,13 @@
 package service
 
 import (
-	"archive/tar"
-	"archive/zip"
-	"compress/gzip"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
-	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -67,6 +61,7 @@ type pluginListItem struct {
 }
 
 func init() {
+	RegisterStartupHook(loadPluginsOnStartup)
 	RegisterUserRouteHook(registerPluginUserRoutes)
 }
 
@@ -88,6 +83,9 @@ func (api *pluginAPI) listPlugins(c *gin.Context) {
 	user, ok := currentUserFromContext(c)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+	if !requirePluginAdmin(c, user) {
 		return
 	}
 	var plugins []model.Plugin
@@ -131,13 +129,16 @@ func (api *pluginAPI) installPlugin(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
 		return
 	}
+	if !requirePluginAdmin(c, user) {
+		return
+	}
 	file, err := c.FormFile("file")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Plugin package file is required"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Plugin WASM file is required"})
 		return
 	}
 	if file.Size > pluginMaxPackageBytes {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Plugin package is too large"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Plugin WASM is too large"})
 		return
 	}
 	src, err := file.Open()
@@ -159,7 +160,7 @@ func (api *pluginAPI) installPlugin(c *gin.Context) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	manifest, manifestRaw, wasmRel, err := prepareUploadedPlugin(c.Request.Context(), src, file.Filename, file.Size, tmpDir)
+	manifest, manifestRaw, tempWASMPath, err := prepareUploadedPlugin(c.Request.Context(), src, file.Filename, tmpDir)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -168,29 +169,17 @@ func (api *pluginAPI) installPlugin(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	wasmPath := ""
-	if wasmRel != "" {
-		resolved, err := safePluginFilePath(tmpDir, wasmRel)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid WASM path"})
-			return
-		}
-		if stat, err := os.Stat(resolved); err == nil && !stat.IsDir() {
-			wasmPath = filepath.Join(pluginInstallDir(manifest.ID), filepath.FromSlash(path.Clean(strings.ReplaceAll(wasmRel, "\\", "/"))))
-		}
-	}
-
-	finalDir := pluginInstallDir(manifest.ID)
-	if err := os.RemoveAll(finalDir); err != nil {
+	wasmPath := pluginWASMPath(manifest.ID)
+	if err := os.Remove(wasmPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to replace old plugin files"})
 		return
 	}
-	if err := os.MkdirAll(filepath.Dir(finalDir), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(wasmPath), 0o755); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to prepare plugin directory"})
 		return
 	}
-	if err := os.Rename(tmpDir, finalDir); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to install plugin files"})
+	if err := os.Rename(tempWASMPath, wasmPath); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to install plugin WASM"})
 		return
 	}
 
@@ -208,7 +197,7 @@ func (api *pluginAPI) installPlugin(c *gin.Context) {
 		HooksJSON:       hooksJSON,
 		FrontendJSON:    string(manifest.Frontend),
 		SettingsJSON:    string(manifest.Settings),
-		Path:            finalDir,
+		Path:            filepath.Dir(wasmPath),
 		WASMPath:        wasmPath,
 	}
 	if err := model.DB.Where(&model.Plugin{ID: plugin.ID}).Assign(plugin).FirstOrCreate(&plugin).Error; err != nil {
@@ -229,51 +218,22 @@ func (api *pluginAPI) installPlugin(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"plugin": pluginListResponse(plugin, true)})
 }
 
-func prepareUploadedPlugin(ctx context.Context, src io.Reader, filename string, size int64, tmpDir string) (PluginManifest, []byte, string, error) {
+func prepareUploadedPlugin(ctx context.Context, src io.Reader, filename string, tmpDir string) (PluginManifest, []byte, string, error) {
 	lower := strings.ToLower(strings.TrimSpace(filename))
-	if strings.HasSuffix(lower, ".wasm") {
-		wasmRel := "plugin.wasm"
-		wasmPath := filepath.Join(tmpDir, wasmRel)
-		if err := writeUploadedWASM(wasmPath, src); err != nil {
-			return PluginManifest{}, nil, "", err
-		}
-		manifest, raw, err := ReadPluginManifestFromWASM(ctx, wasmPath)
-		if err != nil {
-			return PluginManifest{}, raw, "", err
-		}
-		manifest = normalizePluginManifest(manifest)
-		manifest.WASM = wasmRel
-		return manifest, raw, wasmRel, nil
+	if !strings.HasSuffix(lower, ".wasm") {
+		return PluginManifest{}, nil, "", errors.New("plugin upload must be a single .wasm file")
 	}
-
-	if err := extractPluginPackage(src, filename, size, tmpDir); err != nil {
+	wasmPath := filepath.Join(tmpDir, "plugin.wasm")
+	if err := writeUploadedWASM(wasmPath, src); err != nil {
 		return PluginManifest{}, nil, "", err
 	}
-	manifest, raw, err := readPluginManifest(tmpDir)
-	if err == nil {
-		manifest = normalizePluginManifest(manifest)
-		wasmRel := strings.TrimSpace(manifest.WASM)
-		if wasmRel == "" {
-			wasmRel = "plugin.wasm"
-		}
-		manifest.WASM = wasmRel
-		return manifest, raw, wasmRel, nil
-	}
-	wasmRel, err := discoverSingleWASM(tmpDir)
-	if err != nil {
-		return PluginManifest{}, nil, "", errors.New("plugin package must contain plugin.json or a single WASM with plugin_manifest export")
-	}
-	wasmPath, err := safePluginFilePath(tmpDir, wasmRel)
-	if err != nil {
-		return PluginManifest{}, nil, "", err
-	}
-	manifest, raw, err = ReadPluginManifestFromWASM(ctx, wasmPath)
+	manifest, raw, err := ReadPluginManifestFromWASM(ctx, wasmPath)
 	if err != nil {
 		return PluginManifest{}, raw, "", err
 	}
 	manifest = normalizePluginManifest(manifest)
-	manifest.WASM = wasmRel
-	return manifest, raw, wasmRel, nil
+	manifest.WASM = filepath.Base(wasmPath)
+	return manifest, raw, wasmPath, nil
 }
 
 func (api *pluginAPI) enablePlugin(c *gin.Context) {
@@ -288,6 +248,9 @@ func (api *pluginAPI) setPluginEnabled(c *gin.Context, enabled bool) {
 	user, ok := currentUserFromContext(c)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+	if !requirePluginAdmin(c, user) {
 		return
 	}
 	plugin, ok := loadPlugin(c)
@@ -305,6 +268,9 @@ func (api *pluginAPI) uninstallPlugin(c *gin.Context) {
 	user, ok := currentUserFromContext(c)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+	if !requirePluginAdmin(c, user) {
 		return
 	}
 	plugin, ok := loadPlugin(c)
@@ -329,7 +295,9 @@ func (api *pluginAPI) uninstallPlugin(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to uninstall plugin"})
 		return
 	}
-	_ = os.RemoveAll(plugin.Path)
+	if strings.TrimSpace(plugin.WASMPath) != "" {
+		_ = os.Remove(plugin.WASMPath)
+	}
 	_ = os.RemoveAll(filepath.Join(config.DataPath, "plugin-data", fmt.Sprint(user.ID), plugin.ID))
 	recordPluginLog(user.ID, plugin.ID, "info", "uninstall", "Plugin uninstalled", "")
 	c.JSON(http.StatusOK, gin.H{"message": "Plugin uninstalled"})
@@ -422,6 +390,14 @@ func loadPlugin(c *gin.Context) (model.Plugin, bool) {
 	return plugin, true
 }
 
+func requirePluginAdmin(c *gin.Context, user *model.User) bool {
+	if user == nil || !user.IsAdmin {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Admin permission required"})
+		return false
+	}
+	return true
+}
+
 func pluginListResponse(plugin model.Plugin, enabled bool) pluginListItem {
 	return pluginListItem{
 		ID:          plugin.ID,
@@ -455,7 +431,60 @@ func pluginUserEnabled(plugin model.Plugin, states map[string]bool) bool {
 		return false
 	}
 	enabled, ok := states[plugin.ID]
-	return ok && enabled
+	return !ok || enabled
+}
+
+func loadPluginsOnStartup() error {
+	root := filepath.Join(config.DataPath, "plugins")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".wasm") {
+			continue
+		}
+		filePath := filepath.Join(root, entry.Name())
+		manifest, raw, err := ReadPluginManifestFromWASM(context.Background(), filePath)
+		if err != nil {
+			recordPluginLog(0, "", "warn", "startup_load_failed", err.Error(), mustJSON(gin.H{"path": filePath}))
+			continue
+		}
+		manifest = normalizePluginManifest(manifest)
+		if err := validatePluginManifest(manifest); err != nil {
+			recordPluginLog(0, manifest.ID, "warn", "startup_load_failed", err.Error(), mustJSON(gin.H{"path": filePath}))
+			continue
+		}
+		plugin := model.Plugin{
+			ID:              manifest.ID,
+			Name:            manifest.Name,
+			Version:         manifest.Version,
+			Description:     manifest.Description,
+			Author:          manifest.Author,
+			Enabled:         true,
+			ManifestJSON:    string(raw),
+			PermissionsJSON: mustJSON(manifest.Permissions),
+			HooksJSON:       mustJSON(manifest.Hooks),
+			FrontendJSON:    string(manifest.Frontend),
+			SettingsJSON:    string(manifest.Settings),
+			Path:            root,
+			WASMPath:        filePath,
+		}
+		if err := model.DB.Where(&model.Plugin{ID: plugin.ID}).Assign(plugin).FirstOrCreate(&plugin).Error; err != nil {
+			recordPluginLog(0, manifest.ID, "warn", "startup_load_failed", err.Error(), mustJSON(gin.H{"path": filePath}))
+			continue
+		}
+		if err := InitializePluginWASM(context.Background(), plugin); err != nil {
+			model.DB.Model(&plugin).Update("last_error", err.Error())
+			recordPluginLog(0, plugin.ID, "warn", "startup_init_failed", err.Error(), mustJSON(gin.H{"path": filePath}))
+			continue
+		}
+		model.DB.Model(&plugin).Update("last_error", "")
+	}
+	return nil
 }
 
 func setUserPluginEnabled(userID uint, pluginID string, enabled bool) error {
@@ -463,19 +492,6 @@ func setUserPluginEnabled(userID uint, pluginID string, enabled bool) error {
 	return model.DB.Where(&model.UserPluginState{UserID: userID, PluginID: pluginID}).
 		Assign(model.UserPluginState{Enabled: enabled}).
 		FirstOrCreate(&state).Error
-}
-
-func readPluginManifest(root string) (PluginManifest, []byte, error) {
-	manifestPath := filepath.Join(root, "plugin.json")
-	raw, err := os.ReadFile(manifestPath)
-	if err != nil {
-		return PluginManifest{}, nil, errors.New("plugin.json is required")
-	}
-	var manifest PluginManifest
-	if err := json.Unmarshal(raw, &manifest); err != nil {
-		return PluginManifest{}, nil, fmt.Errorf("invalid plugin.json: %w", err)
-	}
-	return manifest, raw, nil
 }
 
 func validatePluginManifest(manifest PluginManifest) error {
@@ -517,51 +533,6 @@ func normalizePluginManifest(manifest PluginManifest) PluginManifest {
 	return manifest
 }
 
-func extractPluginPackage(src io.Reader, filename string, size int64, dest string) error {
-	if err := os.MkdirAll(dest, 0o755); err != nil {
-		return err
-	}
-	name := strings.ToLower(strings.TrimSpace(filename))
-	limited := io.LimitReader(src, pluginMaxPackageBytes+1)
-	switch {
-	case strings.HasSuffix(name, ".wasm"):
-		return writeUploadedWASM(filepath.Join(dest, "plugin.wasm"), limited)
-	case strings.HasSuffix(name, ".zip"):
-		tmp, err := os.CreateTemp("", "plugin-*.zip")
-		if err != nil {
-			return err
-		}
-		tmpName := tmp.Name()
-		defer os.Remove(tmpName)
-		written, copyErr := io.Copy(tmp, limited)
-		closeErr := tmp.Close()
-		if copyErr != nil {
-			return copyErr
-		}
-		if closeErr != nil {
-			return closeErr
-		}
-		if written > pluginMaxPackageBytes {
-			return errors.New("plugin package is too large")
-		}
-		reader, err := zip.OpenReader(tmpName)
-		if err != nil {
-			return fmt.Errorf("invalid zip package: %w", err)
-		}
-		defer reader.Close()
-		return extractZip(reader, dest)
-	case strings.HasSuffix(name, ".tar.gz"), strings.HasSuffix(name, ".tgz"):
-		gz, err := gzip.NewReader(limited)
-		if err != nil {
-			return fmt.Errorf("invalid tar.gz package: %w", err)
-		}
-		defer gz.Close()
-		return extractTar(tar.NewReader(gz), dest)
-	default:
-		return errors.New("plugin package must be .wasm, .zip, .tar.gz, or .tgz")
-	}
-}
-
 func writeUploadedWASM(target string, src io.Reader) error {
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 		return err
@@ -581,125 +552,8 @@ func writeUploadedWASM(target string, src io.Reader) error {
 	return nil
 }
 
-func discoverSingleWASM(root string) (string, error) {
-	var found []string
-	if err := filepath.WalkDir(root, func(filePath string, entry os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".wasm") {
-			return nil
-		}
-		rel, err := filepath.Rel(root, filePath)
-		if err != nil {
-			return err
-		}
-		found = append(found, filepath.ToSlash(rel))
-		return nil
-	}); err != nil {
-		return "", err
-	}
-	if len(found) != 1 {
-		return "", fmt.Errorf("expected exactly one WASM file, found %d", len(found))
-	}
-	return found[0], nil
-}
-
-func extractZip(reader *zip.ReadCloser, dest string) error {
-	for _, file := range reader.File {
-		if file.FileInfo().Mode()&os.ModeSymlink != 0 {
-			return fmt.Errorf("symlinks are not allowed in plugin packages: %s", file.Name)
-		}
-		target, err := safePluginFilePath(dest, file.Name)
-		if err != nil {
-			return err
-		}
-		if file.FileInfo().IsDir() {
-			if err := os.MkdirAll(target, 0o755); err != nil {
-				return err
-			}
-			continue
-		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return err
-		}
-		src, err := file.Open()
-		if err != nil {
-			return err
-		}
-		err = writeArchiveFile(target, src, file.FileInfo().Mode().Perm())
-		_ = src.Close()
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func extractTar(reader *tar.Reader, dest string) error {
-	for {
-		header, err := reader.Next()
-		if errors.Is(err, io.EOF) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		switch header.Typeflag {
-		case tar.TypeDir, tar.TypeReg, tar.TypeRegA:
-		default:
-			return fmt.Errorf("unsupported archive entry type for %s", header.Name)
-		}
-		target, err := safePluginFilePath(dest, header.Name)
-		if err != nil {
-			return err
-		}
-		if header.Typeflag == tar.TypeDir {
-			if err := os.MkdirAll(target, 0o755); err != nil {
-				return err
-			}
-			continue
-		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return err
-		}
-		if err := writeArchiveFile(target, reader, os.FileMode(header.Mode).Perm()); err != nil {
-			return err
-		}
-	}
-}
-
-func writeArchiveFile(target string, src io.Reader, mode os.FileMode) error {
-	if mode == 0 {
-		mode = 0o644
-	}
-	out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-	if _, err := io.Copy(out, io.LimitReader(src, pluginMaxPackageBytes+1)); err != nil {
-		return err
-	}
-	return nil
-}
-
-func safePluginFilePath(root, raw string) (string, error) {
-	name := strings.ReplaceAll(raw, "\\", "/")
-	clean := path.Clean(name)
-	if clean == "." || clean == "/" || strings.HasPrefix(clean, "../") || strings.HasPrefix(clean, "/") || strings.Contains(clean, ":") {
-		return "", fmt.Errorf("unsafe plugin package path: %s", raw)
-	}
-	target := filepath.Join(root, filepath.FromSlash(clean))
-	rel, err := filepath.Rel(root, target)
-	if err != nil || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
-		return "", fmt.Errorf("unsafe plugin package path: %s", raw)
-	}
-	return target, nil
-}
-
-func pluginInstallDir(id string) string {
-	return filepath.Join(config.DataPath, "plugins", id)
+func pluginWASMPath(id string) string {
+	return filepath.Join(config.DataPath, "plugins", id+".wasm")
 }
 
 func recordPluginLog(userID uint, pluginID, level, event, message, metadata string) {
@@ -748,13 +602,4 @@ func nonEmptyJSON(raw, fallback string) string {
 		return fallback
 	}
 	return raw
-}
-
-func pluginPackageChecksum(path string) string {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	sum := sha256.Sum256(raw)
-	return hex.EncodeToString(sum[:])
 }
