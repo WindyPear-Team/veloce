@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -41,9 +42,10 @@ type tencentChannelGatewayClient struct {
 }
 
 type tencentChannelGatewayPollResult struct {
-	Events    []json.RawMessage `json:"events"`
-	Cursor    string            `json:"cursor,omitempty"`
-	Watermark string            `json:"watermark,omitempty"`
+	Events     []json.RawMessage `json:"events"`
+	Cursor     string            `json:"cursor,omitempty"`
+	Watermark  string            `json:"watermark,omitempty"`
+	AttachInfo string            `json:"attach_info,omitempty"`
 }
 
 func (tencentChannelProvider) Name() string {
@@ -298,23 +300,18 @@ func pollTencentChannelGatewayOnce(ctx context.Context, integration MessageChann
 		return 0, context.Canceled
 	}
 	interval := time.Duration(intConfig(config, "poll_interval_seconds", int(tencentChannelDefaultPollInterval/time.Second), 10, 3600)) * time.Second
-	result, err := communityservice.RunMessageChannelConnectorAction(
-		ctx,
-		current.UserID,
-		"",
-		current.DefaultDeviceID,
-		current.DefaultWorkspacePath,
-		current.DefaultWorkspaceUnrestricted,
-		tencentChannelActionGatewayPoll,
-		tencentChannelGatewayPollPayload(config),
-		true,
-		decodeStringList(current.DefaultConnectorCommandPrefixes, 20),
-	)
+	result, err := runTencentChannelCLI(ctx, current, tencentChannelNoticePollCommand(config), 60)
 	if err != nil {
 		return interval, err
 	}
 	parsed := parseTencentChannelGatewayPollResult(result)
-	for _, event := range parsed.Events {
+	parsed.Events = filterTencentChannelPolledEvents(parsed.Events, config)
+	seenKeys := tencentChannelSeenNoticeKeys(config)
+	newEvents, nextSeenKeys := filterTencentChannelNewEvents(parsed.Events, seenKeys)
+	if len(seenKeys) == 0 && !boolConfig(config, "poll_replay_existing", false) {
+		newEvents = nil
+	}
+	for _, event := range newEvents {
 		if len(event) == 0 {
 			continue
 		}
@@ -322,7 +319,7 @@ func pollTencentChannelGatewayOnce(ctx context.Context, integration MessageChann
 			log.Printf("tencent channel %d payload handling failed: %v", current.ID, err)
 		}
 	}
-	if parsed.Cursor != "" || parsed.Watermark != "" {
+	if parsed.Cursor != "" || parsed.Watermark != "" || parsed.AttachInfo != "" || len(nextSeenKeys) > 0 {
 		_ = updateTencentChannelProviderConfig(current.ID, func(config map[string]interface{}) {
 			if parsed.Cursor != "" {
 				config["cursor"] = parsed.Cursor
@@ -330,9 +327,48 @@ func pollTencentChannelGatewayOnce(ctx context.Context, integration MessageChann
 			if parsed.Watermark != "" {
 				config["watermark"] = parsed.Watermark
 			}
+			if parsed.AttachInfo != "" {
+				config["notice_attach_info"] = parsed.AttachInfo
+			}
+			if len(nextSeenKeys) > 0 {
+				config["notice_seen_keys"] = nextSeenKeys
+			}
 		})
 	}
 	return interval, nil
+}
+
+func filterTencentChannelPolledEvents(events []json.RawMessage, config map[string]interface{}) []json.RawMessage {
+	if boolConfig(config, "poll_posts", false) {
+		return events
+	}
+	if !boolConfig(config, "poll_mentions", true) {
+		return nil
+	}
+	filtered := make([]json.RawMessage, 0, len(events))
+	for _, event := range events {
+		var payload map[string]interface{}
+		if json.Unmarshal(event, &payload) != nil {
+			continue
+		}
+		noticeType := strings.ToLower(firstStringValue(payload["type"], payload["notice_type"], payload["event_type"], payload["summary"], payload["content"]))
+		if strings.Contains(noticeType, "@") || strings.Contains(noticeType, "mention") {
+			filtered = append(filtered, event)
+		}
+	}
+	return filtered
+}
+
+func tencentChannelNoticePollCommand(config map[string]interface{}) string {
+	parts := []string{
+		"tencent-channel-cli feed get-notices",
+		"--page-num " + strconv.Itoa(intConfig(config, "max_events", 20, 1, 100)),
+		"--json",
+	}
+	if guildID := configString(config, "guild_id"); regexp.MustCompile(`^\d+$`).MatchString(guildID) {
+		parts = append(parts, "--guild-id "+guildID)
+	}
+	return strings.Join(parts, " ")
 }
 
 func tencentChannelGatewayPollPayload(config map[string]interface{}) map[string]interface{} {
@@ -345,6 +381,7 @@ func tencentChannelGatewayPollPayload(config map[string]interface{}) map[string]
 		"cursor":        configString(config, "cursor"),
 		"watermark":     configString(config, "watermark"),
 		"cli_profile":   configString(config, "cli_profile"),
+		"session_key":   configString(config, "session_key"),
 		"max_events":    intConfig(config, "max_events", 20, 1, 100),
 		"json":          true,
 		"cli_flags":     []string{"--json"},
@@ -358,6 +395,7 @@ func tencentChannelConfiguredPayload(integration MessageChannelIntegration, inpu
 		"channel_id":  configString(config, "channel_id"),
 		"get_type":    intConfig(config, "default_get_type", 2, 1, 2),
 		"cli_profile": configString(config, "cli_profile"),
+		"session_key": configString(config, "session_key"),
 		"json":        true,
 		"cli_flags":   []string{"--json"},
 	}
@@ -400,7 +438,7 @@ func parseTencentChannelGatewayPollResult(text string) tencentChannelGatewayPoll
 		return tencentChannelGatewayPollResult{}
 	}
 	var result tencentChannelGatewayPollResult
-	if err := json.Unmarshal([]byte(text), &result); err == nil {
+	if err := json.Unmarshal([]byte(text), &result); err == nil && tencentChannelPollResultHasData(result) {
 		return result
 	}
 	var events []json.RawMessage
@@ -411,7 +449,7 @@ func parseTencentChannelGatewayPollResult(text string) tencentChannelGatewayPoll
 	if _, ok := payload["raw"]; ok {
 		return tencentChannelGatewayPollResult{}
 	}
-	if parsed := parseTencentChannelGatewayPollValue(payload); len(parsed.Events) > 0 || parsed.Cursor != "" || parsed.Watermark != "" {
+	if parsed := parseTencentChannelGatewayPollValue(payload); tencentChannelPollResultHasData(parsed) {
 		return parsed
 	}
 	if data, ok := payload["data"]; ok {
@@ -433,7 +471,142 @@ func parseTencentChannelGatewayPollValue(value interface{}) tencentChannelGatewa
 	if err := json.Unmarshal(data, &events); err == nil {
 		return tencentChannelGatewayPollResult{Events: events}
 	}
+	var payload map[string]interface{}
+	if err := json.Unmarshal(data, &payload); err == nil {
+		return parseTencentChannelNoticePollPayload(payload)
+	}
 	return tencentChannelGatewayPollResult{}
+}
+
+func tencentChannelPollResultHasData(result tencentChannelGatewayPollResult) bool {
+	return len(result.Events) > 0 || result.Cursor != "" || result.Watermark != "" || result.AttachInfo != ""
+}
+
+func parseTencentChannelNoticePollPayload(payload map[string]interface{}) tencentChannelGatewayPollResult {
+	notices, ok := payload["notices"].([]interface{})
+	if !ok {
+		return tencentChannelGatewayPollResult{}
+	}
+	result := tencentChannelGatewayPollResult{
+		AttachInfo: firstStringValue(payload["attach_info"], payload["attachInfo"]),
+	}
+	for _, notice := range notices {
+		noticeMap, ok := notice.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		event := map[string]interface{}{}
+		for key, value := range noticeMap {
+			event[key] = value
+		}
+		event["event_type"] = "notice"
+		event["source"] = providerTencentChannel
+		if summary := firstStringValue(event["summary"], event["content"], event["text"]); summary != "" {
+			event["content"] = summary
+		}
+		if noticeID := tencentChannelNoticeEventKey(event); noticeID != "" {
+			event["notice_id"] = noticeID
+		}
+		data, err := json.Marshal(event)
+		if err == nil {
+			result.Events = append(result.Events, data)
+		}
+	}
+	return result
+}
+
+func filterTencentChannelNewEvents(events []json.RawMessage, seenKeys []string) ([]json.RawMessage, []string) {
+	seen := map[string]struct{}{}
+	for _, key := range seenKeys {
+		key = strings.TrimSpace(key)
+		if key != "" {
+			seen[key] = struct{}{}
+		}
+	}
+	nextKeys := make([]string, 0, len(events)+len(seenKeys))
+	newEvents := []json.RawMessage{}
+	for _, event := range events {
+		key := tencentChannelNoticeRawEventKey(event)
+		if key == "" {
+			newEvents = append(newEvents, event)
+			continue
+		}
+		if _, ok := seen[key]; !ok {
+			newEvents = append(newEvents, event)
+		}
+		nextKeys = append(nextKeys, key)
+	}
+	for _, key := range seenKeys {
+		if len(nextKeys) >= 200 {
+			break
+		}
+		if _, ok := seen[key]; ok && !tencentChannelStringSliceContains(nextKeys, key) {
+			nextKeys = append(nextKeys, key)
+		}
+	}
+	return newEvents, nextKeys
+}
+
+func tencentChannelSeenNoticeKeys(config map[string]interface{}) []string {
+	value, ok := config["notice_seen_keys"]
+	if !ok || value == nil {
+		return nil
+	}
+	switch typed := value.(type) {
+	case []string:
+		return typed
+	case []interface{}:
+		result := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if text := strings.TrimSpace(fmt.Sprint(item)); text != "" && text != "<nil>" {
+				result = append(result, text)
+			}
+		}
+		return result
+	case string:
+		return decodeStringList(typed, 200)
+	default:
+		return nil
+	}
+}
+
+func tencentChannelNoticeRawEventKey(raw json.RawMessage) string {
+	var event map[string]interface{}
+	if json.Unmarshal(raw, &event) != nil {
+		return ""
+	}
+	return tencentChannelNoticeEventKey(event)
+}
+
+func tencentChannelNoticeEventKey(event map[string]interface{}) string {
+	if id := firstStringValue(event["notice_id"], event["noticeId"], event["id"]); id != "" {
+		return id
+	}
+	parts := []string{}
+	for _, value := range []string{
+		firstStringValue(event["create_time"], event["createTime"], event["time"]),
+		firstStringValue(event["type"], event["event_type"]),
+		firstStringID(event["guild_id"], event["guildId"]),
+		firstStringID(event["feed_id"], event["feedId"]),
+		firstStringValue(event["summary"], event["content"], event["text"]),
+	} {
+		if value != "" {
+			parts = append(parts, value)
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, "|")
+}
+
+func tencentChannelStringSliceContains(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func tencentChannelActionPayload(integration MessageChannelIntegration, inbound MessageChannelMessage, content string) map[string]interface{} {
@@ -443,6 +616,7 @@ func tencentChannelActionPayload(integration MessageChannelIntegration, inbound 
 		"guild_id":    configString(config, "guild_id"),
 		"channel_id":  configString(config, "channel_id"),
 		"cli_profile": configString(config, "cli_profile"),
+		"session_key": configString(config, "session_key"),
 		"json":        true,
 		"cli_flags":   []string{"--json"},
 	}
@@ -611,6 +785,7 @@ func tencentChannelGatewaySignature(integration MessageChannelIntegration) strin
 		configString(config, "guild_id"),
 		configString(config, "channel_id"),
 		configString(config, "cli_profile"),
+		configString(config, "session_key"),
 		tencentChannelConfigString(config, "gateway_enabled"),
 		tencentChannelConfigString(config, "poll_mentions"),
 		tencentChannelConfigString(config, "poll_posts"),

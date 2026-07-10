@@ -41,3 +41,35 @@ func TestParseTencentChannelGatewayPollResultWrappedStdout(t *testing.T) {
 		t.Fatalf("cursor/watermark = %q/%q", result.Cursor, result.Watermark)
 	}
 }
+
+func TestParseTencentChannelGetNoticesResult(t *testing.T) {
+	raw := `{"data":{"attach_info":"logicReaderAttach=abc","has_more":true,"notices":[{"create_time":"2026-07-09 21:43:16","feed_id":"B_1","guild_name":"测试频道","summary":"@了我: 你好","type":"@我"}]},"success":true}`
+
+	result := parseTencentChannelGatewayPollResult(raw)
+	if len(result.Events) != 1 {
+		t.Fatalf("events length = %d", len(result.Events))
+	}
+	if result.AttachInfo != "logicReaderAttach=abc" {
+		t.Fatalf("attach_info = %q", result.AttachInfo)
+	}
+
+	newEvents, seen := filterTencentChannelNewEvents(result.Events, nil)
+	if len(newEvents) != 1 || len(seen) != 1 {
+		t.Fatalf("newEvents/seen = %d/%d", len(newEvents), len(seen))
+	}
+	newEvents, _ = filterTencentChannelNewEvents(result.Events, seen)
+	if len(newEvents) != 0 {
+		t.Fatalf("duplicate events length = %d", len(newEvents))
+	}
+}
+
+func TestTencentChannelNoticePollCommand(t *testing.T) {
+	command := tencentChannelNoticePollCommand(map[string]interface{}{
+		"guild_id":   "123456",
+		"max_events": float64(5),
+	})
+	want := "tencent-channel-cli feed get-notices --page-num 5 --json --guild-id 123456"
+	if command != want {
+		t.Fatalf("command = %q", command)
+	}
+}
