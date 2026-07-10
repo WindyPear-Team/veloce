@@ -246,14 +246,16 @@ func BuildAdvancedChatRuntimeExtension(ctx context.Context, input AdvancedChatRu
 }
 
 func AdvancedChatToolHandlerExists(name string) bool {
-	_, ok := advancedChatToolHandlers[name]
-	return ok
+	if _, ok := advancedChatToolHandlers[name]; ok {
+		return true
+	}
+	return pluginAdvancedChatToolExists(name)
 }
 
 func HandleAdvancedChatToolCall(ctx context.Context, input AdvancedChatToolCallInput) (string, error) {
 	handler, ok := advancedChatToolHandlers[input.Name]
 	if !ok {
-		return "", errors.New("agent chat tool handler not found")
+		return handlePluginAdvancedChatToolCall(ctx, input)
 	}
 	return handler(ctx, input)
 }

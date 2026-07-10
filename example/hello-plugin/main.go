@@ -18,7 +18,9 @@ func plugin_manifest() {
   "author": "Veloce",
   "permissions": ["frontend.sidebar", "frontend.routes"],
   "hooks": [
-    { "point": "app.boot", "mode": "async" }
+    { "point": "app.boot", "mode": "async" },
+    { "point": "advanced_chat.runtime_extension", "mode": "sync", "priority": 10 },
+    { "point": "advanced_chat.tool_call", "mode": "sync", "action": "hello_plugin_echo", "priority": 10 }
   ],
   "frontend": {
     "sidebar": [
@@ -59,6 +61,43 @@ func plugin_manifest() {
 
 //export plugin_init
 func plugin_init() {}
+
+//export plugin_handle_hook
+func plugin_handle_hook() {
+	raw, _ := io.ReadAll(os.Stdin)
+	var input map[string]interface{}
+	_ = json.Unmarshal(raw, &input)
+	point, _ := input["point"].(string)
+	action, _ := input["action"].(string)
+	if point == "advanced_chat.runtime_extension" {
+		response := map[string]interface{}{
+			"system_prompt": "The Hello Plugin is active. Use hello_plugin_echo when the user asks to test the plugin echo tool.",
+			"tools": []map[string]interface{}{
+				{
+					"name":        "hello_plugin_echo",
+					"description": "Echo a short message through the Hello Plugin WASM hook.",
+					"schema": map[string]interface{}{
+						"type": "object",
+						"properties": map[string]interface{}{
+							"message": map[string]interface{}{"type": "string", "description": "Message to echo."},
+						},
+						"required": []string{"message"},
+					},
+				},
+			},
+		}
+		_ = json.NewEncoder(os.Stdout).Encode(response)
+		return
+	}
+	if point == "advanced_chat.tool_call" && action == "hello_plugin_echo" {
+		response := map[string]interface{}{
+			"text": "Hello Plugin handled tool call: " + string(raw),
+		}
+		_ = json.NewEncoder(os.Stdout).Encode(response)
+		return
+	}
+	_ = json.NewEncoder(os.Stdout).Encode(map[string]interface{}{"ok": true})
+}
 
 //export plugin_handle_action
 func plugin_handle_action() {

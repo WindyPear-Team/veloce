@@ -22,7 +22,10 @@ import (
 
 const pluginMaxPackageBytes int64 = 100 << 20
 
-var pluginIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{1,79}$`)
+var (
+	pluginIDPattern        = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{1,79}$`)
+	pluginHookPointPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.:-]{1,120}$`)
+)
 
 type pluginAPI struct{}
 
@@ -40,8 +43,11 @@ type PluginManifest struct {
 }
 
 type PluginHook struct {
-	Point string `json:"point"`
-	Mode  string `json:"mode"`
+	Point    string          `json:"point"`
+	Mode     string          `json:"mode"`
+	Action   string          `json:"action,omitempty"`
+	Priority int             `json:"priority,omitempty"`
+	Config   json.RawMessage `json:"config,omitempty"`
 }
 
 type pluginListItem struct {
@@ -63,6 +69,7 @@ type pluginListItem struct {
 func init() {
 	RegisterStartupHook(loadPluginsOnStartup)
 	RegisterUserRouteHook(registerPluginUserRoutes)
+	RegisterAdvancedChatRuntimeExtensionHook(pluginAdvancedChatRuntimeExtension)
 }
 
 func registerPluginUserRoutes(group *gin.RouterGroup) {
@@ -484,6 +491,13 @@ func loadPluginsOnStartup() error {
 		}
 		model.DB.Model(&plugin).Update("last_error", "")
 	}
+	DispatchPluginHooks(context.Background(), PluginHookInput{
+		Point:  PluginHookPointAppBoot,
+		Source: "startup",
+		Payload: map[string]interface{}{
+			"phase": "ready",
+		},
+	})
 	return nil
 }
 
@@ -513,6 +527,12 @@ func validatePluginManifest(manifest PluginManifest) error {
 		if strings.TrimSpace(hook.Point) == "" {
 			return errors.New("plugin hook point is required")
 		}
+		if !validPluginHookPointName(hook.Point) {
+			return fmt.Errorf("invalid plugin hook point: %s", hook.Point)
+		}
+		if strings.TrimSpace(hook.Mode) != "" && hook.Mode != "sync" && hook.Mode != "async" {
+			return fmt.Errorf("unsupported plugin hook mode: %s", hook.Mode)
+		}
 	}
 	return nil
 }
@@ -529,7 +549,20 @@ func normalizePluginManifest(manifest PluginManifest) PluginManifest {
 	for i := range manifest.Hooks {
 		manifest.Hooks[i].Point = strings.TrimSpace(manifest.Hooks[i].Point)
 		manifest.Hooks[i].Mode = strings.TrimSpace(manifest.Hooks[i].Mode)
+		manifest.Hooks[i].Action = strings.TrimSpace(manifest.Hooks[i].Action)
+		if manifest.Hooks[i].Mode == "" {
+			manifest.Hooks[i].Mode = "sync"
+		}
+		if len(manifest.Hooks[i].Config) == 0 {
+			manifest.Hooks[i].Config = nil
+		}
 	}
+	sort.SliceStable(manifest.Hooks, func(i, j int) bool {
+		if manifest.Hooks[i].Priority == manifest.Hooks[j].Priority {
+			return manifest.Hooks[i].Point < manifest.Hooks[j].Point
+		}
+		return manifest.Hooks[i].Priority > manifest.Hooks[j].Priority
+	})
 	return manifest
 }
 
