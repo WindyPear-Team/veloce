@@ -27,7 +27,19 @@ const (
 	advancedChatRunStatusCancelled = "cancelled"
 )
 
-var advancedChatRunEventLocks sync.Map
+type advancedChatRunEventState struct {
+	mutex               sync.Mutex
+	sequenceInitialized bool
+	nextSequence        int
+}
+
+var advancedChatRunEventStates sync.Map
+
+func advancedChatRunEventStateFor(userID uint, runID string) *advancedChatRunEventState {
+	key := fmt.Sprintf("%d:%s", userID, strings.TrimSpace(runID))
+	value, _ := advancedChatRunEventStates.LoadOrStore(key, &advancedChatRunEventState{})
+	return value.(*advancedChatRunEventState)
+}
 
 type AdvancedChatSession struct {
 	ID                       string     `gorm:"primaryKey;size:80" json:"id"`
@@ -918,10 +930,8 @@ func stopAdvancedChatRun(rawRunID string, userID uint) (AdvancedChatRun, int, st
 		return run, http.StatusOK, "", nil
 	}
 
-	lockKey := fmt.Sprintf("%d:%s", userID, strings.TrimSpace(run.ID))
-	value, _ := advancedChatRunEventLocks.LoadOrStore(lockKey, &sync.Mutex{})
-	mutex := value.(*sync.Mutex)
-	mutex.Lock()
+	eventState := advancedChatRunEventStateFor(userID, run.ID)
+	eventState.mutex.Lock()
 	now := time.Now()
 	stopped := false
 	err := model.DB.Transaction(func(tx *gorm.DB) error {
@@ -984,7 +994,7 @@ func stopAdvancedChatRun(rawRunID string, userID uint) (AdvancedChatRun, int, st
 		stopped = true
 		return nil
 	})
-	mutex.Unlock()
+	eventState.mutex.Unlock()
 	if err != nil {
 		return run, http.StatusInternalServerError, "Failed to stop run", err
 	}
@@ -1827,7 +1837,6 @@ func runAdvancedChatAssistantCompletion(runID string, userID uint, prepared prep
 			if err := appendAdvancedChatRunEvent(run.ID, run.SessionID, userID, "text", gin.H{"delta": delta, "round": round}); err != nil {
 				return err
 			}
-			_ = appendAdvancedChatAssistantContent(run.AssistantMessageID, userID, delta, round)
 			return nil
 		},
 		OnToolCall: func(detail advancedChatCompletionToolCall) error {
@@ -2538,10 +2547,8 @@ func finishAdvancedChatRun(runID string, sessionID string, userID uint, assistan
 	contentParts, _ := json.Marshal(normalizeAdvancedChatContentParts(response.Message.Parts, content))
 	now := time.Now()
 	finished := false
-	lockKey := fmt.Sprintf("%d:%s", userID, strings.TrimSpace(runID))
-	value, _ := advancedChatRunEventLocks.LoadOrStore(lockKey, &sync.Mutex{})
-	mutex := value.(*sync.Mutex)
-	mutex.Lock()
+	eventState := advancedChatRunEventStateFor(userID, runID)
+	eventState.mutex.Lock()
 	_ = model.DB.Transaction(func(tx *gorm.DB) error {
 		var currentRun AdvancedChatRun
 		if err := tx.Where("id = ? AND user_id = ?", runID, userID).First(&currentRun).Error; err != nil {
@@ -2580,7 +2587,7 @@ func finishAdvancedChatRun(runID string, sessionID string, userID uint, assistan
 		finished = true
 		return nil
 	})
-	mutex.Unlock()
+	eventState.mutex.Unlock()
 	if finished {
 		_ = appendAdvancedChatRunEvent(runID, sessionID, userID, "done", response)
 	}
@@ -2673,6 +2680,8 @@ func failAdvancedChatRun(runID string, sessionID string, userID uint, assistantM
 	}
 }
 
+// appendAdvancedChatAssistantContent is only used when an upstream completes
+// without emitting deltas. Streaming runs persist their final response once.
 func appendAdvancedChatAssistantContent(messageID string, userID uint, delta string, round int) error {
 	if delta == "" {
 		return nil
@@ -2971,11 +2980,9 @@ func mergeAdvancedChatMessageToolCall(messageID string, userID uint, detail adva
 }
 
 func mergeAdvancedChatRunToolCall(runID string, userID uint, assistantMessageID string, detail advancedChatCompletionToolCall) error {
-	lockKey := fmt.Sprintf("%d:%s", userID, strings.TrimSpace(runID))
-	value, _ := advancedChatRunEventLocks.LoadOrStore(lockKey, &sync.Mutex{})
-	mutex := value.(*sync.Mutex)
-	mutex.Lock()
-	defer mutex.Unlock()
+	eventState := advancedChatRunEventStateFor(userID, runID)
+	eventState.mutex.Lock()
+	defer eventState.mutex.Unlock()
 	return model.DB.Transaction(func(tx *gorm.DB) error {
 		var run AdvancedChatRun
 		if err := tx.Where("id = ? AND user_id = ?", runID, userID).First(&run).Error; err != nil {
@@ -3097,27 +3104,33 @@ func appendAdvancedChatRunEvent(runID string, sessionID string, userID uint, eve
 	if err != nil {
 		return err
 	}
-	lockKey := fmt.Sprintf("%d:%s", userID, strings.TrimSpace(runID))
-	value, _ := advancedChatRunEventLocks.LoadOrStore(lockKey, &sync.Mutex{})
-	mutex := value.(*sync.Mutex)
-	mutex.Lock()
-	defer mutex.Unlock()
-	var maxSeq int
-	if err := model.DB.Model(&AdvancedChatRunEvent{}).
-		Where("run_id = ? AND user_id = ?", runID, userID).
-		Select("COALESCE(MAX(seq), 0)").
-		Scan(&maxSeq).Error; err != nil {
-		return err
+	eventState := advancedChatRunEventStateFor(userID, runID)
+	eventState.mutex.Lock()
+	defer eventState.mutex.Unlock()
+	if !eventState.sequenceInitialized {
+		var maxSeq int
+		if err := model.DB.Model(&AdvancedChatRunEvent{}).
+			Where("run_id = ? AND user_id = ?", runID, userID).
+			Select("COALESCE(MAX(seq), 0)").
+			Scan(&maxSeq).Error; err != nil {
+			return err
+		}
+		eventState.nextSequence = maxSeq + 1
+		eventState.sequenceInitialized = true
 	}
 	row := AdvancedChatRunEvent{
 		RunID:     runID,
 		SessionID: sessionID,
 		UserID:    userID,
-		Seq:       maxSeq + 1,
+		Seq:       eventState.nextSequence,
 		Event:     event,
 		Payload:   string(data),
 	}
-	return model.DB.Create(&row).Error
+	if err := model.DB.Create(&row).Error; err != nil {
+		return err
+	}
+	eventState.nextSequence++
+	return nil
 }
 
 func listAdvancedChatSessionResponses(userID uint) ([]advancedChatSessionResponse, error) {

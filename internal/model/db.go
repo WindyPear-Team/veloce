@@ -20,6 +20,23 @@ func InitDB() {
 	if err != nil {
 		log.Fatalf("failed to connect database: %v", err)
 	}
+	sqlDB, err := DB.DB()
+	if err != nil {
+		log.Fatalf("failed to access database connection pool: %v", err)
+	}
+	// SQLite has a single writer. Keeping one connection prevents concurrent
+	// requests in this process from competing for an exclusive write lock.
+	sqlDB.SetMaxOpenConns(1)
+	sqlDB.SetMaxIdleConns(1)
+	for _, statement := range []string{
+		"PRAGMA journal_mode = WAL",
+		"PRAGMA busy_timeout = 10000",
+		"PRAGMA foreign_keys = ON",
+	} {
+		if _, err := sqlDB.Exec(statement); err != nil {
+			log.Fatalf("failed to configure sqlite (%s): %v", statement, err)
+		}
+	}
 	hadCachedInputPrice := DB.Migrator().HasColumn(&Model{}, "cached_input_price")
 	hadCacheWriteInputPrice := DB.Migrator().HasColumn(&Model{}, "cache_write_input_price")
 	hadCacheWrite1hInputPrice := DB.Migrator().HasColumn(&Model{}, "cache_write_1h_input_price")
