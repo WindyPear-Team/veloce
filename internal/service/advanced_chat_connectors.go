@@ -228,6 +228,24 @@ type advancedChatConnectorTaskDecisionInput struct {
 	Approved bool `json:"approved"`
 }
 
+type advancedChatWorkspaceGitActionInput struct {
+	ConnectorDeviceID      string `json:"connector_device_id"`
+	ConnectorWorkspacePath string `json:"connector_workspace_path"`
+	ApprovalMode           string `json:"approval_mode"`
+	Action                 string `json:"action"`
+	Message                string `json:"message"`
+}
+
+type advancedChatWorkspaceGitStatusResponse struct {
+	CurrentBranch string   `json:"current_branch"`
+	CompareBranch string   `json:"compare_branch,omitempty"`
+	Branches      []string `json:"branches"`
+	ChangedFiles  int      `json:"changed_files"`
+	Additions     int      `json:"additions"`
+	Deletions     int      `json:"deletions"`
+	Clean         bool     `json:"clean"`
+}
+
 type advancedChatConnectorMCPProcessStopInput struct {
 	Key string `json:"key"`
 }
@@ -619,6 +637,94 @@ func (api *advancedChatAPI) decideConnectorTask(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true, "status": status})
+}
+
+func (api *advancedChatAPI) getConnectorTask(c *gin.Context) {
+	user, ok := currentAdvancedChatUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+	var task AdvancedChatConnectorTask
+	if err := model.DB.Where("id = ? AND user_id = ?", strings.TrimSpace(c.Param("id")), user.ID).First(&task).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Connector task not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load connector task"})
+		return
+	}
+	c.JSON(http.StatusOK, advancedChatConnectorDeviceTaskResponseFromModel(task))
+}
+
+func (api *advancedChatAPI) getWorkspaceGitStatus(c *gin.Context) {
+	user, ok := currentAdvancedChatUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+	device, workspacePath, err := loadAdvancedChatConnectorForRun(user.ID, c.Query("connector_device_id"), c.Query("connector_workspace_path"))
+	if err != nil || device == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "A connected workspace is required"})
+		return
+	}
+	status, err := advancedChatWorkspaceGitStatus(c.Request.Context(), user.ID, device, workspacePath, c.Query("compare_branch"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, status)
+}
+
+func (api *advancedChatAPI) runWorkspaceGitAction(c *gin.Context) {
+	user, ok := currentAdvancedChatUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+	var input advancedChatWorkspaceGitActionInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	device, workspacePath, err := loadAdvancedChatConnectorForRun(user.ID, input.ConnectorDeviceID, input.ConnectorWorkspacePath)
+	if err != nil || device == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "A connected workspace is required"})
+		return
+	}
+	command, err := advancedChatWorkspaceGitActionCommand(input.Action, input.Message)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	approvalMode := normalizeAdvancedChatConnectorApprovalMode(input.ApprovalMode)
+	binding := advancedChatConnectorToolBinding{
+		DeviceID:      device.ID,
+		DeviceName:    device.Name,
+		WorkspacePath: workspacePath,
+		Action:        "run_command",
+		ApprovalMode:  approvalMode,
+		AutoApprove:   approvalMode == advancedChatConnectorApprovalFullAccess,
+	}
+	task, err := createAdvancedChatConnectorTask(user.ID, "", binding, map[string]interface{}{"command": command})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create Git task"})
+		return
+	}
+	if approvalMode == advancedChatConnectorApprovalAssistant {
+		settings := ensureAdvancedChatUserSettings(user.ID)
+		checker, checkerErr := advancedChatApprovalCheckerForUserAgent(user.ID, settings.ConnectorApprovalAgentID)
+		if checkerErr != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Approval assistant is not configured"})
+			return
+		}
+		if _, checkerErr = approveAdvancedChatConnectorTaskWithChecker(c.Request.Context(), user, "", "", checker, task, binding, map[string]interface{}{"command": command}, advancedChatCompletionObserver{}, 0, 0); checkerErr != nil {
+			c.JSON(http.StatusBadGateway, gin.H{"error": "Approval assistant failed: " + checkerErr.Error()})
+			return
+		}
+		_ = model.DB.Where("id = ? AND user_id = ?", task.ID, user.ID).First(&task).Error
+	}
+	c.JSON(http.StatusAccepted, advancedChatConnectorDeviceTaskResponseFromModel(task))
 }
 
 type advancedChatConnectorTaskDecisionConflict struct {
@@ -2506,6 +2612,133 @@ Workspace: %s
 Use workspace tools when you need to inspect or edit files in this workspace.
 Use only relative paths in workspace tool arguments.
 Read-only workspace tools, web search, and web fetch do not require approval. The web frontend will ask the user for approval before file operations that change files are sent to the local connector, unless the session enables automatic approval. Commands always require approval unless the command starts with a prefix explicitly allowed in the session settings.`, device.Name, osName, archName, workspacePath)
+}
+
+func advancedChatWorkspaceGitStatus(ctx context.Context, userID uint, device *AdvancedChatConnectorDevice, workspacePath string, compareBranch string) (advancedChatWorkspaceGitStatusResponse, error) {
+	compareBranch = strings.TrimSpace(compareBranch)
+	if !validAdvancedChatGitRef(compareBranch) {
+		return advancedChatWorkspaceGitStatusResponse{}, errors.New("invalid comparison branch")
+	}
+	statusOutput, err := callAdvancedChatWorkspaceGitReadCommand(ctx, userID, device, workspacePath, "git status --porcelain=v1 --branch")
+	if err != nil {
+		return advancedChatWorkspaceGitStatusResponse{}, fmt.Errorf("git status failed: %w", err)
+	}
+	branchesOutput, err := callAdvancedChatWorkspaceGitReadCommand(ctx, userID, device, workspacePath, "git branch --no-color")
+	if err != nil {
+		return advancedChatWorkspaceGitStatusResponse{}, fmt.Errorf("git branch failed: %w", err)
+	}
+	diffCommand := "git diff --numstat && git diff --cached --numstat"
+	if compareBranch != "" {
+		diffCommand = "git diff --numstat " + compareBranch + "...HEAD"
+	}
+	diffOutput, err := callAdvancedChatWorkspaceGitReadCommand(ctx, userID, device, workspacePath, diffCommand)
+	if err != nil {
+		return advancedChatWorkspaceGitStatusResponse{}, fmt.Errorf("git diff failed: %w", err)
+	}
+	branch, changedFiles := parseAdvancedChatGitStatus(statusOutput)
+	additions, deletions := parseAdvancedChatGitNumstat(diffOutput)
+	return advancedChatWorkspaceGitStatusResponse{
+		CurrentBranch: branch,
+		CompareBranch: compareBranch,
+		Branches:      parseAdvancedChatGitBranches(branchesOutput),
+		ChangedFiles:  changedFiles,
+		Additions:     additions,
+		Deletions:     deletions,
+		Clean:         changedFiles == 0 && additions == 0 && deletions == 0,
+	}, nil
+}
+
+func callAdvancedChatWorkspaceGitReadCommand(ctx context.Context, userID uint, device *AdvancedChatConnectorDevice, workspacePath string, command string) (string, error) {
+	binding := advancedChatConnectorToolBinding{
+		DeviceID:        device.ID,
+		DeviceName:      device.Name,
+		WorkspacePath:   workspacePath,
+		Action:          "run_command",
+		ApprovalMode:    advancedChatConnectorApprovalManual,
+		CommandPrefixes: []string{command},
+	}
+	return callAdvancedChatConnectorTool(ctx, userID, "", binding, map[string]interface{}{"command": command})
+}
+
+func advancedChatWorkspaceGitActionCommand(action string, message string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "commit":
+		message = strings.TrimSpace(message)
+		if message == "" || len([]rune(message)) > 200 || strings.ContainsAny(message, "\r\n\"") {
+			return "", errors.New("commit message must be 1-200 characters and cannot contain quotes or line breaks")
+		}
+		return "git add -A; git commit -m \"" + message + "\"", nil
+	case "push":
+		return "git push", nil
+	default:
+		return "", errors.New("unsupported Git action")
+	}
+}
+
+func validAdvancedChatGitRef(value string) bool {
+	if value == "" {
+		return true
+	}
+	if len(value) > 160 || strings.HasPrefix(value, "-") || strings.Contains(value, "..") || strings.ContainsAny(value, " ~^:?*[]\\\t\r\n") {
+		return false
+	}
+	for _, char := range value {
+		if !((char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '.' || char == '_' || char == '-' || char == '/') {
+			return false
+		}
+	}
+	return true
+}
+
+func parseAdvancedChatGitStatus(value string) (string, int) {
+	branch := ""
+	changedFiles := 0
+	for _, line := range strings.Split(strings.ReplaceAll(value, "\r\n", "\n"), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "## ") {
+			branch = strings.TrimSpace(strings.TrimPrefix(line, "## "))
+			if index := strings.Index(branch, "..."); index >= 0 {
+				branch = branch[:index]
+			}
+			continue
+		}
+		if line != "" {
+			changedFiles++
+		}
+	}
+	return branch, changedFiles
+}
+
+func parseAdvancedChatGitNumstat(value string) (int, int) {
+	additions := 0
+	deletions := 0
+	for _, line := range strings.Split(strings.ReplaceAll(value, "\r\n", "\n"), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		if added, err := strconv.Atoi(fields[0]); err == nil {
+			additions += added
+		}
+		if removed, err := strconv.Atoi(fields[1]); err == nil {
+			deletions += removed
+		}
+	}
+	return additions, deletions
+}
+
+func parseAdvancedChatGitBranches(value string) []string {
+	branches := []string{}
+	seen := map[string]bool{}
+	for _, line := range strings.Split(strings.ReplaceAll(value, "\r\n", "\n"), "\n") {
+		branch := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "*"))
+		if branch == "" || strings.Contains(branch, " -> ") || seen[branch] {
+			continue
+		}
+		seen[branch] = true
+		branches = append(branches, branch)
+	}
+	return branches
 }
 
 func normalizeConnectorCommandPrefixes(values []string) []string {

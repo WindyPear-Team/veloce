@@ -196,6 +196,27 @@ func TestConnectorApprovalModes(t *testing.T) {
 	}
 }
 
+func TestWorkspaceGitHelpers(t *testing.T) {
+	additions, deletions := parseAdvancedChatGitNumstat("12\t3\tfirst.go\n4\t0\tsecond.go\n-\t-\tbinary.dat")
+	if additions != 16 || deletions != 3 {
+		t.Fatalf("git numstat = +%d -%d, want +16 -3", additions, deletions)
+	}
+	branch, changedFiles := parseAdvancedChatGitStatus("## main...origin/main [ahead 1]\n M first.go\n?? second.go\n")
+	if branch != "main" || changedFiles != 2 {
+		t.Fatalf("git status = branch %q files %d, want main and 2", branch, changedFiles)
+	}
+	command, err := advancedChatWorkspaceGitActionCommand("commit", "Add workspace actions")
+	if err != nil || command != "git add -A; git commit -m \"Add workspace actions\"" {
+		t.Fatalf("commit command = %q, err=%v", command, err)
+	}
+	if _, err := advancedChatWorkspaceGitActionCommand("commit", "bad\nmessage"); err == nil {
+		t.Fatal("commit message containing a newline should be rejected")
+	}
+	if !validAdvancedChatGitRef("feature/workspace-git") || validAdvancedChatGitRef("--output=/tmp/x") || validAdvancedChatGitRef("main; git push") {
+		t.Fatal("git reference validation returned an unexpected result")
+	}
+}
+
 func TestNormalizeStaticSiteDomainAndFiles(t *testing.T) {
 	domain, err := normalizeAdvancedChatStaticSiteDomain("https://Site.Example.COM/path")
 	if err != nil {
