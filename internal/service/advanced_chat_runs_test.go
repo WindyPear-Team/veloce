@@ -217,6 +217,20 @@ func TestWorkspaceGitHelpers(t *testing.T) {
 	}
 }
 
+func TestWorkspaceDirectoryParsers(t *testing.T) {
+	directories := parseAdvancedChatWorkspaceDirectories("dir\tapi\t0\nfile\tgo.mod\t120\ndir\tweb\t0", "/workspace", false)
+	if len(directories) != 2 || directories[0].Path != "/workspace/api" || directories[1].Path != "/workspace/web" {
+		t.Fatalf("unexpected directory listing: %#v", directories)
+	}
+	drives := parseAdvancedChatWindowsDriveDirectories("C:\\\r\nD:\\\r\n(no Windows drives found)")
+	if len(drives) != 2 || drives[0].Path != "C:\\" || drives[1].Path != "D:\\" {
+		t.Fatalf("unexpected Windows drive listing: %#v", drives)
+	}
+	if got := advancedChatWorkspaceDirectoryJoin("C:\\", "repo", true); got != "C:\\repo" {
+		t.Fatalf("Windows directory join = %q", got)
+	}
+}
+
 func TestNormalizeStaticSiteDomainAndFiles(t *testing.T) {
 	domain, err := normalizeAdvancedChatStaticSiteDomain("https://Site.Example.COM/path")
 	if err != nil {

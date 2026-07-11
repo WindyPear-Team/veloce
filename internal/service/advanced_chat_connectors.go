@@ -236,6 +236,16 @@ type advancedChatWorkspaceGitActionInput struct {
 	Message                string `json:"message"`
 }
 
+type advancedChatWorkspaceDirectoryEntry struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+}
+
+type advancedChatWorkspaceDirectoriesResponse struct {
+	Path        string                                `json:"path"`
+	Directories []advancedChatWorkspaceDirectoryEntry `json:"directories"`
+}
+
 type advancedChatWorkspaceGitStatusResponse struct {
 	CurrentBranch string   `json:"current_branch"`
 	CompareBranch string   `json:"compare_branch,omitempty"`
@@ -655,6 +665,41 @@ func (api *advancedChatAPI) getConnectorTask(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, advancedChatConnectorDeviceTaskResponseFromModel(task))
+}
+
+func (api *advancedChatAPI) getWorkspaceDirectories(c *gin.Context) {
+	user, ok := currentAdvancedChatUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+	device, _, err := loadAdvancedChatConnectorForRun(user.ID, c.Query("connector_device_id"), "")
+	if err != nil || device == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "A connected device is required"})
+		return
+	}
+	requestedPath := strings.TrimSpace(c.Query("path"))
+	if requestedPath == "" && strings.EqualFold(device.OS, "windows") {
+		output, err := callAdvancedChatWorkspaceDirectoryRoots(c.Request.Context(), user.ID, device)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to list local drives: " + err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, advancedChatWorkspaceDirectoriesResponse{Directories: parseAdvancedChatWindowsDriveDirectories(output)})
+		return
+	}
+	if requestedPath == "" {
+		requestedPath = "/"
+	}
+	output, err := callAdvancedChatWorkspaceDirectoryListing(c.Request.Context(), user.ID, device, requestedPath)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to list directories: " + err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, advancedChatWorkspaceDirectoriesResponse{
+		Path:        requestedPath,
+		Directories: parseAdvancedChatWorkspaceDirectories(output, requestedPath, strings.EqualFold(device.OS, "windows")),
+	})
 }
 
 func (api *advancedChatAPI) getWorkspaceGitStatus(c *gin.Context) {
@@ -2646,6 +2691,73 @@ func advancedChatWorkspaceGitStatus(ctx context.Context, userID uint, device *Ad
 		Deletions:     deletions,
 		Clean:         changedFiles == 0 && additions == 0 && deletions == 0,
 	}, nil
+}
+
+func callAdvancedChatWorkspaceDirectoryRoots(ctx context.Context, userID uint, device *AdvancedChatConnectorDevice) (string, error) {
+	binding := advancedChatConnectorToolBinding{
+		DeviceID:      device.ID,
+		DeviceName:    device.Name,
+		Action:        "list_windows_drives",
+		ApprovalMode:  advancedChatConnectorApprovalManual,
+		WorkspacePath: "",
+	}
+	return callAdvancedChatConnectorTool(ctx, userID, "", binding, map[string]interface{}{})
+}
+
+func callAdvancedChatWorkspaceDirectoryListing(ctx context.Context, userID uint, device *AdvancedChatConnectorDevice, directoryPath string) (string, error) {
+	binding := advancedChatConnectorToolBinding{
+		DeviceID:      device.ID,
+		DeviceName:    device.Name,
+		Action:        "list_files",
+		ApprovalMode:  advancedChatConnectorApprovalManual,
+		WorkspacePath: "",
+	}
+	return callAdvancedChatConnectorTool(ctx, userID, "", binding, map[string]interface{}{
+		"path":        directoryPath,
+		"max_entries": 500,
+	})
+}
+
+func parseAdvancedChatWindowsDriveDirectories(value string) []advancedChatWorkspaceDirectoryEntry {
+	directories := []advancedChatWorkspaceDirectoryEntry{}
+	for _, line := range strings.Split(strings.ReplaceAll(value, "\r\n", "\n"), "\n") {
+		root := strings.TrimSpace(line)
+		if len(root) < 3 || root[1] != ':' || (root[2] != '\\' && root[2] != '/') {
+			continue
+		}
+		directories = append(directories, advancedChatWorkspaceDirectoryEntry{Name: root, Path: root})
+	}
+	return directories
+}
+
+func parseAdvancedChatWorkspaceDirectories(value string, parentPath string, windows bool) []advancedChatWorkspaceDirectoryEntry {
+	directories := []advancedChatWorkspaceDirectoryEntry{}
+	for _, line := range strings.Split(strings.ReplaceAll(value, "\r\n", "\n"), "\n") {
+		fields := strings.SplitN(line, "\t", 3)
+		if len(fields) < 2 || fields[0] != "dir" {
+			continue
+		}
+		name := strings.TrimSpace(fields[1])
+		if name == "" {
+			continue
+		}
+		directories = append(directories, advancedChatWorkspaceDirectoryEntry{
+			Name: name,
+			Path: advancedChatWorkspaceDirectoryJoin(parentPath, name, windows),
+		})
+	}
+	return directories
+}
+
+func advancedChatWorkspaceDirectoryJoin(parentPath string, name string, windows bool) string {
+	if windows {
+		parentPath = strings.TrimRight(strings.TrimSpace(parentPath), "\\/")
+		if len(parentPath) == 2 && parentPath[1] == ':' {
+			return parentPath + "\\" + name
+		}
+		return parentPath + "\\" + name
+	}
+	return path.Join(parentPath, name)
 }
 
 func callAdvancedChatWorkspaceGitReadCommand(ctx context.Context, userID uint, device *AdvancedChatConnectorDevice, workspacePath string, command string) (string, error) {
