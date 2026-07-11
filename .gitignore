@@ -10,3 +10,5 @@ desktop/
 data/
 mobile/
 .env
+*.db-shm
+*.db-wal
