@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/WindyPear-Team/veloce/internal/model"
+	"gorm.io/gorm"
 )
 
 const (
@@ -29,4 +30,11 @@ func CurrentSystemMode() string {
 
 func PersonalModeEnabled() bool {
 	return CurrentSystemMode() == SystemModePersonal
+}
+
+func PersonalModeEnabledInTx(tx *gorm.DB) bool {
+	if tx == nil {
+		return PersonalModeEnabled()
+	}
+	return NormalizeSystemMode(model.GetSystemSettingWithDB(tx, "system_mode", SystemModeOperation)) == SystemModePersonal
 }

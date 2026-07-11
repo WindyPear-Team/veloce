@@ -3,21 +3,27 @@ package config
 import (
 	"log"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/joho/godotenv"
 )
 
 var (
-	Environment  string
-	Port         string
-	DBPath       string
-	DataPath     string
-	JWTSecret    string
-	OIDCIssuer   string
-	OIDCClientID string
-	OIDCSecret   string
-	OIDCRedirect string
+	Environment              string
+	Port                     string
+	DBDriver                 string
+	DBPath                   string
+	DBDSN                    string
+	DBMaxOpenConns           int
+	DBMaxIdleConns           int
+	DBConnMaxLifetimeSeconds int
+	DataPath                 string
+	JWTSecret                string
+	OIDCIssuer               string
+	OIDCClientID             string
+	OIDCSecret               string
+	OIDCRedirect             string
 
 	BootstrapAdminEmails   string
 	BootstrapAdminOIDCSubs string
@@ -31,7 +37,16 @@ func Init() {
 
 	Environment = getEnv("APP_ENV", "development")
 	Port = getEnv("PORT", "8080")
+	DBDriver = strings.ToLower(strings.TrimSpace(getEnv("DB_DRIVER", "sqlite")))
 	DBPath = getEnv("DB_PATH", "flai.db")
+	DBDSN = strings.TrimSpace(getEnv("DB_DSN", os.Getenv("DATABASE_URL")))
+	DBMaxOpenConns = getEnvPositiveInt("DB_MAX_OPEN_CONNS", 25)
+	DBMaxIdleConns = getEnvPositiveInt("DB_MAX_IDLE_CONNS", 10)
+	if DBMaxIdleConns > DBMaxOpenConns {
+		log.Printf("DB_MAX_IDLE_CONNS cannot exceed DB_MAX_OPEN_CONNS; using %d", DBMaxOpenConns)
+		DBMaxIdleConns = DBMaxOpenConns
+	}
+	DBConnMaxLifetimeSeconds = getEnvNonNegativeInt("DB_CONN_MAX_LIFETIME_SECONDS", 3600)
 	DataPath = getEnv("DATA_PATH", "data")
 	JWTSecret = getEnv("JWT_SECRET", "change-me-please")
 	if requiresSecureSecrets(Environment) && JWTSecret == "change-me-please" {
@@ -50,6 +65,28 @@ func getEnv(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+func getEnvPositiveInt(key string, fallback int) int {
+	value := getEnvNonNegativeInt(key, fallback)
+	if value == 0 {
+		log.Printf("%s must be greater than zero; using %d", key, fallback)
+		return fallback
+	}
+	return value
+}
+
+func getEnvNonNegativeInt(key string, fallback int) int {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 0 {
+		log.Printf("invalid %s value %q; using %d", key, raw, fallback)
+		return fallback
+	}
+	return value
 }
 
 func requiresSecureSecrets(env string) bool {

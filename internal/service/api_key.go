@@ -182,7 +182,7 @@ func APIKeyQuotaExceeded(apiKey *model.APIKey, cost decimal.Decimal) (bool, erro
 }
 
 func APIKeyQuotaExceededInTx(tx *gorm.DB, apiKey *model.APIKey, cost decimal.Decimal) (bool, error) {
-	if PersonalModeEnabled() {
+	if PersonalModeEnabledInTx(tx) {
 		return false, nil
 	}
 	if apiKey == nil || apiKey.QuotaLimit.LessThanOrEqual(decimal.Zero) {

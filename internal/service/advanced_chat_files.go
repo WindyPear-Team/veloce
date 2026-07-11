@@ -48,7 +48,7 @@ type AdvancedChatFile struct {
 	Name        string     `gorm:"size:255;not null" json:"name"`
 	MIMEType    string     `gorm:"size:120;not null" json:"mime_type"`
 	Size        int64      `gorm:"not null" json:"size"`
-	Data        []byte     `gorm:"type:blob;not null" json:"-"`
+	Data        []byte     `gorm:"not null" json:"-"`
 	StoragePath string     `gorm:"type:text;not null;default:''" json:"-"`
 	TextExtract string     `gorm:"type:text;not null" json:"-"`
 	Hash        string     `gorm:"index;size:64;not null" json:"-"`

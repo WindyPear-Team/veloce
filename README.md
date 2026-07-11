@@ -58,7 +58,12 @@ Copy ".env.example" to ".env" and configure your environment.
 ```
 APP_ENV=development
 PORT=8080
+DB_DRIVER=sqlite
 DB_PATH=veloce.db
+DB_DSN=
+DB_MAX_OPEN_CONNS=25
+DB_MAX_IDLE_CONNS=10
+DB_CONN_MAX_LIFETIME_SECONDS=3600
 JWT_SECRET=your-secure-jwt-secret-here
 OIDC_ISSUER=https://your-oidc-provider.com
 OIDC_CLIENT_ID=your-client-id
@@ -66,6 +71,20 @@ OIDC_CLIENT_SECRET=your-client-secret
 OIDC_REDIRECT_URL=http://localhost:8080/auth/callback
 BOOTSTRAP_ADMIN_OIDC_SUBS=
 BOOTSTRAP_ADMIN_EMAILS=
+```
+
+`DB_DRIVER` accepts `sqlite` (default), `postgres`, and `mysql`. SQLite uses
+`DB_PATH`. For PostgreSQL or MySQL, set `DB_DSN` (or `DATABASE_URL`) and the
+application will create or migrate its schema at startup.
+
+```dotenv
+# PostgreSQL
+DB_DRIVER=postgres
+DB_DSN=host=127.0.0.1 user=flai password=change-me dbname=flai port=5432 sslmode=disable
+
+# MySQL 8+
+DB_DRIVER=mysql
+DB_DSN=flai:change-me@tcp(127.0.0.1:3306)/flai?charset=utf8mb4&parseTime=True&loc=Local
 ```
 
 ## License

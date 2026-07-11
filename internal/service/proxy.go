@@ -1265,6 +1265,7 @@ func (s *ProxyService) billUsageAndReturnCost(c *gin.Context, user *model.User, 
 	cost := calculateModelUsageCost(usage, billingModel).
 		Mul(groupMultiplier).
 		Mul(userChannelMultiplier(channel))
+	referralRate := referralCommissionRate(user, cost)
 
 	// 7. Deduct balance and log
 	tx := model.DB.Begin()
@@ -1312,7 +1313,7 @@ func (s *ProxyService) billUsageAndReturnCost(c *gin.Context, user *model.User, 
 		tx.Rollback()
 		return decimal.Zero, http.StatusInternalServerError, "Failed to log usage", err
 	}
-	if err := applyReferralCommission(tx, user, tokenLog.ID, cost); err != nil {
+	if err := applyReferralCommission(tx, user, tokenLog.ID, cost, referralRate); err != nil {
 		tx.Rollback()
 		return decimal.Zero, http.StatusInternalServerError, "Failed to apply referral commission", err
 	}
@@ -1407,19 +1408,26 @@ func clampTokenCount(tokens int, maxTokens int) int {
 	return tokens
 }
 
-func applyReferralCommission(tx *gorm.DB, user *model.User, tokenLogID uint, cost decimal.Decimal) error {
+func referralCommissionRate(user *model.User, cost decimal.Decimal) decimal.Decimal {
 	if user == nil || user.ReferrerID == nil || *user.ReferrerID == 0 || cost.LessThanOrEqual(decimal.Zero) {
-		return nil
+		return decimal.Zero
 	}
 	if !settingBool("referral_enabled", false) {
-		return nil
+		return decimal.Zero
 	}
 	rate, err := decimal.NewFromString(strings.TrimSpace(model.GetSystemSetting("referral_commission_rate", "0")))
 	if err != nil || rate.LessThanOrEqual(decimal.Zero) {
-		return nil
+		return decimal.Zero
 	}
 	if rate.GreaterThan(decimal.NewFromInt(1)) {
 		rate = rate.Div(decimal.NewFromInt(100))
+	}
+	return rate
+}
+
+func applyReferralCommission(tx *gorm.DB, user *model.User, tokenLogID uint, cost decimal.Decimal, rate decimal.Decimal) error {
+	if user == nil || user.ReferrerID == nil || *user.ReferrerID == 0 || cost.LessThanOrEqual(decimal.Zero) || rate.LessThanOrEqual(decimal.Zero) {
+		return nil
 	}
 	amount := cost.Mul(rate)
 	if amount.LessThanOrEqual(decimal.Zero) {

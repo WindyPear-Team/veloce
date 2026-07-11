@@ -269,6 +269,7 @@ func (s *ProxyService) billServerUsage(c *gin.Context, user *model.User, apiKey 
 	cost := calculateModelUsageCost(usage, billingModel).
 		Mul(groupMultiplier).
 		Mul(userChannelMultiplier(channel))
+	referralRate := referralCommissionRate(user, cost)
 
 	tx := model.DB.Begin()
 	if tx.Error != nil {
@@ -312,7 +313,7 @@ func (s *ProxyService) billServerUsage(c *gin.Context, user *model.User, apiKey 
 		tx.Rollback()
 		return decimal.Zero, http.StatusInternalServerError, "Failed to log usage", err
 	}
-	if err := applyReferralCommission(tx, user, tokenLog.ID, cost); err != nil {
+	if err := applyReferralCommission(tx, user, tokenLog.ID, cost, referralRate); err != nil {
 		tx.Rollback()
 		return decimal.Zero, http.StatusInternalServerError, "Failed to apply referral commission", err
 	}

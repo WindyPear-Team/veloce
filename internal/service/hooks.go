@@ -275,7 +275,7 @@ func ApplyUsageCharge(tx *gorm.DB, userID uint, cost decimal.Decimal) error {
 	if cost.LessThanOrEqual(decimal.Zero) {
 		return nil
 	}
-	if PersonalModeEnabled() {
+	if PersonalModeEnabledInTx(tx) {
 		return nil
 	}
 	if usageChargeHook != nil {

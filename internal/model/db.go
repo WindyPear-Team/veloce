@@ -2,21 +2,29 @@ package model
 
 import (
 	"crypto/rand"
+	"database/sql"
 	"encoding/base32"
+	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/WindyPear-Team/veloce/internal/config"
 	"github.com/glebarez/sqlite"
 	"github.com/shopspring/decimal"
+	"gorm.io/driver/mysql"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
 var DB *gorm.DB
 
 func InitDB() {
-	var err error
-	DB, err = gorm.Open(sqlite.Open(config.DBPath), &gorm.Config{})
+	dialector, isSQLite, err := databaseDialector()
+	if err != nil {
+		log.Fatal(err)
+	}
+	DB, err = gorm.Open(dialector, &gorm.Config{})
 	if err != nil {
 		log.Fatalf("failed to connect database: %v", err)
 	}
@@ -24,18 +32,11 @@ func InitDB() {
 	if err != nil {
 		log.Fatalf("failed to access database connection pool: %v", err)
 	}
-	// SQLite has a single writer. Keeping one connection prevents concurrent
-	// requests in this process from competing for an exclusive write lock.
-	sqlDB.SetMaxOpenConns(1)
-	sqlDB.SetMaxIdleConns(1)
-	for _, statement := range []string{
-		"PRAGMA journal_mode = WAL",
-		"PRAGMA busy_timeout = 10000",
-		"PRAGMA foreign_keys = ON",
-	} {
-		if _, err := sqlDB.Exec(statement); err != nil {
-			log.Fatalf("failed to configure sqlite (%s): %v", statement, err)
-		}
+	if err := configureDatabaseConnection(sqlDB, isSQLite); err != nil {
+		log.Fatalf("failed to configure database connection: %v", err)
+	}
+	if err := sqlDB.Ping(); err != nil {
+		log.Fatalf("failed to ping database: %v", err)
 	}
 	hadCachedInputPrice := DB.Migrator().HasColumn(&Model{}, "cached_input_price")
 	hadCacheWriteInputPrice := DB.Migrator().HasColumn(&Model{}, "cache_write_input_price")
@@ -100,6 +101,60 @@ func InitDB() {
 
 	// Initial data
 	initData()
+}
+
+func databaseDialector() (gorm.Dialector, bool, error) {
+	switch config.DBDriver {
+	case "", "sqlite":
+		if strings.TrimSpace(config.DBPath) == "" {
+			return nil, false, fmt.Errorf("DB_PATH must be set when DB_DRIVER is sqlite")
+		}
+		return sqlite.Open(sqliteDSN(config.DBPath)), true, nil
+	case "postgres", "postgresql":
+		if config.DBDSN == "" {
+			return nil, false, fmt.Errorf("DB_DSN or DATABASE_URL must be set when DB_DRIVER is postgres")
+		}
+		return postgres.Open(config.DBDSN), false, nil
+	case "mysql", "mariadb":
+		if config.DBDSN == "" {
+			return nil, false, fmt.Errorf("DB_DSN or DATABASE_URL must be set when DB_DRIVER is mysql")
+		}
+		return mysql.Open(config.DBDSN), false, nil
+	default:
+		return nil, false, fmt.Errorf("unsupported DB_DRIVER %q; expected sqlite, postgres, or mysql", config.DBDriver)
+	}
+}
+
+func sqliteDSN(path string) string {
+	separator := "?"
+	if strings.Contains(path, "?") {
+		separator = "&"
+	}
+	return path + separator + "_pragma=journal_mode(WAL)&_pragma=busy_timeout(10000)&_pragma=foreign_keys(ON)"
+}
+
+func configureDatabaseConnection(sqlDB *sql.DB, isSQLite bool) error {
+	if !isSQLite {
+		sqlDB.SetMaxOpenConns(config.DBMaxOpenConns)
+		sqlDB.SetMaxIdleConns(config.DBMaxIdleConns)
+		sqlDB.SetConnMaxLifetime(time.Duration(config.DBConnMaxLifetimeSeconds) * time.Second)
+		return nil
+	}
+
+	// SQLite still has a single writer, but a small pool prevents an accidental
+	// nested global query from blocking every database-backed request.
+	sqlDB.SetMaxOpenConns(4)
+	sqlDB.SetMaxIdleConns(4)
+	for _, statement := range []string{
+		"PRAGMA journal_mode = WAL",
+		"PRAGMA busy_timeout = 10000",
+		"PRAGMA foreign_keys = ON",
+	} {
+		if _, err := sqlDB.Exec(statement); err != nil {
+			return fmt.Errorf("%s: %w", statement, err)
+		}
+	}
+	return nil
 }
 
 func initData() {
@@ -473,8 +528,15 @@ func EnsureDefaultSystemSettings() error {
 }
 
 func GetSystemSetting(key, fallback string) string {
+	return GetSystemSettingWithDB(DB, key, fallback)
+}
+
+func GetSystemSettingWithDB(db *gorm.DB, key, fallback string) string {
+	if db == nil {
+		return fallback
+	}
 	var setting SystemSetting
-	if err := DB.Where("key = ?", key).Limit(1).Find(&setting).Error; err != nil || setting.Value == "" {
+	if err := db.Where("key = ?", key).Limit(1).Find(&setting).Error; err != nil || setting.Value == "" {
 		return fallback
 	}
 	return setting.Value
