@@ -33,6 +33,7 @@ type AdvancedChatSession struct {
 	ID                       string     `gorm:"primaryKey;size:80" json:"id"`
 	UserID                   uint       `gorm:"index;not null" json:"user_id"`
 	User                     model.User `gorm:"foreignKey:UserID" json:"-"`
+	FolderID                 string     `gorm:"index;size:80" json:"folder_id,omitempty"`
 	Title                    string     `gorm:"size:200;not null" json:"title"`
 	RunMode                  string     `gorm:"size:20;not null" json:"run_mode"`
 	AgentID                  string     `gorm:"size:80" json:"agent_id"`
@@ -51,6 +52,15 @@ type AdvancedChatSession struct {
 	ReasoningEffort          string     `gorm:"size:20" json:"reasoning_effort"`
 	CreatedAt                time.Time  `json:"created_at"`
 	UpdatedAt                time.Time  `json:"updated_at"`
+}
+
+type AdvancedChatSessionFolder struct {
+	ID        string     `gorm:"primaryKey;size:80" json:"id"`
+	UserID    uint       `gorm:"index;not null" json:"user_id"`
+	User      model.User `gorm:"foreignKey:UserID" json:"-"`
+	Name      string     `gorm:"size:80;not null" json:"name"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
 }
 
 type AdvancedChatMessage struct {
@@ -128,6 +138,7 @@ type advancedChatRunResponse struct {
 
 type advancedChatSessionResponse struct {
 	ID                       string                        `json:"id"`
+	FolderID                 string                        `json:"folder_id,omitempty"`
 	Title                    string                        `json:"title"`
 	Messages                 []advancedChatMessageResponse `json:"messages"`
 	RunMode                  string                        `json:"run_mode"`
@@ -148,6 +159,14 @@ type advancedChatSessionResponse struct {
 	LatestRun                *advancedChatRunResponse      `json:"latest_run,omitempty"`
 	CreatedAt                time.Time                     `json:"created_at"`
 	UpdatedAt                time.Time                     `json:"updated_at"`
+}
+
+type advancedChatSessionFolderInput struct {
+	Name string `json:"name"`
+}
+
+type advancedChatSessionFolderMoveInput struct {
+	FolderID string `json:"folder_id"`
 }
 
 type advancedChatRunEventResponse struct {
@@ -293,6 +312,88 @@ func (api *advancedChatAPI) listSessions(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, sessions)
+}
+
+func (api *advancedChatAPI) listSessionFolders(c *gin.Context) {
+	user, ok := currentAdvancedChatUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+	var folders []AdvancedChatSessionFolder
+	if err := model.DB.Where("user_id = ?", user.ID).Order("created_at ASC").Find(&folders).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list session folders"})
+		return
+	}
+	c.JSON(http.StatusOK, folders)
+}
+
+func (api *advancedChatAPI) createSessionFolder(c *gin.Context) {
+	user, ok := currentAdvancedChatUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+	var input advancedChatSessionFolderInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	name := strings.TrimSpace(input.Name)
+	if name == "" || len([]rune(name)) > 80 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Folder name must be between 1 and 80 characters"})
+		return
+	}
+	folder := AdvancedChatSessionFolder{ID: newAdvancedChatID("acf"), UserID: user.ID, Name: name}
+	if err := model.DB.Create(&folder).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create session folder"})
+		return
+	}
+	c.JSON(http.StatusCreated, folder)
+}
+
+func (api *advancedChatAPI) moveSessionToFolder(c *gin.Context) {
+	user, ok := currentAdvancedChatUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+	sessionID := normalizeAdvancedChatSessionID(c.Param("id"))
+	if sessionID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid session id"})
+		return
+	}
+	var input advancedChatSessionFolderMoveInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	folderID := strings.TrimSpace(input.FolderID)
+	if folderID != "" {
+		if normalizeAdvancedChatSessionID(folderID) == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid folder id"})
+			return
+		}
+		var folder AdvancedChatSessionFolder
+		if err := model.DB.Where("id = ? AND user_id = ?", folderID, user.ID).First(&folder).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				c.JSON(http.StatusNotFound, gin.H{"error": "Session folder not found"})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load session folder"})
+			return
+		}
+	}
+	result := model.DB.Model(&AdvancedChatSession{}).Where("id = ? AND user_id = ?", sessionID, user.ID).Update("folder_id", folderID)
+	if result.Error != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to move session"})
+		return
+	}
+	if result.RowsAffected == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Session not found"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"id": sessionID, "folder_id": folderID})
 }
 
 func (api *advancedChatAPI) getSession(c *gin.Context) {
@@ -3063,6 +3164,7 @@ func advancedChatSessionResponseFromModel(session AdvancedChatSession) (advanced
 	}
 	return advancedChatSessionResponse{
 		ID:                       session.ID,
+		FolderID:                 session.FolderID,
 		Title:                    session.Title,
 		Messages:                 messageResponses,
 		RunMode:                  normalizeAdvancedChatCompletionMode(session.RunMode),
