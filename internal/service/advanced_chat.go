@@ -63,15 +63,16 @@ type AdvancedChatAgentStudio struct {
 }
 
 type AdvancedChatUserSettings struct {
-	ID                   uint       `gorm:"primaryKey" json:"id"`
-	UserID               uint       `gorm:"uniqueIndex;not null" json:"user_id"`
-	User                 model.User `gorm:"foreignKey:UserID" json:"-"`
-	CustomMCPServers     string     `gorm:"type:text;not null" json:"custom_mcp_servers"`
-	TitleModelName       string     `gorm:"size:100;not null;default:''" json:"title_model_name"`
-	TitleUserChannelID   uint       `gorm:"index" json:"title_user_channel_id"`
-	TitleGenerationScope string     `gorm:"size:20;not null;default:'recent'" json:"title_generation_scope"`
-	CreatedAt            time.Time  `json:"created_at"`
-	UpdatedAt            time.Time  `json:"updated_at"`
+	ID                       uint       `gorm:"primaryKey" json:"id"`
+	UserID                   uint       `gorm:"uniqueIndex;not null" json:"user_id"`
+	User                     model.User `gorm:"foreignKey:UserID" json:"-"`
+	CustomMCPServers         string     `gorm:"type:text;not null" json:"custom_mcp_servers"`
+	TitleModelName           string     `gorm:"size:100;not null;default:''" json:"title_model_name"`
+	TitleUserChannelID       uint       `gorm:"index" json:"title_user_channel_id"`
+	TitleGenerationScope     string     `gorm:"size:20;not null;default:'recent'" json:"title_generation_scope"`
+	ConnectorApprovalAgentID string     `gorm:"size:80;not null;default:''" json:"connector_approval_agent_id"`
+	CreatedAt                time.Time  `json:"created_at"`
+	UpdatedAt                time.Time  `json:"updated_at"`
 }
 
 type AdvancedChatSkill struct {
@@ -164,6 +165,7 @@ type advancedChatUserSettingsResponse struct {
 	TitleModelName                       string                  `json:"title_model_name"`
 	TitleUserChannelID                   uint                    `json:"title_user_channel_id,omitempty"`
 	TitleGenerationScope                 string                  `json:"title_generation_scope"`
+	ConnectorApprovalAgentID             string                  `json:"connector_approval_agent_id"`
 }
 
 type advancedChatAdminSettingsInput struct {
@@ -196,9 +198,10 @@ type advancedChatUserMCPInput struct {
 }
 
 type advancedChatUserSettingsInput struct {
-	TitleModelName       string `json:"title_model_name"`
-	TitleUserChannelID   uint   `json:"title_user_channel_id"`
-	TitleGenerationScope string `json:"title_generation_scope"`
+	TitleModelName           string `json:"title_model_name"`
+	TitleUserChannelID       uint   `json:"title_user_channel_id"`
+	TitleGenerationScope     string `json:"title_generation_scope"`
+	ConnectorApprovalAgentID string `json:"connector_approval_agent_id"`
 }
 
 const (
@@ -481,11 +484,23 @@ func (api *advancedChatAPI) updateUserSettings(c *gin.Context) {
 		return
 	}
 	titleScope := normalizeAdvancedChatTitleGenerationScope(input.TitleGenerationScope)
+	approvalAgentID := strings.TrimSpace(input.ConnectorApprovalAgentID)
+	if approvalAgentID != "" {
+		if _, err := loadAdvancedChatAgent(user.ID, approvalAgentID); err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Approval agent not found"})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load approval agent"})
+			return
+		}
+	}
 	settings := ensureAdvancedChatUserSettings(user.ID)
 	if err := model.DB.Model(&settings).Updates(map[string]interface{}{
-		"title_model_name":       titleModel,
-		"title_user_channel_id":  input.TitleUserChannelID,
-		"title_generation_scope": titleScope,
+		"title_model_name":            titleModel,
+		"title_user_channel_id":       input.TitleUserChannelID,
+		"title_generation_scope":      titleScope,
+		"connector_approval_agent_id": approvalAgentID,
 	}).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save settings"})
 		return
@@ -934,6 +949,7 @@ func currentAdvancedChatUserSettings(userID uint) advancedChatUserSettingsRespon
 		TitleModelName:                       strings.TrimSpace(userSettings.TitleModelName),
 		TitleUserChannelID:                   userSettings.TitleUserChannelID,
 		TitleGenerationScope:                 normalizeAdvancedChatTitleGenerationScope(userSettings.TitleGenerationScope),
+		ConnectorApprovalAgentID:             strings.TrimSpace(userSettings.ConnectorApprovalAgentID),
 	}
 	if !advancedChatPremiumFeaturesAvailable() {
 		settings.FileStorageEnabled = false

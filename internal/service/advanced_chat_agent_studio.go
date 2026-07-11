@@ -320,6 +320,32 @@ func advancedChatAgentStudioApprovalCheckerForGroupValue(group advancedChatAgent
 	return checker
 }
 
+func advancedChatApprovalCheckerForUserAgent(userID uint, agentID string) (*advancedChatAgentStudioApprovalChecker, error) {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return nil, errors.New("approval agent is not configured")
+	}
+	agent, err := loadAdvancedChatAgent(userID, agentID)
+	if err != nil {
+		return nil, err
+	}
+	if agent == nil {
+		return nil, errors.New("approval agent is not configured")
+	}
+	return &advancedChatAgentStudioApprovalChecker{
+		Group: advancedChatAgentGroup{ID: "personal-approval", Name: "Personal approval"},
+		Agent: advancedChatGroupAgent{
+			ID:            "personal-approval-" + agentID,
+			Name:          agent.Name,
+			Type:          "checker",
+			Prompt:        agent.Prompt,
+			ChatAgentID:   agentID,
+			DefaultModel:  agent.DefaultModel,
+			UserChannelID: agent.UserChannelID,
+		},
+	}, nil
+}
+
 func approveAdvancedChatConnectorTaskWithChecker(ctx context.Context, user *model.User, runID string, sessionID string, checker *advancedChatAgentStudioApprovalChecker, task AdvancedChatConnectorTask, binding advancedChatConnectorToolBinding, arguments map[string]interface{}, observer advancedChatCompletionObserver, fallbackUserChannelID uint, displayRound int) (string, error) {
 	if user == nil {
 		return "", errors.New("user is required")

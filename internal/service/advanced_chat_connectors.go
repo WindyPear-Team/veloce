@@ -65,6 +65,9 @@ const (
 	advancedChatConnectorPreviewOldContentAvailable = "preview_old_content_available"
 	advancedChatConnectorPreviewToolCallID          = "preview_tool_call_id"
 	advancedChatConnectorTaskID                     = "connector_task_id"
+	advancedChatConnectorApprovalManual             = "manual"
+	advancedChatConnectorApprovalFullAccess         = "full_access"
+	advancedChatConnectorApprovalAssistant          = "assistant"
 )
 
 type AdvancedChatConnectorDevice struct {
@@ -250,6 +253,7 @@ type advancedChatConnectorToolBinding struct {
 	WorkspacePath   string
 	Action          string
 	AutoApprove     bool
+	ApprovalMode    string
 	CommandPrefixes []string
 }
 
@@ -1216,9 +1220,14 @@ func loadAdvancedChatConnectorForSession(userID uint, deviceID string, workspace
 }
 
 func advancedChatConnectorTools(device *AdvancedChatConnectorDevice, workspacePath string, autoApprove bool, commandPrefixes []string) ([]ChatExecutorTool, map[string]advancedChatConnectorToolBinding) {
+	return advancedChatConnectorToolsWithApprovalMode(device, workspacePath, legacyConnectorApprovalMode(autoApprove), commandPrefixes)
+}
+
+func advancedChatConnectorToolsWithApprovalMode(device *AdvancedChatConnectorDevice, workspacePath string, approvalMode string, commandPrefixes []string) ([]ChatExecutorTool, map[string]advancedChatConnectorToolBinding) {
 	if device == nil {
 		return nil, nil
 	}
+	approvalMode = normalizeAdvancedChatConnectorApprovalMode(approvalMode)
 	workspacePath = strings.TrimSpace(workspacePath)
 	unrestricted := workspacePath == ""
 	bindings := map[string]advancedChatConnectorToolBinding{}
@@ -1231,7 +1240,8 @@ func advancedChatConnectorTools(device *AdvancedChatConnectorDevice, workspacePa
 			DeviceName:      device.Name,
 			WorkspacePath:   workspacePath,
 			Action:          action,
-			AutoApprove:     autoApprove,
+			AutoApprove:     approvalMode == advancedChatConnectorApprovalFullAccess,
+			ApprovalMode:    approvalMode,
 			CommandPrefixes: normalizeConnectorCommandPrefixes(commandPrefixes),
 		}
 	}
@@ -2375,12 +2385,19 @@ func expandAdvancedChatConnectorToolArguments(binding advancedChatConnectorToolB
 }
 
 func advancedChatConnectorTaskRequiresApproval(binding advancedChatConnectorToolBinding, arguments map[string]interface{}) bool {
+	approvalMode := normalizeAdvancedChatConnectorApprovalMode(binding.ApprovalMode)
+	if approvalMode == advancedChatConnectorApprovalFullAccess {
+		return false
+	}
 	switch binding.Action {
 	case "list_files", "read_file", "file_sha256", "web_search", "web_fetch", "list_agent_skills", "read_agent_skill", "read_agent_skill_resource", "sync_agent_skills", "list_windows_drives":
 		return false
 	case "list_static_sites":
 		return false
 	case "run_command":
+		if approvalMode == advancedChatConnectorApprovalAssistant {
+			return true
+		}
 		command, _ := arguments["command"].(string)
 		return !connectorCommandAutoApproved(command, binding.CommandPrefixes)
 	case "write_file", "replace_text", "commit_delta", "deploy_static_site", "set_static_site_enabled", "delete_static_site":
@@ -2388,6 +2405,24 @@ func advancedChatConnectorTaskRequiresApproval(binding advancedChatConnectorTool
 	default:
 		return true
 	}
+}
+
+func normalizeAdvancedChatConnectorApprovalMode(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case advancedChatConnectorApprovalFullAccess:
+		return advancedChatConnectorApprovalFullAccess
+	case advancedChatConnectorApprovalAssistant:
+		return advancedChatConnectorApprovalAssistant
+	default:
+		return advancedChatConnectorApprovalManual
+	}
+}
+
+func legacyConnectorApprovalMode(autoApprove bool) string {
+	if autoApprove {
+		return advancedChatConnectorApprovalFullAccess
+	}
+	return advancedChatConnectorApprovalManual
 }
 
 func connectorCommandAutoApproved(command string, prefixes []string) bool {

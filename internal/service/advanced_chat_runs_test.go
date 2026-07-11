@@ -172,6 +172,30 @@ func TestCommitDeltaRequiresApprovalUnlessAutoApproved(t *testing.T) {
 	}
 }
 
+func TestConnectorApprovalModes(t *testing.T) {
+	fileChange := map[string]interface{}{"path": "main.go", "content": "package main"}
+	command := map[string]interface{}{"command": "go test ./..."}
+
+	manual := advancedChatConnectorToolBinding{Action: "write_file", ApprovalMode: advancedChatConnectorApprovalManual}
+	if !advancedChatConnectorTaskRequiresApproval(manual, fileChange) {
+		t.Fatal("manual mode should require approval for file changes")
+	}
+
+	fullAccess := advancedChatConnectorToolBinding{Action: "run_command", ApprovalMode: advancedChatConnectorApprovalFullAccess}
+	if advancedChatConnectorTaskRequiresApproval(fullAccess, command) {
+		t.Fatal("full access should not require approval for commands")
+	}
+
+	assistant := advancedChatConnectorToolBinding{
+		Action:          "run_command",
+		ApprovalMode:    advancedChatConnectorApprovalAssistant,
+		CommandPrefixes: []string{"go test"},
+	}
+	if !advancedChatConnectorTaskRequiresApproval(assistant, command) {
+		t.Fatal("assistant approval should review commands even when they match a manual allowlist")
+	}
+}
+
 func TestNormalizeStaticSiteDomainAndFiles(t *testing.T) {
 	domain, err := normalizeAdvancedChatStaticSiteDomain("https://Site.Example.COM/path")
 	if err != nil {

@@ -47,6 +47,7 @@ type advancedChatCompletionInput struct {
 	ConnectorDeviceID        string                          `json:"connector_device_id"`
 	ConnectorWorkspacePath   string                          `json:"connector_workspace_path"`
 	ConnectorAutoApprove     bool                            `json:"connector_auto_approve"`
+	ConnectorApprovalMode    string                          `json:"connector_approval_mode"`
 	ConnectorCommandPrefixes []string                        `json:"connector_command_prefixes"`
 	MaxTokens                int                             `json:"max_tokens"`
 	Temperature              *float64                        `json:"temperature"`
@@ -166,6 +167,7 @@ func (api *advancedChatAPI) completeChat(c *gin.Context) {
 	input.ConnectorDeviceID = ""
 	input.ConnectorWorkspacePath = ""
 	input.ConnectorAutoApprove = false
+	input.ConnectorApprovalMode = advancedChatConnectorApprovalManual
 	input.ConnectorCommandPrefixes = nil
 
 	agent, err := loadAdvancedChatAgent(user.ID, input.AgentID)

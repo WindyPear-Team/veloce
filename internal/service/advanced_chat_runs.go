@@ -42,6 +42,7 @@ type AdvancedChatSession struct {
 	ConnectorDeviceID        string     `gorm:"size:80" json:"connector_device_id"`
 	ConnectorWorkspacePath   string     `gorm:"type:text" json:"connector_workspace_path"`
 	ConnectorAutoApprove     bool       `gorm:"default:false" json:"connector_auto_approve"`
+	ConnectorApprovalMode    string     `gorm:"size:20;not null;default:'manual'" json:"connector_approval_mode"`
 	ConnectorCommandPrefixes string     `gorm:"type:text;not null;default:'[]'" json:"-"`
 	ModelName                string     `gorm:"size:100" json:"model_name"`
 	UserChannelID            uint       `gorm:"index" json:"user_channel_id"`
@@ -137,6 +138,7 @@ type advancedChatSessionResponse struct {
 	ConnectorDeviceID        string                        `json:"connector_device_id,omitempty"`
 	ConnectorWorkspacePath   string                        `json:"connector_workspace_path,omitempty"`
 	ConnectorAutoApprove     bool                          `json:"connector_auto_approve"`
+	ConnectorApprovalMode    string                        `json:"connector_approval_mode"`
 	ConnectorCommandPrefixes []string                      `json:"connector_command_prefixes"`
 	ModelName                string                        `json:"model_name,omitempty"`
 	UserChannelID            uint                          `json:"user_channel_id,omitempty"`
@@ -226,6 +228,7 @@ type advancedChatSessionInput struct {
 	ConnectorDeviceID        string                            `json:"connector_device_id"`
 	ConnectorWorkspacePath   string                            `json:"connector_workspace_path"`
 	ConnectorAutoApprove     bool                              `json:"connector_auto_approve"`
+	ConnectorApprovalMode    string                            `json:"connector_approval_mode"`
 	ConnectorCommandPrefixes []string                          `json:"connector_command_prefixes"`
 	ModelName                string                            `json:"model_name"`
 	UserChannelID            uint                              `json:"user_channel_id"`
@@ -260,6 +263,8 @@ type preparedAdvancedChatAssistantRun struct {
 	connectorDevice          *AdvancedChatConnectorDevice
 	connectorWorkspace       string
 	connectorAutoApprove     bool
+	connectorApprovalMode    string
+	approvalChecker          *advancedChatAgentStudioApprovalChecker
 	connectorCommandPrefixes []string
 	delivery                 *AdvancedChatDelivery
 	timeout                  time.Duration
@@ -966,6 +971,11 @@ func prepareAdvancedChatAssistantRun(ctx context.Context, userID uint, input adv
 	if mode == advancedChatModeAgentGroup {
 		modelName = ""
 	}
+	if strings.TrimSpace(input.ConnectorApprovalMode) == "" {
+		input.ConnectorApprovalMode = legacyConnectorApprovalMode(input.ConnectorAutoApprove)
+	} else {
+		input.ConnectorApprovalMode = normalizeAdvancedChatConnectorApprovalMode(input.ConnectorApprovalMode)
+	}
 
 	var agent *AdvancedChatAgent
 	var groupAgent *advancedChatGroupAgent
@@ -1031,6 +1041,17 @@ func prepareAdvancedChatAssistantRun(ctx context.Context, userID uint, input adv
 	if connectorDevice != nil {
 		workspaceSkills, err = loadAdvancedChatWorkspaceSkillsForRun(ctx, userID, connectorDevice, connectorWorkspace)
 		if err != nil {
+			return preparedAdvancedChatAssistantRun{}, http.StatusBadRequest, err.Error(), err
+		}
+	}
+	var personalApprovalChecker *advancedChatAgentStudioApprovalChecker
+	if connectorDevice != nil && input.ConnectorApprovalMode == advancedChatConnectorApprovalAssistant {
+		settings := ensureAdvancedChatUserSettings(userID)
+		personalApprovalChecker, err = advancedChatApprovalCheckerForUserAgent(userID, settings.ConnectorApprovalAgentID)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return preparedAdvancedChatAssistantRun{}, http.StatusBadRequest, "Approval agent not found", err
+			}
 			return preparedAdvancedChatAssistantRun{}, http.StatusBadRequest, err.Error(), err
 		}
 	}
@@ -1102,6 +1123,10 @@ func prepareAdvancedChatAssistantRun(ctx context.Context, userID uint, input adv
 	if mode == advancedChatModeAgentGroup {
 		input.AgentID = ""
 	}
+	if mode == advancedChatModeChat {
+		input.ConnectorApprovalMode = advancedChatConnectorApprovalManual
+	}
+	input.ConnectorAutoApprove = input.ConnectorApprovalMode == advancedChatConnectorApprovalFullAccess
 	input.Mode = mode
 	return preparedAdvancedChatAssistantRun{
 		input:                    input,
@@ -1118,7 +1143,9 @@ func prepareAdvancedChatAssistantRun(ctx context.Context, userID uint, input adv
 		servers:                  servers,
 		connectorDevice:          connectorDevice,
 		connectorWorkspace:       connectorWorkspace,
-		connectorAutoApprove:     input.ConnectorAutoApprove,
+		connectorAutoApprove:     input.ConnectorApprovalMode == advancedChatConnectorApprovalFullAccess,
+		connectorApprovalMode:    input.ConnectorApprovalMode,
+		approvalChecker:          personalApprovalChecker,
 		connectorCommandPrefixes: input.ConnectorCommandPrefixes,
 	}, http.StatusOK, "", nil
 }
@@ -1273,11 +1300,16 @@ func saveAdvancedChatSessionSnapshot(userID uint, sessionID string, input advanc
 	commandPrefixesJSON, _ := json.Marshal(commandPrefixes)
 	connectorDeviceID := strings.TrimSpace(input.ConnectorDeviceID)
 	connectorWorkspacePath := strings.TrimSpace(input.ConnectorWorkspacePath)
-	connectorAutoApprove := input.ConnectorAutoApprove
+	connectorApprovalMode := normalizeAdvancedChatConnectorApprovalMode(input.ConnectorApprovalMode)
+	if strings.TrimSpace(input.ConnectorApprovalMode) == "" {
+		connectorApprovalMode = legacyConnectorApprovalMode(input.ConnectorAutoApprove)
+	}
+	connectorAutoApprove := connectorApprovalMode == advancedChatConnectorApprovalFullAccess
 	if runMode == advancedChatModeChat {
 		connectorDeviceID = ""
 		connectorWorkspacePath = ""
 		connectorAutoApprove = false
+		connectorApprovalMode = advancedChatConnectorApprovalManual
 		commandPrefixes = []string{}
 		commandPrefixesJSON, _ = json.Marshal(commandPrefixes)
 	}
@@ -1338,6 +1370,7 @@ func saveAdvancedChatSessionSnapshot(userID uint, sessionID string, input advanc
 			ConnectorDeviceID:        connectorDeviceID,
 			ConnectorWorkspacePath:   connectorWorkspacePath,
 			ConnectorAutoApprove:     connectorAutoApprove,
+			ConnectorApprovalMode:    connectorApprovalMode,
 			ConnectorCommandPrefixes: string(commandPrefixesJSON),
 			ModelName:                modelName,
 			UserChannelID:            input.UserChannelID,
@@ -1360,6 +1393,7 @@ func saveAdvancedChatSessionSnapshot(userID uint, sessionID string, input advanc
 				"connector_device_id":        session.ConnectorDeviceID,
 				"connector_workspace_path":   session.ConnectorWorkspacePath,
 				"connector_auto_approve":     session.ConnectorAutoApprove,
+				"connector_approval_mode":    session.ConnectorApprovalMode,
 				"connector_command_prefixes": session.ConnectorCommandPrefixes,
 				"model_name":                 session.ModelName,
 				"user_channel_id":            session.UserChannelID,
@@ -1488,7 +1522,8 @@ func createAdvancedChatAssistantRun(userID uint, prepared preparedAdvancedChatAs
 			MCPServerIDs:             string(mcpServerIDs),
 			ConnectorDeviceID:        strings.TrimSpace(prepared.input.ConnectorDeviceID),
 			ConnectorWorkspacePath:   prepared.connectorWorkspace,
-			ConnectorAutoApprove:     prepared.input.ConnectorAutoApprove,
+			ConnectorAutoApprove:     prepared.connectorApprovalMode == advancedChatConnectorApprovalFullAccess,
+			ConnectorApprovalMode:    prepared.connectorApprovalMode,
 			ConnectorCommandPrefixes: string(commandPrefixes),
 			ModelName:                prepared.modelName,
 			UserChannelID:            prepared.input.UserChannelID,
@@ -1511,6 +1546,7 @@ func createAdvancedChatAssistantRun(userID uint, prepared preparedAdvancedChatAs
 				"connector_device_id":        session.ConnectorDeviceID,
 				"connector_workspace_path":   session.ConnectorWorkspacePath,
 				"connector_auto_approve":     session.ConnectorAutoApprove,
+				"connector_approval_mode":    session.ConnectorApprovalMode,
 				"connector_command_prefixes": session.ConnectorCommandPrefixes,
 				"model_name":                 session.ModelName,
 				"user_channel_id":            session.UserChannelID,
@@ -1741,9 +1777,11 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 	studioCanSplit := !studioRoleActive || advancedChatAgentStudioCanSplit(studioRole)
 	studioCanDelegate := advancedChatAgentStudioCanDelegate(studioRole, studioRoleActive)
 	studioCanCommit := studioRoleActive && normalizeAdvancedChatAgentType(studioRole) == "reviewer"
-	var approvalChecker *advancedChatAgentStudioApprovalChecker
+	approvalChecker := prepared.approvalChecker
 	if prepared.agentGroup != nil {
-		approvalChecker, _ = advancedChatAgentStudioApprovalCheckerForGroup(prepared.agentGroup)
+		if groupChecker, ok := advancedChatAgentStudioApprovalCheckerForGroup(prepared.agentGroup); ok {
+			approvalChecker = groupChecker
+		}
 	}
 	if advancedChatAssistantMCPToolsEnabled() {
 		var err error
@@ -1758,7 +1796,7 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 			bindings = map[string]mcpToolBinding{}
 		}
 	}
-	allConnectorTools, allConnectorBindings := advancedChatConnectorTools(prepared.connectorDevice, prepared.connectorWorkspace, prepared.connectorAutoApprove, prepared.connectorCommandPrefixes)
+	allConnectorTools, allConnectorBindings := advancedChatConnectorToolsWithApprovalMode(prepared.connectorDevice, prepared.connectorWorkspace, prepared.connectorApprovalMode, prepared.connectorCommandPrefixes)
 	connectorTools := allConnectorTools
 	connectorBindings := allConnectorBindings
 	if studioRoleActive {
@@ -2581,6 +2619,7 @@ func createPersistedAdvancedChatCompletionSession(userID uint, input advancedCha
 		ConnectorDeviceID:        input.ConnectorDeviceID,
 		ConnectorWorkspacePath:   input.ConnectorWorkspacePath,
 		ConnectorAutoApprove:     input.ConnectorAutoApprove,
+		ConnectorApprovalMode:    normalizeAdvancedChatConnectorApprovalMode(input.ConnectorApprovalMode),
 		ConnectorCommandPrefixes: input.ConnectorCommandPrefixes,
 		ModelName:                modelName,
 		UserChannelID:            input.UserChannelID,
@@ -3034,6 +3073,7 @@ func advancedChatSessionResponseFromModel(session AdvancedChatSession) (advanced
 		ConnectorDeviceID:        session.ConnectorDeviceID,
 		ConnectorWorkspacePath:   session.ConnectorWorkspacePath,
 		ConnectorAutoApprove:     session.ConnectorAutoApprove,
+		ConnectorApprovalMode:    normalizeAdvancedChatConnectorApprovalMode(session.ConnectorApprovalMode),
 		ConnectorCommandPrefixes: decodeStringList(session.ConnectorCommandPrefixes),
 		ModelName:                session.ModelName,
 		UserChannelID:            session.UserChannelID,
