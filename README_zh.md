@@ -68,3 +68,7 @@ BOOTSTRAP_ADMIN_EMAILS=
 ## 许可证
 
 本项目采用AGPL许可证，详情请查看仓库中 "LICENSE" 文件。
+
+## 特别鸣谢
+
+[Linuxdo](https://linux.do)
