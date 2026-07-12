@@ -269,7 +269,8 @@ func storeAdvancedChatFile(userID uint, input advancedChatFileStoreInput) (Advan
 		return AdvancedChatFile{}, http.StatusBadRequest, "File type is not allowed", errors.New("file type blocked")
 	}
 	size := int64(len(input.Data))
-	if size > advancedChatFileStorageTotalBytes() {
+	storageLimit := advancedChatFileStorageTotalBytes()
+	if size > storageLimit {
 		return AdvancedChatFile{}, http.StatusRequestEntityTooLarge, "File exceeds storage quota", errAdvancedChatFileInsufficient
 	}
 
@@ -332,7 +333,7 @@ func storeAdvancedChatFile(userID uint, input advancedChatFileStoreInput) (Advan
 			Scan(&packageUsed).Error; err != nil {
 			return err
 		}
-		if used+packageUsed+size > advancedChatFileStorageTotalBytes() {
+		if used+packageUsed+size > storageLimit {
 			return errAdvancedChatFileInsufficient
 		}
 		return tx.Create(&file).Error
@@ -603,14 +604,36 @@ func removeAdvancedChatStoragePath(relativePath string) error {
 }
 
 func advancedChatFileStorageUsedBytes(userID uint) int64 {
+	used, err := advancedChatFileStorageUsedBytesWithDB(model.DB, userID)
+	if err != nil {
+		return 0
+	}
+	return used + ApplyAdvancedChatStorageUsageHooks(userID)
+}
+
+func advancedChatFileStorageUsedBytesWithDB(db *gorm.DB, userID uint) (int64, error) {
+	if db == nil {
+		return 0, errors.New("database is not initialized")
+	}
 	var used int64
-	if err := model.DB.Model(&AdvancedChatFile{}).
+	if err := db.Model(&AdvancedChatFile{}).
 		Where("user_id = ?", userID).
 		Select("COALESCE(SUM(size), 0)").
 		Scan(&used).Error; err != nil {
-		return 0
+		return 0, err
 	}
-	return used + advancedChatSkillPackageStorageUsedBytes(userID) + ApplyAdvancedChatStorageUsageHooks(userID)
+	var packageUsed int64
+	if err := db.Model(&AdvancedChatSkillPackage{}).
+		Where("user_id = ?", userID).
+		Select("COALESCE(SUM(size), 0)").
+		Scan(&packageUsed).Error; err != nil {
+		return 0, err
+	}
+	hookUsed, err := ApplyAdvancedChatStorageUsageWithDBHooks(db, userID)
+	if err != nil {
+		return 0, err
+	}
+	return used + packageUsed + hookUsed, nil
 }
 
 func advancedChatFileStorageRemainingBytes(userID uint) int64 {
@@ -623,6 +646,10 @@ func advancedChatFileStorageRemainingBytes(userID uint) int64 {
 
 func AdvancedChatFileStorageUsedBytes(userID uint) int64 {
 	return advancedChatFileStorageUsedBytes(userID)
+}
+
+func AdvancedChatFileStorageUsedBytesWithDB(db *gorm.DB, userID uint) (int64, error) {
+	return advancedChatFileStorageUsedBytesWithDB(db, userID)
 }
 
 func AdvancedChatFileStorageTotalBytes() int64 {

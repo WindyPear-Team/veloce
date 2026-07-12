@@ -38,6 +38,9 @@ func InitDB() {
 	if err := sqlDB.Ping(); err != nil {
 		log.Fatalf("failed to ping database: %v", err)
 	}
+	if isSQLite {
+		logSQLiteConfiguration(sqlDB)
+	}
 	hadCachedInputPrice := DB.Migrator().HasColumn(&Model{}, "cached_input_price")
 	hadCacheWriteInputPrice := DB.Migrator().HasColumn(&Model{}, "cache_write_input_price")
 	hadCacheWrite1hInputPrice := DB.Migrator().HasColumn(&Model{}, "cache_write_1h_input_price")
@@ -155,6 +158,19 @@ func configureDatabaseConnection(sqlDB *sql.DB, isSQLite bool) error {
 		}
 	}
 	return nil
+}
+
+func logSQLiteConfiguration(sqlDB *sql.DB) {
+	var journalMode string
+	var busyTimeout int
+	if err := sqlDB.QueryRow("PRAGMA journal_mode").Scan(&journalMode); err != nil {
+		journalMode = "unknown"
+	}
+	if err := sqlDB.QueryRow("PRAGMA busy_timeout").Scan(&busyTimeout); err != nil {
+		busyTimeout = 0
+	}
+	stats := sqlDB.Stats()
+	log.Printf("sqlite configured: path=%q journal_mode=%s busy_timeout_ms=%d max_open_connections=%d max_idle_connections=%d", config.DBPath, journalMode, busyTimeout, stats.MaxOpenConnections, 1)
 }
 
 func initData() {

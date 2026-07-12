@@ -505,6 +505,7 @@ func storeAdvancedChatSkillPackage(userID uint, sourceName string, archiveData [
 			Hash:          candidate.Hash,
 		})
 	}
+	storageLimit := advancedChatFileStorageTotalBytes()
 	err = model.DB.Transaction(func(tx *gorm.DB) error {
 		var used int64
 		if err := tx.Model(&AdvancedChatFile{}).Where("user_id = ?", userID).Select("COALESCE(SUM(size), 0)").Scan(&used).Error; err != nil {
@@ -514,7 +515,7 @@ func storeAdvancedChatSkillPackage(userID uint, sourceName string, archiveData [
 		if err := tx.Model(&AdvancedChatSkillPackage{}).Where("user_id = ?", userID).Select("COALESCE(SUM(size), 0)").Scan(&packageUsed).Error; err != nil {
 			return err
 		}
-		if used+packageUsed+stats.Size > advancedChatFileStorageTotalBytes() {
+		if used+packageUsed+stats.Size > storageLimit {
 			return errAdvancedChatFileInsufficient
 		}
 		if err := tx.Create(&pkg).Error; err != nil {

@@ -119,7 +119,7 @@ func registerMemoryUserRoutes(group *gin.RouterGroup) {
 }
 
 func registerMemoryHooks() {
-	communityservice.RegisterAdvancedChatStorageUsageHook(memoryStorageUsedBytes)
+	communityservice.RegisterAdvancedChatStorageUsageWithDBHook(memoryStorageUsedBytesWithDB)
 	communityservice.RegisterAdvancedChatRuntimeExtensionHook(memoryRuntimeExtension)
 	communityservice.RegisterAdvancedChatToolHandler(memoryToolList, handleMemoryTool)
 	communityservice.RegisterAdvancedChatToolHandler(memoryToolRead, handleMemoryTool)
@@ -511,8 +511,13 @@ func upsertMemoryDocument(userID uint, input memoryInput, updatedBy string) (Adv
 		Enabled:     enabled,
 		UpdatedBy:   normalizeUpdatedBy(updatedBy),
 	}
+	storageLimit := communityservice.AdvancedChatFileStorageTotalBytes()
 	err = model.DB.Transaction(func(tx *gorm.DB) error {
-		if communityservice.AdvancedChatFileStorageUsedBytes(userID)+memory.Size > communityservice.AdvancedChatFileStorageTotalBytes() {
+		used, err := communityservice.AdvancedChatFileStorageUsedBytesWithDB(tx, userID)
+		if err != nil {
+			return err
+		}
+		if used+memory.Size > storageLimit {
 			return errMemoryQuotaExceeded
 		}
 		return tx.Create(&memory).Error
@@ -599,9 +604,13 @@ func updateMemoryDocument(userID uint, id string, input memoryInput, updatedBy s
 	if input.Enabled != nil {
 		updates["enabled"] = *input.Enabled
 	}
+	storageLimit := communityservice.AdvancedChatFileStorageTotalBytes()
 	err = model.DB.Transaction(func(tx *gorm.DB) error {
-		used := communityservice.AdvancedChatFileStorageUsedBytes(userID) - memory.Size + int64(len(data))
-		if used > communityservice.AdvancedChatFileStorageTotalBytes() {
+		used, err := communityservice.AdvancedChatFileStorageUsedBytesWithDB(tx, userID)
+		if err != nil {
+			return err
+		}
+		if used-memory.Size+int64(len(data)) > storageLimit {
 			return errMemoryQuotaExceeded
 		}
 		return tx.Model(&AdvancedChatMemoryDocument{}).Where("id = ? AND user_id = ?", memory.ID, userID).Updates(updates).Error
@@ -681,6 +690,14 @@ func memoryStorageUsedBytes(userID uint) int64 {
 		return 0
 	}
 	return used
+}
+
+func memoryStorageUsedBytesWithDB(db *gorm.DB, userID uint) (int64, error) {
+	var used int64
+	if err := db.Model(&AdvancedChatMemoryDocument{}).Where("user_id = ?", userID).Select("COALESCE(SUM(size), 0)").Scan(&used).Error; err != nil {
+		return 0, err
+	}
+	return used, nil
 }
 
 func memoryStoragePath(userID uint, scope string, agentID string, kind string) string {

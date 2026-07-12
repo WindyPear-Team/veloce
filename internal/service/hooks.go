@@ -22,6 +22,7 @@ type MetaModelResolveHook func(*gin.Context, MetaModelResolveInput) (MetaModelRe
 type MetaModelCatalogHook func(*gin.Context) ([]MetaModelCatalogItem, error)
 type GeneratedAssetHook func(context.Context, GeneratedAssetInput)
 type AdvancedChatStorageUsageHook func(userID uint) int64
+type AdvancedChatStorageUsageWithDBHook func(db *gorm.DB, userID uint) (int64, error)
 type AdvancedChatRuntimeExtensionHook func(context.Context, AdvancedChatRuntimeContext) (AdvancedChatRuntimeExtension, error)
 type AdvancedChatToolHandler func(context.Context, AdvancedChatToolCallInput) (string, error)
 
@@ -98,6 +99,7 @@ var metaModelResolveHook MetaModelResolveHook
 var metaModelCatalogHook MetaModelCatalogHook
 var generatedAssetHook GeneratedAssetHook
 var advancedChatStorageUsageHooks []AdvancedChatStorageUsageHook
+var advancedChatStorageUsageWithDBHooks []AdvancedChatStorageUsageWithDBHook
 var advancedChatRuntimeExtensionHooks []AdvancedChatRuntimeExtensionHook
 var advancedChatToolHandlers = map[string]AdvancedChatToolHandler{}
 
@@ -176,6 +178,14 @@ func RegisterAdvancedChatStorageUsageHook(hook AdvancedChatStorageUsageHook) {
 	}
 }
 
+// RegisterAdvancedChatStorageUsageWithDBHook lets extensions include their
+// storage usage while reusing the caller's transaction connection.
+func RegisterAdvancedChatStorageUsageWithDBHook(hook AdvancedChatStorageUsageWithDBHook) {
+	if hook != nil {
+		advancedChatStorageUsageWithDBHooks = append(advancedChatStorageUsageWithDBHooks, hook)
+	}
+}
+
 func RegisterAdvancedChatRuntimeExtensionHook(hook AdvancedChatRuntimeExtensionHook) {
 	if hook != nil {
 		advancedChatRuntimeExtensionHooks = append(advancedChatRuntimeExtensionHooks, hook)
@@ -221,6 +231,23 @@ func ApplyAdvancedChatStorageUsageHooks(userID uint) int64 {
 		}
 	}
 	return total
+}
+
+func ApplyAdvancedChatStorageUsageWithDBHooks(db *gorm.DB, userID uint) (int64, error) {
+	var total int64
+	for _, hook := range advancedChatStorageUsageWithDBHooks {
+		if hook == nil {
+			continue
+		}
+		used, err := hook(db, userID)
+		if err != nil {
+			return 0, err
+		}
+		if used > 0 {
+			total += used
+		}
+	}
+	return total, nil
 }
 
 func BuildAdvancedChatRuntimeExtension(ctx context.Context, input AdvancedChatRuntimeContext) (AdvancedChatRuntimeExtension, error) {
