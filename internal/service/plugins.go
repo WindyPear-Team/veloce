@@ -76,6 +76,7 @@ func registerPluginUserRoutes(group *gin.RouterGroup) {
 	api := &pluginAPI{}
 	plugins := group.Group("/plugins")
 	plugins.GET("", api.listPlugins)
+	plugins.GET("/:id", api.getPlugin)
 	plugins.POST("", api.installPlugin)
 	plugins.GET("/frontend", api.frontendExtensions)
 	plugins.POST("/:id/enable", api.enablePlugin)
@@ -128,6 +129,23 @@ func (api *pluginAPI) frontendExtensions(c *gin.Context) {
 		items = append(items, pluginListResponse(plugin, true))
 	}
 	c.JSON(http.StatusOK, gin.H{"plugins": items})
+}
+
+func (api *pluginAPI) getPlugin(c *gin.Context) {
+	user, ok := currentUserFromContext(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+	plugin, ok := loadPlugin(c)
+	if !ok {
+		return
+	}
+	if !pluginUserEnabled(plugin, userPluginStates(user.ID)) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Plugin is disabled"})
+		return
+	}
+	c.JSON(http.StatusOK, pluginListResponse(plugin, true))
 }
 
 func (api *pluginAPI) installPlugin(c *gin.Context) {
@@ -222,6 +240,12 @@ func (api *pluginAPI) installPlugin(c *gin.Context) {
 		model.DB.Model(&plugin).Update("last_error", "")
 		recordPluginLog(user.ID, plugin.ID, "info", "wasm_init", "WASM plugin initialized", "")
 	}
+	DispatchPluginHooks(c.Request.Context(), PluginHookInput{
+		Point:   PluginHookPointPluginInstalled,
+		UserID:  user.ID,
+		Source:  "plugin_management",
+		Payload: map[string]interface{}{"plugin_id": plugin.ID, "version": plugin.Version},
+	})
 	c.JSON(http.StatusOK, gin.H{"plugin": pluginListResponse(plugin, true)})
 }
 
@@ -264,9 +288,25 @@ func (api *pluginAPI) setPluginEnabled(c *gin.Context, enabled bool) {
 	if !ok {
 		return
 	}
+	if !enabled {
+		DispatchPluginHooks(c.Request.Context(), PluginHookInput{
+			Point:   PluginHookPointPluginDisabled,
+			UserID:  user.ID,
+			Source:  "plugin_management",
+			Payload: map[string]interface{}{"plugin_id": plugin.ID, "enabled": false},
+		})
+	}
 	if err := setUserPluginEnabled(user.ID, plugin.ID, enabled); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update plugin state"})
 		return
+	}
+	if enabled {
+		DispatchPluginHooks(c.Request.Context(), PluginHookInput{
+			Point:   PluginHookPointPluginEnabled,
+			UserID:  user.ID,
+			Source:  "plugin_management",
+			Payload: map[string]interface{}{"plugin_id": plugin.ID, "enabled": true},
+		})
 	}
 	c.JSON(http.StatusOK, gin.H{"plugin": pluginListResponse(plugin, enabled)})
 }
@@ -320,6 +360,10 @@ func (api *pluginAPI) getPluginSettings(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if !pluginUserEnabled(plugin, userPluginStates(user.ID)) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Plugin is disabled"})
+		return
+	}
 	var cfg model.UserPluginConfig
 	_ = model.DB.Where("user_id = ? AND plugin_id = ?", user.ID, plugin.ID).Limit(1).Find(&cfg).Error
 	c.JSON(http.StatusOK, gin.H{
@@ -336,6 +380,10 @@ func (api *pluginAPI) updatePluginSettings(c *gin.Context) {
 	}
 	plugin, ok := loadPlugin(c)
 	if !ok {
+		return
+	}
+	if !pluginUserEnabled(plugin, userPluginStates(user.ID)) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Plugin is disabled"})
 		return
 	}
 	body, err := io.ReadAll(io.LimitReader(c.Request.Body, 1<<20))
@@ -358,6 +406,12 @@ func (api *pluginAPI) updatePluginSettings(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save settings"})
 		return
 	}
+	DispatchPluginHooks(c.Request.Context(), PluginHookInput{
+		Point:   PluginHookPointPluginSettingsUpdated,
+		UserID:  user.ID,
+		Source:  "plugin_settings",
+		Payload: map[string]interface{}{"plugin_id": plugin.ID, "config": payload},
+	})
 	c.JSON(http.StatusOK, gin.H{"config": json.RawMessage(nonEmptyJSON(cfg.ConfigJSON, "{}"))})
 }
 
@@ -378,12 +432,38 @@ func (api *pluginAPI) runPluginAction(c *gin.Context) {
 	}
 	var payload map[string]interface{}
 	_ = c.ShouldBindJSON(&payload)
-	result, err := InvokePluginAction(c.Request.Context(), plugin, user.ID, c.Param("action"), payload)
+	action := strings.TrimSpace(c.Param("action"))
+	beforeResults := DispatchPluginHooks(c.Request.Context(), PluginHookInput{
+		Point:   PluginHookPointPluginActionBefore,
+		Action:  action,
+		UserID:  user.ID,
+		Source:  "plugin_action",
+		Payload: map[string]interface{}{"plugin_id": plugin.ID, "values": payload},
+	})
+	if err := pluginActionAllowed(beforeResults); err != nil {
+		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
+		return
+	}
+	result, err := InvokePluginAction(c.Request.Context(), plugin, user.ID, action, payload)
 	if err != nil {
-		recordPluginLog(user.ID, plugin.ID, "error", "action_failed", err.Error(), mustJSON(gin.H{"action": c.Param("action")}))
+		recordPluginLog(user.ID, plugin.ID, "error", "action_failed", err.Error(), mustJSON(gin.H{"action": action}))
+		DispatchPluginHooks(c.Request.Context(), PluginHookInput{
+			Point:   PluginHookPointPluginActionError,
+			Action:  action,
+			UserID:  user.ID,
+			Source:  "plugin_action",
+			Payload: map[string]interface{}{"plugin_id": plugin.ID, "values": payload, "error": err.Error()},
+		})
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 		return
 	}
+	DispatchPluginHooks(c.Request.Context(), PluginHookInput{
+		Point:   PluginHookPointPluginActionAfter,
+		Action:  action,
+		UserID:  user.ID,
+		Source:  "plugin_action",
+		Payload: map[string]interface{}{"plugin_id": plugin.ID, "values": payload, "result": result},
+	})
 	c.JSON(http.StatusOK, result)
 }
 
@@ -431,6 +511,21 @@ func userPluginStates(userID uint) map[string]bool {
 		result[state.PluginID] = state.Enabled
 	}
 	return result
+}
+
+func pluginConfigForUser(userID uint, pluginID string) map[string]interface{} {
+	if userID == 0 || strings.TrimSpace(pluginID) == "" {
+		return map[string]interface{}{}
+	}
+	var config model.UserPluginConfig
+	if err := model.DB.Where("user_id = ? AND plugin_id = ?", userID, pluginID).Limit(1).Find(&config).Error; err != nil {
+		return map[string]interface{}{}
+	}
+	values := map[string]interface{}{}
+	if strings.TrimSpace(config.ConfigJSON) != "" {
+		_ = json.Unmarshal([]byte(config.ConfigJSON), &values)
+	}
+	return values
 }
 
 func pluginUserEnabled(plugin model.Plugin, states map[string]bool) bool {

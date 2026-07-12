@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -15,6 +16,13 @@ const (
 	PluginHookPointAppBoot                      = "app.boot"
 	PluginHookPointAdvancedChatRuntimeExtension = "advanced_chat.runtime_extension"
 	PluginHookPointAdvancedChatToolCall         = "advanced_chat.tool_call"
+	PluginHookPointPluginActionBefore           = "plugin.action.before"
+	PluginHookPointPluginActionAfter            = "plugin.action.after"
+	PluginHookPointPluginActionError            = "plugin.action.error"
+	PluginHookPointPluginSettingsUpdated        = "plugin.settings.updated"
+	PluginHookPointPluginEnabled                = "plugin.enabled"
+	PluginHookPointPluginDisabled               = "plugin.disabled"
+	PluginHookPointPluginInstalled              = "plugin.installed"
 )
 
 type PluginHookInput struct {
@@ -175,6 +183,7 @@ func invokePluginHook(ctx context.Context, plugin model.Plugin, hook PluginHook,
 		"payload":   input.Payload,
 		"hook":      hook,
 		"plugin_id": plugin.ID,
+		"settings":  pluginConfigForUser(input.UserID, plugin.ID),
 	}
 	if len(hook.Config) > 0 {
 		var cfg interface{}
@@ -199,6 +208,29 @@ func invokePluginHook(ctx context.Context, plugin model.Plugin, hook PluginHook,
 	}
 	recordPluginLog(input.UserID, plugin.ID, "info", "hook_invoked", "Plugin hook invoked", mustJSON(gin.H{"point": input.Point, "action": input.Action}))
 	return output, nil
+}
+
+func pluginActionAllowed(results []PluginHookResult) error {
+	for _, result := range results {
+		if result.Output == nil {
+			continue
+		}
+		if denied, ok := result.Output["deny"].(bool); ok && denied {
+			return pluginHookDeniedError(result)
+		}
+		if allowed, ok := result.Output["allow"].(bool); ok && !allowed {
+			return pluginHookDeniedError(result)
+		}
+	}
+	return nil
+}
+
+func pluginHookDeniedError(result PluginHookResult) error {
+	message := stringFromMap(result.Output, "message")
+	if message == "" {
+		message = "Plugin action denied by " + result.PluginID
+	}
+	return errors.New(message)
 }
 
 func pluginHookMatches(hook PluginHook, point string, action string) bool {

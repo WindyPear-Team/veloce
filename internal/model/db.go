@@ -141,10 +141,10 @@ func configureDatabaseConnection(sqlDB *sql.DB, isSQLite bool) error {
 		return nil
 	}
 
-	// SQLite still has a single writer, but a small pool prevents an accidental
-	// nested global query from blocking every database-backed request.
-	sqlDB.SetMaxOpenConns(4)
-	sqlDB.SetMaxIdleConns(4)
+	// SQLite has a single writer. One connection serializes concurrent writes
+	// and prevents SQLITE_BUSY errors between background jobs and requests.
+	sqlDB.SetMaxOpenConns(1)
+	sqlDB.SetMaxIdleConns(1)
 	for _, statement := range []string{
 		"PRAGMA journal_mode = WAL",
 		"PRAGMA busy_timeout = 10000",

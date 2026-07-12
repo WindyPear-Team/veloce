@@ -32,3 +32,9 @@ Supported hook points in this example:
 - `app.boot`: fire-and-forget startup notification.
 - `advanced_chat.runtime_extension`: returns an extra system prompt and tools for chat.
 - `advanced_chat.tool_call`: handles a tool call declared by the runtime extension.
+- `plugin.settings.updated`: runs after the current user's settings are saved.
+- `plugin.action.before` / `plugin.action.after`: run around declarative plugin actions. A synchronous `before` hook can return `{ "allow": false, "message": "..." }` or `{ "deny": true }` to block the action.
+
+Plugin settings support either a `tabs` array plus each field's `tab` id, or a
+field-level `tab` value without an explicit tab list. The frontend creates a
+separate configuration page for every enabled plugin.

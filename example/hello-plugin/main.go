@@ -20,7 +20,10 @@ func plugin_manifest() {
   "hooks": [
     { "point": "app.boot", "mode": "async" },
     { "point": "advanced_chat.runtime_extension", "mode": "sync", "priority": 10 },
-    { "point": "advanced_chat.tool_call", "mode": "sync", "action": "hello_plugin_echo", "priority": 10 }
+    { "point": "advanced_chat.tool_call", "mode": "sync", "action": "hello_plugin_echo", "priority": 10 },
+    { "point": "plugin.settings.updated", "mode": "async" },
+    { "point": "plugin.action.before", "mode": "sync", "action": "*" },
+    { "point": "plugin.action.after", "mode": "async", "action": "*" }
   ],
   "frontend": {
     "sidebar": [
@@ -51,9 +54,14 @@ func plugin_manifest() {
   },
   "settings": {
     "type": "form",
+    "tabs": [
+      { "id": "general", "label": "通用", "description": "基础行为设置。" },
+      { "id": "advanced", "label": "高级", "description": "运行时扩展设置。" }
+    ],
     "fields": [
-      { "type": "input", "name": "greeting", "label": "问候语", "default": "Hello" },
-      { "type": "switch", "name": "enabled", "label": "启用问候", "default": true }
+      { "type": "input", "name": "greeting", "label": "问候语", "default": "Hello", "tab": "general" },
+      { "type": "switch", "name": "enabled", "label": "启用问候", "default": true, "tab": "general" },
+      { "type": "textarea", "name": "system_hint", "label": "系统提示补充", "tab": "advanced" }
     ]
   }
 }`))

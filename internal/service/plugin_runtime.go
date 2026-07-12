@@ -53,9 +53,10 @@ func InvokePluginAction(ctx context.Context, plugin model.Plugin, userID uint, a
 		return nil, errors.New("plugin has no WASM module")
 	}
 	metadata := mustJSON(map[string]interface{}{
-		"user_id": userID,
-		"action":  action,
-		"payload": payload,
+		"user_id":  userID,
+		"action":   action,
+		"payload":  payload,
+		"settings": pluginConfigForUser(userID, plugin.ID),
 	})
 	recordPluginLog(userID, plugin.ID, "info", "action_requested", "Plugin action requested", metadata)
 	stdout, err := runPluginWASM(ctx, plugin, "plugin_handle_action", []byte(metadata))
