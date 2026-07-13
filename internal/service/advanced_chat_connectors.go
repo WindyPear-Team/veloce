@@ -14,6 +14,7 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/WindyPear-Team/veloce/internal/model"
@@ -27,6 +28,9 @@ const (
 
 	advancedChatConnectorModePlatform  = "platform"
 	advancedChatConnectorModeWebServer = "web_server"
+
+	advancedChatConnectorDeviceKindCLI     = "cli"
+	advancedChatConnectorDeviceKindDesktop = "desktop"
 
 	advancedChatConnectorTaskStatusPendingApproval = "pending_approval"
 	advancedChatConnectorTaskStatusQueued          = "queued"
@@ -70,20 +74,25 @@ const (
 	advancedChatConnectorApprovalAssistant          = "assistant"
 )
 
+var advancedChatDesktopConnectorEnsureMu sync.Mutex
+
 type AdvancedChatConnectorDevice struct {
-	ID         string     `gorm:"primaryKey;size:80" json:"id"`
-	UserID     uint       `gorm:"index;not null" json:"user_id"`
-	User       model.User `gorm:"foreignKey:UserID" json:"-"`
-	TokenHash  string     `gorm:"uniqueIndex;size:64;not null" json:"-"`
-	Name       string     `gorm:"size:120;not null" json:"name"`
-	Remark     string     `gorm:"size:200;not null;default:''" json:"remark"`
-	Hostname   string     `gorm:"size:120" json:"hostname"`
-	OS         string     `gorm:"size:40" json:"os"`
-	Arch       string     `gorm:"size:40" json:"arch"`
-	Version    string     `gorm:"size:80" json:"version"`
-	Mode       string     `gorm:"size:40;not null;default:'platform'" json:"mode"`
-	ListenPort int        `gorm:"not null;default:0" json:"listen_port"`
-	Status     string     `gorm:"size:20;index;not null" json:"status"`
+	ID        string     `gorm:"primaryKey;size:80" json:"id"`
+	UserID    uint       `gorm:"index;not null" json:"user_id"`
+	User      model.User `gorm:"foreignKey:UserID" json:"-"`
+	TokenHash string     `gorm:"uniqueIndex;size:64;not null" json:"-"`
+	Name      string     `gorm:"size:120;not null" json:"name"`
+	Remark    string     `gorm:"size:200;not null;default:''" json:"remark"`
+	Hostname  string     `gorm:"size:120" json:"hostname"`
+	OS        string     `gorm:"size:40" json:"os"`
+	Arch      string     `gorm:"size:40" json:"arch"`
+	Version   string     `gorm:"size:80" json:"version"`
+	Kind      string     `gorm:"size:20;index;not null;default:'cli'" json:"kind"`
+	// DesktopInstanceID identifies a Veloce Desktop installation, not a hardware fingerprint.
+	DesktopInstanceID string `gorm:"size:120;index;not null;default:''" json:"desktop_instance_id,omitempty"`
+	Mode              string `gorm:"size:40;not null;default:'platform'" json:"mode"`
+	ListenPort        int    `gorm:"not null;default:0" json:"listen_port"`
+	Status            string `gorm:"size:20;index;not null" json:"status"`
 	// Kept for existing databases that already migrated the previous connector schema.
 	// New connector versions no longer register workspace paths on the device.
 	Workspaces string     `gorm:"type:text;not null" json:"-"`
@@ -123,20 +132,22 @@ type AdvancedChatConnectorTask struct {
 }
 
 type advancedChatConnectorDeviceResponse struct {
-	ID         string     `json:"id"`
-	Name       string     `json:"name"`
-	Remark     string     `json:"remark"`
-	Hostname   string     `json:"hostname,omitempty"`
-	OS         string     `json:"os,omitempty"`
-	Arch       string     `json:"arch,omitempty"`
-	Version    string     `json:"version,omitempty"`
-	Mode       string     `json:"mode"`
-	ListenPort int        `json:"listen_port,omitempty"`
-	Status     string     `json:"status"`
-	Online     bool       `json:"online"`
-	LastSeenAt *time.Time `json:"last_seen_at,omitempty"`
-	CreatedAt  time.Time  `json:"created_at"`
-	UpdatedAt  time.Time  `json:"updated_at"`
+	ID                string     `json:"id"`
+	Name              string     `json:"name"`
+	Remark            string     `json:"remark"`
+	Hostname          string     `json:"hostname,omitempty"`
+	OS                string     `json:"os,omitempty"`
+	Arch              string     `json:"arch,omitempty"`
+	Version           string     `json:"version,omitempty"`
+	Kind              string     `json:"kind"`
+	DesktopInstanceID string     `json:"desktop_instance_id,omitempty"`
+	Mode              string     `json:"mode"`
+	ListenPort        int        `json:"listen_port,omitempty"`
+	Status            string     `json:"status"`
+	Online            bool       `json:"online"`
+	LastSeenAt        *time.Time `json:"last_seen_at,omitempty"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
 }
 
 type advancedChatConnectorTokenInput struct {
@@ -152,13 +163,23 @@ type advancedChatConnectorDeviceUpdateInput struct {
 }
 
 type advancedChatConnectorRegisterInput struct {
-	Name       string `json:"name"`
-	Hostname   string `json:"hostname"`
-	OS         string `json:"os"`
-	Arch       string `json:"arch"`
-	Version    string `json:"version"`
-	Mode       string `json:"mode"`
-	ListenPort int    `json:"listen_port"`
+	Name              string `json:"name"`
+	Hostname          string `json:"hostname"`
+	OS                string `json:"os"`
+	Arch              string `json:"arch"`
+	Version           string `json:"version"`
+	Mode              string `json:"mode"`
+	ListenPort        int    `json:"listen_port"`
+	Kind              string `json:"kind"`
+	DesktopInstanceID string `json:"desktop_instance_id"`
+}
+
+type advancedChatDesktopConnectorEnsureInput struct {
+	DesktopInstanceID string `json:"desktop_instance_id"`
+	Hostname          string `json:"hostname"`
+	OS                string `json:"os"`
+	Arch              string `json:"arch"`
+	Version           string `json:"version"`
 }
 
 type advancedChatStaticSiteResponse struct {
@@ -366,6 +387,7 @@ func (api *advancedChatAPI) createConnectorToken(c *gin.Context) {
 		TokenHash:  hashAdvancedChatConnectorToken(token),
 		Name:       name,
 		Remark:     remark,
+		Kind:       advancedChatConnectorDeviceKindCLI,
 		Mode:       mode,
 		ListenPort: listenPort,
 		Status:     advancedChatConnectorDeviceStatusOffline,
@@ -378,6 +400,89 @@ func (api *advancedChatAPI) createConnectorToken(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"token": token, "device": advancedChatConnectorDeviceResponseFromModel(device)})
+}
+
+// ensureDesktopConnector creates a connector identity for this Veloce Desktop
+// installation, or confirms that the main process still owns its saved token.
+// The raw connector token is only returned when a new one must be persisted.
+func (api *advancedChatAPI) ensureDesktopConnector(c *gin.Context) {
+	user, ok := currentAdvancedChatUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+	var input advancedChatDesktopConnectorEnsureInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	instanceID := truncateConnectorField(input.DesktopInstanceID, 120)
+	if instanceID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Desktop instance id is required"})
+		return
+	}
+
+	advancedChatDesktopConnectorEnsureMu.Lock()
+	defer advancedChatDesktopConnectorEnsureMu.Unlock()
+
+	var device AdvancedChatConnectorDevice
+	err := model.DB.Where("user_id = ? AND kind = ? AND desktop_instance_id = ?", user.ID, advancedChatConnectorDeviceKindDesktop, instanceID).First(&device).Error
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load desktop connector"})
+		return
+	}
+
+	resumeToken := strings.TrimSpace(c.GetHeader("X-Desktop-Connector-Token"))
+	if err == nil && resumeToken != "" && device.TokenHash == hashAdvancedChatConnectorToken(resumeToken) {
+		c.JSON(http.StatusOK, gin.H{"device": advancedChatConnectorDeviceResponseFromModel(device), "reused": true})
+		return
+	}
+
+	token, tokenErr := newAdvancedChatConnectorToken()
+	if tokenErr != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create connector token"})
+		return
+	}
+	now := time.Now()
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		hostname := truncateConnectorField(input.Hostname, 120)
+		name := "Veloce Desktop"
+		if hostname != "" {
+			name += " (" + hostname + ")"
+		}
+		device = AdvancedChatConnectorDevice{
+			ID:                newAdvancedChatID("acd"),
+			UserID:            user.ID,
+			TokenHash:         hashAdvancedChatConnectorToken(token),
+			Name:              name,
+			Kind:              advancedChatConnectorDeviceKindDesktop,
+			DesktopInstanceID: instanceID,
+			Hostname:          hostname,
+			OS:                truncateConnectorField(input.OS, 40),
+			Arch:              truncateConnectorField(input.Arch, 40),
+			Version:           truncateConnectorField(input.Version, 80),
+			Mode:              advancedChatConnectorModePlatform,
+			Status:            advancedChatConnectorDeviceStatusOffline,
+			Workspaces:        "[]",
+			CreatedAt:         now,
+			UpdatedAt:         now,
+		}
+		if err := model.DB.Create(&device).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create desktop connector"})
+			return
+		}
+	} else {
+		if err := model.DB.Model(&device).Updates(map[string]interface{}{
+			"token_hash": hashAdvancedChatConnectorToken(token),
+			"updated_at": now,
+		}).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to refresh desktop connector"})
+			return
+		}
+		device.TokenHash = hashAdvancedChatConnectorToken(token)
+		device.UpdatedAt = now
+	}
+	c.JSON(http.StatusOK, gin.H{"token": token, "device": advancedChatConnectorDeviceResponseFromModel(device), "reused": false})
 }
 
 func (api *advancedChatAPI) rotateConnectorDeviceToken(c *gin.Context) {
@@ -1252,20 +1357,22 @@ func advancedChatConnectorDeviceResponseFromModel(device AdvancedChatConnectorDe
 		status = advancedChatConnectorDeviceStatusOffline
 	}
 	return advancedChatConnectorDeviceResponse{
-		ID:         device.ID,
-		Name:       device.Name,
-		Remark:     device.Remark,
-		Hostname:   device.Hostname,
-		OS:         device.OS,
-		Arch:       device.Arch,
-		Version:    device.Version,
-		Mode:       normalizeAdvancedChatConnectorMode(device.Mode),
-		ListenPort: device.ListenPort,
-		Status:     status,
-		Online:     online,
-		LastSeenAt: device.LastSeenAt,
-		CreatedAt:  device.CreatedAt,
-		UpdatedAt:  device.UpdatedAt,
+		ID:                device.ID,
+		Name:              device.Name,
+		Remark:            device.Remark,
+		Hostname:          device.Hostname,
+		OS:                device.OS,
+		Arch:              device.Arch,
+		Version:           device.Version,
+		Kind:              normalizeAdvancedChatConnectorDeviceKind(device.Kind),
+		DesktopInstanceID: device.DesktopInstanceID,
+		Mode:              normalizeAdvancedChatConnectorMode(device.Mode),
+		ListenPort:        device.ListenPort,
+		Status:            status,
+		Online:            online,
+		LastSeenAt:        device.LastSeenAt,
+		CreatedAt:         device.CreatedAt,
+		UpdatedAt:         device.UpdatedAt,
 	}
 }
 
@@ -2097,6 +2204,13 @@ func normalizeAdvancedChatConnectorMode(value string) string {
 	default:
 		return advancedChatConnectorModePlatform
 	}
+}
+
+func normalizeAdvancedChatConnectorDeviceKind(value string) string {
+	if strings.EqualFold(strings.TrimSpace(value), advancedChatConnectorDeviceKindDesktop) {
+		return advancedChatConnectorDeviceKindDesktop
+	}
+	return advancedChatConnectorDeviceKindCLI
 }
 
 func normalizeAdvancedChatConnectorListenPort(port int, mode string) int {

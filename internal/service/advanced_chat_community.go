@@ -92,6 +92,7 @@ func RegisterCommunityAdvancedChatUserRoutes(group *gin.RouterGroup) {
 	group.POST("/advanced-chat/devices/:id/tasks/:task_id/cancel", api.cancelConnectorDeviceTask)
 	group.GET("/advanced-chat/devices/:id/mcp-processes", api.listConnectorDeviceMCPProcesses)
 	group.POST("/advanced-chat/devices/:id/mcp-processes/stop", api.stopConnectorDeviceMCPProcess)
+	group.POST("/advanced-chat/devices/desktop/ensure", api.ensureDesktopConnector)
 	group.POST("/advanced-chat/devices/token", api.createConnectorToken)
 	group.POST("/advanced-chat/devices/:id/token", api.rotateConnectorDeviceToken)
 	group.PUT("/advanced-chat/devices/:id", api.updateConnectorDevice)
