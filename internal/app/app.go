@@ -108,7 +108,11 @@ func Run() error {
 		}
 		c.JSON(http.StatusOK, gin.H{"required": required})
 	})
-	r.POST("/api/setup", func(c *gin.Context) {
+	r.POST("/api/setup", middleware.NewSensitiveRateLimiter(middleware.SensitiveRateLimitConfig{
+		Name:   "initial-setup-ip",
+		Limit:  5,
+		Window: time.Minute,
+	}), func(c *gin.Context) {
 		var input struct {
 			SiteName string `json:"site_name"`
 			Username string `json:"username"`
@@ -165,130 +169,139 @@ func Run() error {
 	// OIDC Auth routes
 	auth := r.Group("/auth")
 	{
-		auth.POST("/password/login", func(c *gin.Context) {
-			var input struct {
-				Identifier        string `json:"identifier"`
-				Password          string `json:"password"`
-				CaptchaToken      string `json:"captcha_token"`
-				AgreementAccepted bool   `json:"agreement_accepted"`
-			}
-			if err := c.ShouldBindJSON(&input); err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-				return
-			}
-			if err := api.RequireAuthAgreementAccepted(input.AgreementAccepted); err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-				return
-			}
-			user, token, err := authService.LoginWithPassword(service.PasswordLoginInput{
-				Identifier:   input.Identifier,
-				Password:     input.Password,
-				CaptchaToken: input.CaptchaToken,
-			})
-			if err != nil {
+		auth.POST("/password/login",
+			middleware.NewSensitiveRateLimiter(middleware.SensitiveRateLimitConfig{Name: "password-login-ip", Limit: 15, Window: time.Minute}),
+			middleware.NewSensitiveRateLimiter(middleware.SensitiveRateLimitConfig{Name: "password-login-identity", Limit: 5, Window: time.Minute, IdentityFields: []string{"identifier"}}),
+			func(c *gin.Context) {
+				var input struct {
+					Identifier        string `json:"identifier"`
+					Password          string `json:"password"`
+					CaptchaToken      string `json:"captcha_token"`
+					AgreementAccepted bool   `json:"agreement_accepted"`
+				}
+				if err := c.ShouldBindJSON(&input); err != nil {
+					c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+					return
+				}
+				if err := api.RequireAuthAgreementAccepted(input.AgreementAccepted); err != nil {
+					c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+					return
+				}
+				user, token, err := authService.LoginWithPassword(service.PasswordLoginInput{
+					Identifier:   input.Identifier,
+					Password:     input.Password,
+					CaptchaToken: input.CaptchaToken,
+				})
+				if err != nil {
+					service.RecordAuditLog(service.AuditLogInput{
+						LogType:    service.AuditLogTypeLogin,
+						Action:     "password_login_failed",
+						Resource:   "password_login",
+						Method:     c.Request.Method,
+						Path:       c.Request.URL.Path,
+						StatusCode: http.StatusUnauthorized,
+						IPAddress:  c.ClientIP(),
+						UserAgent:  c.Request.UserAgent(),
+						Message:    err.Error(),
+					})
+					writeAuthError(c, err)
+					return
+				}
 				service.RecordAuditLog(service.AuditLogInput{
 					LogType:    service.AuditLogTypeLogin,
-					Action:     "password_login_failed",
+					Action:     "password_login_success",
 					Resource:   "password_login",
+					UserID:     uintPtr(user.ID),
 					Method:     c.Request.Method,
 					Path:       c.Request.URL.Path,
-					StatusCode: http.StatusUnauthorized,
+					StatusCode: http.StatusOK,
 					IPAddress:  c.ClientIP(),
 					UserAgent:  c.Request.UserAgent(),
-					Message:    err.Error(),
 				})
-				writeAuthError(c, err)
-				return
-			}
-			service.RecordAuditLog(service.AuditLogInput{
-				LogType:    service.AuditLogTypeLogin,
-				Action:     "password_login_success",
-				Resource:   "password_login",
-				UserID:     uintPtr(user.ID),
-				Method:     c.Request.Method,
-				Path:       c.Request.URL.Path,
-				StatusCode: http.StatusOK,
-				IPAddress:  c.ClientIP(),
-				UserAgent:  c.Request.UserAgent(),
+				c.JSON(http.StatusOK, gin.H{"token": token, "user": user})
 			})
-			c.JSON(http.StatusOK, gin.H{"token": token, "user": user})
-		})
-		auth.POST("/password/register", func(c *gin.Context) {
-			var input struct {
-				Username          string `json:"username"`
-				Email             string `json:"email"`
-				Password          string `json:"password"`
-				EmailCode         string `json:"email_code"`
-				CaptchaToken      string `json:"captcha_token"`
-				ReferralCode      string `json:"referral_code"`
-				AgreementAccepted bool   `json:"agreement_accepted"`
-			}
-			if err := c.ShouldBindJSON(&input); err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-				return
-			}
-			if err := api.RequireAuthAgreementAccepted(input.AgreementAccepted); err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-				return
-			}
-			if input.ReferralCode == "" {
-				input.ReferralCode = getReferralCookie(c)
-			}
-			user, token, err := authService.RegisterWithPassword(service.PasswordRegisterInput{
-				Username:     input.Username,
-				Email:        input.Email,
-				Password:     input.Password,
-				EmailCode:    input.EmailCode,
-				CaptchaToken: input.CaptchaToken,
-				ReferralCode: input.ReferralCode,
-			})
-			if err != nil {
+		auth.POST("/password/register",
+			middleware.NewSensitiveRateLimiter(middleware.SensitiveRateLimitConfig{Name: "password-register-ip", Limit: 5, Window: time.Minute}),
+			middleware.NewSensitiveRateLimiter(middleware.SensitiveRateLimitConfig{Name: "password-register-email", Limit: 3, Window: time.Minute, IdentityFields: []string{"email"}}),
+			func(c *gin.Context) {
+				var input struct {
+					Username          string `json:"username"`
+					Email             string `json:"email"`
+					Password          string `json:"password"`
+					EmailCode         string `json:"email_code"`
+					CaptchaToken      string `json:"captcha_token"`
+					ReferralCode      string `json:"referral_code"`
+					AgreementAccepted bool   `json:"agreement_accepted"`
+				}
+				if err := c.ShouldBindJSON(&input); err != nil {
+					c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+					return
+				}
+				if err := api.RequireAuthAgreementAccepted(input.AgreementAccepted); err != nil {
+					c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+					return
+				}
+				if input.ReferralCode == "" {
+					input.ReferralCode = getReferralCookie(c)
+				}
+				user, token, err := authService.RegisterWithPassword(service.PasswordRegisterInput{
+					Username:     input.Username,
+					Email:        input.Email,
+					Password:     input.Password,
+					EmailCode:    input.EmailCode,
+					CaptchaToken: input.CaptchaToken,
+					ReferralCode: input.ReferralCode,
+				})
+				if err != nil {
+					service.RecordAuditLog(service.AuditLogInput{
+						LogType:    service.AuditLogTypeLogin,
+						Action:     "password_register_failed",
+						Resource:   "password_register",
+						Method:     c.Request.Method,
+						Path:       c.Request.URL.Path,
+						StatusCode: http.StatusBadRequest,
+						IPAddress:  c.ClientIP(),
+						UserAgent:  c.Request.UserAgent(),
+						Message:    err.Error(),
+					})
+					writeAuthError(c, err)
+					return
+				}
 				service.RecordAuditLog(service.AuditLogInput{
 					LogType:    service.AuditLogTypeLogin,
-					Action:     "password_register_failed",
+					Action:     "password_register_success",
 					Resource:   "password_register",
+					UserID:     uintPtr(user.ID),
 					Method:     c.Request.Method,
 					Path:       c.Request.URL.Path,
-					StatusCode: http.StatusBadRequest,
+					StatusCode: http.StatusOK,
 					IPAddress:  c.ClientIP(),
 					UserAgent:  c.Request.UserAgent(),
-					Message:    err.Error(),
 				})
-				writeAuthError(c, err)
-				return
-			}
-			service.RecordAuditLog(service.AuditLogInput{
-				LogType:    service.AuditLogTypeLogin,
-				Action:     "password_register_success",
-				Resource:   "password_register",
-				UserID:     uintPtr(user.ID),
-				Method:     c.Request.Method,
-				Path:       c.Request.URL.Path,
-				StatusCode: http.StatusOK,
-				IPAddress:  c.ClientIP(),
-				UserAgent:  c.Request.UserAgent(),
+				clearReferralCookie(c)
+				c.JSON(http.StatusOK, gin.H{"token": token, "user": user})
 			})
-			clearReferralCookie(c)
-			c.JSON(http.StatusOK, gin.H{"token": token, "user": user})
-		})
-		auth.POST("/password/email-code", func(c *gin.Context) {
-			var input struct {
-				Email        string `json:"email"`
-				CaptchaToken string `json:"captcha_token"`
-			}
-			if err := c.ShouldBindJSON(&input); err != nil {
-				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-				return
-			}
-			if err := authService.SendRegistrationEmailCode(input.Email, input.CaptchaToken); err != nil {
-				writeAuthError(c, err)
-				return
-			}
-			c.JSON(http.StatusOK, gin.H{"message": "Verification code sent"})
-		})
-		auth.POST("/passkey/login/options", passkeyAPI.BeginLogin)
-		auth.POST("/passkey/login", passkeyAPI.CompleteLogin)
-		auth.GET("/login", func(c *gin.Context) {
+		auth.POST("/password/email-code",
+			middleware.NewSensitiveRateLimiter(middleware.SensitiveRateLimitConfig{Name: "email-code-ip", Limit: 5, Window: time.Minute}),
+			middleware.NewSensitiveRateLimiter(middleware.SensitiveRateLimitConfig{Name: "email-code-email", Limit: 3, Window: time.Minute, IdentityFields: []string{"email"}}),
+			func(c *gin.Context) {
+				var input struct {
+					Email        string `json:"email"`
+					CaptchaToken string `json:"captcha_token"`
+				}
+				if err := c.ShouldBindJSON(&input); err != nil {
+					c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+					return
+				}
+				if err := authService.SendRegistrationEmailCode(input.Email, input.CaptchaToken); err != nil {
+					writeAuthError(c, err)
+					return
+				}
+				c.JSON(http.StatusOK, gin.H{"message": "Verification code sent"})
+			})
+		auth.POST("/passkey/login/options", middleware.NewSensitiveRateLimiter(middleware.SensitiveRateLimitConfig{Name: "passkey-login-options-ip", Limit: 15, Window: time.Minute}), passkeyAPI.BeginLogin)
+		auth.POST("/passkey/login", middleware.NewSensitiveRateLimiter(middleware.SensitiveRateLimitConfig{Name: "passkey-login-ip", Limit: 15, Window: time.Minute}), passkeyAPI.CompleteLogin)
+		auth.GET("/login", middleware.NewSensitiveRateLimiter(middleware.SensitiveRateLimitConfig{Name: "oidc-login-ip", Limit: 20, Window: time.Minute}), func(c *gin.Context) {
 			if required, err := authService.InitialSetupRequired(); err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load setup status"})
 				return
@@ -323,7 +336,7 @@ func Run() error {
 			setOIDCReturnCookie(c, authReturnURL(c), 600)
 			c.Redirect(http.StatusFound, authURL)
 		})
-		auth.GET("/oauth/:provider/login", func(c *gin.Context) {
+		auth.GET("/oauth/:provider/login", middleware.NewSensitiveRateLimiter(middleware.SensitiveRateLimitConfig{Name: "oauth-login-ip", Limit: 20, Window: time.Minute}), func(c *gin.Context) {
 			if required, err := authService.InitialSetupRequired(); err != nil {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load setup status"})
 				return
