@@ -1166,10 +1166,10 @@ func prepareAdvancedChatAssistantRun(ctx context.Context, userID uint, input adv
 			return preparedAdvancedChatAssistantRun{}, http.StatusBadRequest, err.Error(), err
 		}
 	}
-	if loaded, loadErr := loadAdvancedChatAgentGroupsForRun(ctx, userID, connectorDevice); loadErr == nil {
-		agentGroups = loaded
-	}
 	if mode == advancedChatModeAgentGroup {
+		if loaded, loadErr := loadAdvancedChatAgentGroupsForRun(ctx, userID, connectorDevice); loadErr == nil {
+			agentGroups = loaded
+		}
 		group, target, status, message, groupErr := prepareAdvancedChatAgentGroupTarget(input.AgentGroupID, agentGroups, messages)
 		if groupErr != nil {
 			return preparedAdvancedChatAssistantRun{}, status, message, groupErr
@@ -1882,10 +1882,10 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 	mcpTools := []ChatExecutorTool{}
 	bindings := map[string]mcpToolBinding{}
 	studioRole := advancedChatAgentStudioRole(prepared)
-	studioRoleActive := prepared.groupAgent != nil
+	studioRoleActive := prepared.mode == advancedChatModeAgentGroup && prepared.groupAgent != nil
 	studioCanExecute := !studioRoleActive || advancedChatAgentStudioCanUseExecutionTools(studioRole)
-	studioCanSplit := !studioRoleActive || advancedChatAgentStudioCanSplit(studioRole)
-	studioCanDelegate := advancedChatAgentStudioCanDelegate(studioRole, studioRoleActive)
+	studioCanSplit := studioRoleActive && advancedChatAgentStudioCanSplit(studioRole)
+	studioCanDelegate := studioRoleActive && advancedChatAgentStudioCanDelegate(studioRole, true)
 	studioCanCommit := studioRoleActive && normalizeAdvancedChatAgentType(studioRole) == "reviewer"
 	approvalChecker := prepared.approvalChecker
 	if prepared.agentGroup != nil {
@@ -1958,11 +1958,13 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 			systemPrompt = strings.Join([]string{systemPrompt, groupPrompt}, "\n\n")
 		}
 	}
-	if agentGroupPrompt := advancedChatAgentGroupSystemPrompt(prepared.agentGroups); agentGroupPrompt != "" {
-		if strings.TrimSpace(systemPrompt) == "" {
-			systemPrompt = agentGroupPrompt
-		} else {
-			systemPrompt = strings.Join([]string{systemPrompt, agentGroupPrompt}, "\n\n")
+	if studioRoleActive {
+		if agentGroupPrompt := advancedChatAgentGroupSystemPrompt(prepared.agentGroups); agentGroupPrompt != "" {
+			if strings.TrimSpace(systemPrompt) == "" {
+				systemPrompt = agentGroupPrompt
+			} else {
+				systemPrompt = strings.Join([]string{systemPrompt, agentGroupPrompt}, "\n\n")
+			}
 		}
 	}
 	if studioRoleActive {

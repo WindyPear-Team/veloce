@@ -110,6 +110,16 @@ func TestAgentStudioRolePermissions(t *testing.T) {
 	}
 }
 
+func TestAssistantModeDoesNotEnableAgentStudioCapabilities(t *testing.T) {
+	prepared := preparedAdvancedChatAssistantRun{mode: advancedChatModeAssistant}
+	studioRoleActive := prepared.mode == advancedChatModeAgentGroup && prepared.groupAgent != nil
+	studioCanSplit := studioRoleActive && advancedChatAgentStudioCanSplit(advancedChatAgentStudioRole(prepared))
+	studioCanDelegate := studioRoleActive && advancedChatAgentStudioCanDelegate(advancedChatAgentStudioRole(prepared), true)
+	if studioRoleActive || studioCanSplit || studioCanDelegate {
+		t.Fatal("assistant mode must not receive Agent Studio delegation or split capabilities")
+	}
+}
+
 func TestNormalizeAdvancedChatAgentGroupRequiresOneChecker(t *testing.T) {
 	base := advancedChatAgentGroupInput{
 		ID:   "studio",
