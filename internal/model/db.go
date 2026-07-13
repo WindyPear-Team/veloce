@@ -48,6 +48,7 @@ func InitDB() {
 	// Auto Migrate
 	err = DB.AutoMigrate(
 		&User{},
+		&UserAvatar{},
 		&APIKey{},
 		&EmailVerificationCode{},
 		&OIDCBindRequest{},

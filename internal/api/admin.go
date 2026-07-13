@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"sort"
@@ -15,6 +16,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // SystemAPI handles global platform configuration.
@@ -3245,6 +3247,8 @@ type apiKeyInput struct {
 	Enabled             *bool            `json:"enabled"`
 }
 
+const maxUserAvatarBytes int64 = 2 << 20
+
 func (api *UserAPI) GetMe(c *gin.Context) {
 	user, ok := currentUser(c)
 	if !ok {
@@ -3257,6 +3261,105 @@ func (api *UserAPI) GetMe(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, response)
+}
+
+func (api *UserAPI) UploadAvatar(c *gin.Context) {
+	user, ok := currentUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	// Keep a malformed multipart body from consuming the general request limit.
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxUserAvatarBytes+(1<<20))
+	if err := c.Request.ParseMultipartForm(maxUserAvatarBytes); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Avatar upload is invalid or too large"})
+		return
+	}
+	file, header, err := c.Request.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Avatar file is required"})
+		return
+	}
+	defer file.Close()
+	if header.Size > maxUserAvatarBytes {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "Avatar must not exceed 2 MB"})
+		return
+	}
+	data, err := io.ReadAll(io.LimitReader(file, maxUserAvatarBytes+1))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to read avatar"})
+		return
+	}
+	if len(data) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Avatar file is empty"})
+		return
+	}
+	if int64(len(data)) > maxUserAvatarBytes {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "Avatar must not exceed 2 MB"})
+		return
+	}
+	mimeType := http.DetectContentType(data)
+	if !isAllowedAvatarMIMEType(mimeType) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Avatar must be a JPEG, PNG, GIF, or WebP image"})
+		return
+	}
+
+	now := time.Now().UTC()
+	avatarURL := "/api/avatars/" + strconv.FormatUint(uint64(user.ID), 10) + "?v=" + strconv.FormatInt(now.UnixNano(), 10)
+	avatar := model.UserAvatar{UserID: user.ID, MIMEType: mimeType, Data: data, UpdatedAt: now}
+	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.OnConflict{
+			Columns: []clause.Column{{Name: "user_id"}},
+			DoUpdates: clause.Assignments(map[string]interface{}{
+				"mime_type":  mimeType,
+				"data":       data,
+				"updated_at": now,
+			}),
+		}).Create(&avatar).Error; err != nil {
+			return err
+		}
+		return tx.Model(&model.User{}).Where("id = ?", user.ID).Update("avatar_url", avatarURL).Error
+	}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save avatar"})
+		return
+	}
+
+	var response model.User
+	if err := loadUserForResponse(user.ID).First(&response, user.ID).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Avatar saved but failed to load user"})
+		return
+	}
+	c.JSON(http.StatusOK, response)
+}
+
+func (api *UserAPI) GetAvatar(c *gin.Context) {
+	userID, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil || userID == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Avatar not found"})
+		return
+	}
+	var avatar model.UserAvatar
+	if err := model.DB.First(&avatar, uint(userID)).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.Status(http.StatusNotFound)
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load avatar"})
+		return
+	}
+	c.Header("Cache-Control", "public, max-age=31536000, immutable")
+	c.Header("X-Content-Type-Options", "nosniff")
+	c.Data(http.StatusOK, avatar.MIMEType, avatar.Data)
+}
+
+func isAllowedAvatarMIMEType(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "image/jpeg", "image/png", "image/gif", "image/webp":
+		return true
+	default:
+		return false
+	}
 }
 
 func (api *UserAPI) PasswordChangeMethod(c *gin.Context) {

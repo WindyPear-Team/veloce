@@ -28,6 +28,14 @@ type User struct {
 	UpdatedAt     time.Time             `json:"updated_at"`
 }
 
+// UserAvatar keeps uploaded avatar bytes separate from the frequently-read users table.
+type UserAvatar struct {
+	UserID    uint      `gorm:"primaryKey" json:"-"`
+	MIMEType  string    `gorm:"size:40;not null" json:"-"`
+	Data      []byte    `gorm:"not null" json:"-"`
+	UpdatedAt time.Time `json:"-"`
+}
+
 // APIKey represents a user-owned API token.
 type APIKey struct {
 	ID                  uint            `gorm:"primaryKey" json:"id"`

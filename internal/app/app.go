@@ -92,6 +92,7 @@ func Run() error {
 	r.GET("/api/public/models", modelAPI.PublicCatalog)
 	r.GET("/api/public/status", statusMonitorAPI.PublicStatus)
 	r.GET("/api/public/announcements", announcementAPI.PublicList)
+	r.GET("/api/avatars/:id", userAPI.GetAvatar)
 	r.GET("/api/pricing", modelAPI.Pricing)
 	r.GET("/api/payment/yipay/return", paymentAPI.Return)
 	r.GET("/api/payment/yipay/notify", paymentAPI.Notify)
@@ -625,6 +626,7 @@ func Run() error {
 	userGroup.Use(middleware.AuthMiddleware(authService))
 	{
 		userGroup.GET("/me", userAPI.GetMe)
+		userGroup.POST("/avatar", userAPI.UploadAvatar)
 		userGroup.GET("/catalog", userChannelAPI.Catalog)
 		userGroup.GET("/stats", statsAPI.GetUserDashboardStats)
 		userGroup.GET("/logs", statsAPI.GetUserLogs)
