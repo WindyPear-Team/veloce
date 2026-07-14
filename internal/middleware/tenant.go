@@ -94,9 +94,9 @@ func CurrentTenantContext(c *gin.Context) (*TenantContext, bool) {
 	return tenant, ok && tenant != nil
 }
 
-// OrganizationRoleMiddleware authorizes enterprise organization roles only.
-// Platform-level IsAdmin deliberately does not bypass this check: platform
-// administration and tenant administration are separate trust boundaries.
+// OrganizationRoleMiddleware authorizes enterprise organization roles. A
+// platform IsAdmin is a deliberate break-glass operator and may bypass tenant
+// roles; enterprise administrators must still hold the required tenant role.
 func OrganizationRoleMiddleware(roles ...string) gin.HandlerFunc {
 	allowed := normalizedRoleSet(roles)
 	return func(c *gin.Context) {
@@ -105,6 +105,12 @@ func OrganizationRoleMiddleware(roles ...string) gin.HandlerFunc {
 			c.JSON(http.StatusForbidden, gin.H{"error": "Enterprise tenant context is required"})
 			c.Abort()
 			return
+		}
+		if value, exists := c.Get("user"); exists {
+			if user, ok := value.(*model.User); ok && user != nil && user.IsAdmin {
+				c.Next()
+				return
+			}
 		}
 		if _, ok := allowed[NormalizeOrganizationRole(tenant.OrganizationMember.Role)]; !ok {
 			c.JSON(http.StatusForbidden, gin.H{"error": "Organization role is not permitted"})
@@ -123,6 +129,12 @@ func WorkspaceRoleMiddleware(roles ...string) gin.HandlerFunc {
 			c.JSON(http.StatusForbidden, gin.H{"error": "Enterprise workspace context is required"})
 			c.Abort()
 			return
+		}
+		if value, exists := c.Get("user"); exists {
+			if user, ok := value.(*model.User); ok && user != nil && user.IsAdmin {
+				c.Next()
+				return
+			}
 		}
 		if _, ok := allowed[NormalizeWorkspaceRole(tenant.WorkspaceMember.Role)]; !ok {
 			c.JSON(http.StatusForbidden, gin.H{"error": "Workspace role is not permitted"})

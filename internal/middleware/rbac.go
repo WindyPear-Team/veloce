@@ -12,7 +12,8 @@ import (
 
 // PermissionMiddleware checks a resource.action capability in the current
 // organization and, when selected, the current workspace. Platform IsAdmin is
-// intentionally not a bypass: platform and enterprise trust boundaries differ.
+// an explicit break-glass bypass; ordinary enterprise administrators do not
+// receive this privilege unless their role grants the capability.
 func PermissionMiddleware(code string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if !model.EnterpriseModeEnabledWithDB(model.DB) {
@@ -27,7 +28,16 @@ func PermissionMiddleware(code string) gin.HandlerFunc {
 		}
 		userValue, exists := c.Get("user")
 		user, ok := userValue.(*model.User)
-		if !exists || !ok || user == nil || !HasPermission(model.DB, user.ID, tenant.Organization.ID, workspaceID(tenant), code) {
+		if !exists || !ok || user == nil {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Permission is not granted"})
+			c.Abort()
+			return
+		}
+		if user.IsAdmin {
+			c.Next()
+			return
+		}
+		if !HasPermission(model.DB, user.ID, tenant.Organization.ID, workspaceID(tenant), code) {
 			c.JSON(http.StatusForbidden, gin.H{"error": "Permission is not granted"})
 			c.Abort()
 			return

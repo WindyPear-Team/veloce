@@ -89,7 +89,7 @@ func TestResolveTenantContextRejectsSuspendedMembershipAndOrganization(t *testin
 	}
 }
 
-func TestOrganizationRoleMiddlewareDoesNotGrantPlatformAdminTenantAccess(t *testing.T) {
+func TestOrganizationRoleMiddlewareGrantsPlatformAdminBreakGlassAccess(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	context, _ := gin.CreateTestContext(recorder)
@@ -100,7 +100,7 @@ func TestOrganizationRoleMiddlewareDoesNotGrantPlatformAdminTenantAccess(t *test
 	})
 
 	OrganizationRoleMiddleware(model.OrganizationMemberRoleOwner, model.OrganizationMemberRoleAdmin)(context)
-	if !context.IsAborted() || recorder.Code != http.StatusForbidden {
+	if context.IsAborted() {
 		t.Fatalf("platform admin tenant-role result: aborted=%t status=%d", context.IsAborted(), recorder.Code)
 	}
 }
