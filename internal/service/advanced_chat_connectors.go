@@ -101,6 +101,49 @@ type AdvancedChatConnectorDevice struct {
 	UpdatedAt  time.Time  `json:"updated_at"`
 }
 
+// CreateEnterpriseConnectorToken creates a normal connector identity that can
+// be owned and governed through an enterprise device record.
+func CreateEnterpriseConnectorToken(db *gorm.DB, userID uint, name, mode string, listenPort int) (AdvancedChatConnectorDevice, string, error) {
+	if db == nil || userID == 0 {
+		return AdvancedChatConnectorDevice{}, "", errors.New("connector owner is required")
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return AdvancedChatConnectorDevice{}, "", errors.New("connector name is required")
+	}
+	if len([]rune(name)) > 120 {
+		name = string([]rune(name)[:120])
+	}
+	token, err := newAdvancedChatConnectorToken()
+	if err != nil {
+		return AdvancedChatConnectorDevice{}, "", err
+	}
+	now := time.Now()
+	device := AdvancedChatConnectorDevice{ID: newAdvancedChatID("acd"), UserID: userID, TokenHash: hashAdvancedChatConnectorToken(token), Name: name, Kind: advancedChatConnectorDeviceKindCLI, Mode: normalizeAdvancedChatConnectorMode(mode), ListenPort: normalizeAdvancedChatConnectorListenPort(listenPort, normalizeAdvancedChatConnectorMode(mode)), Status: advancedChatConnectorDeviceStatusOffline, Workspaces: "[]", CreatedAt: now, UpdatedAt: now}
+	if err := db.Create(&device).Error; err != nil {
+		return AdvancedChatConnectorDevice{}, "", err
+	}
+	return device, token, nil
+}
+
+func RotateEnterpriseConnectorToken(db *gorm.DB, connectorID string) (AdvancedChatConnectorDevice, string, error) {
+	if db == nil || strings.TrimSpace(connectorID) == "" {
+		return AdvancedChatConnectorDevice{}, "", errors.New("connector device is required")
+	}
+	token, err := newAdvancedChatConnectorToken()
+	if err != nil {
+		return AdvancedChatConnectorDevice{}, "", err
+	}
+	var device AdvancedChatConnectorDevice
+	if err := db.Where("id = ?", connectorID).First(&device).Error; err != nil {
+		return AdvancedChatConnectorDevice{}, "", err
+	}
+	if err := db.Model(&device).Updates(map[string]interface{}{"token_hash": hashAdvancedChatConnectorToken(token), "updated_at": time.Now()}).Error; err != nil {
+		return AdvancedChatConnectorDevice{}, "", err
+	}
+	return device, token, nil
+}
+
 type AdvancedChatStaticSite struct {
 	ID         string                      `gorm:"primaryKey;size:80" json:"id"`
 	UserID     uint                        `gorm:"index;not null;uniqueIndex:idx_advanced_chat_static_site_user_domain" json:"user_id"`

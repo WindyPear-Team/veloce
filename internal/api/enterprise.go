@@ -70,6 +70,12 @@ type enterpriseDeviceInput struct {
 	OwnerUserID         *uint  `json:"owner_user_id"`
 	ManagedByEnterprise bool   `json:"managed_by_enterprise"`
 }
+type enterpriseConnectorTokenInput struct {
+	Name        string `json:"name"`
+	OwnerUserID *uint  `json:"owner_user_id"`
+	Mode        string `json:"mode"`
+	ListenPort  int    `json:"listen_port"`
+}
 type enterpriseDeviceAssignmentInput struct {
 	DeviceID       uint       `json:"device_id"`
 	UserID         *uint      `json:"user_id"`
@@ -603,7 +609,95 @@ func (api *EnterpriseAPI) ListDevices(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list devices"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"devices": devices})
+	connectorIDs := make([]string, 0, len(devices))
+	for _, device := range devices {
+		if device.Kind == "connector" && device.ExternalDeviceID != "" {
+			connectorIDs = append(connectorIDs, device.ExternalDeviceID)
+		}
+	}
+	connectors := map[string]service.AdvancedChatConnectorDevice{}
+	if len(connectorIDs) > 0 {
+		var records []service.AdvancedChatConnectorDevice
+		if err := model.DB.Where("id IN ?", connectorIDs).Find(&records).Error; err == nil {
+			for _, item := range records {
+				connectors[item.ID] = item
+			}
+		}
+	}
+	items := make([]gin.H, 0, len(devices))
+	for _, device := range devices {
+		item := gin.H{"id": device.ID, "external_device_id": device.ExternalDeviceID, "name": device.Name, "kind": device.Kind, "owner_user_id": device.OwnerUserID, "managed_by_enterprise": device.ManagedByEnterprise, "status": device.Status}
+		if connector, exists := connectors[device.ExternalDeviceID]; exists {
+			item["connector_status"] = connector.Status
+			item["online"] = connector.Status == "online" && connector.LastSeenAt != nil && connector.LastSeenAt.After(time.Now().Add(-90*time.Second))
+			item["hostname"] = connector.Hostname
+			item["os"] = connector.OS
+			item["last_seen_at"] = connector.LastSeenAt
+		}
+		items = append(items, item)
+	}
+	c.JSON(http.StatusOK, gin.H{"devices": items})
+}
+func (api *EnterpriseAPI) CreateConnectorCommand(c *gin.Context) {
+	user, ok := enterpriseCurrentUser(c)
+	if !ok {
+		return
+	}
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return
+	}
+	var input enterpriseConnectorTokenInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid connector"})
+		return
+	}
+	ownerID := user.ID
+	if input.OwnerUserID != nil {
+		ownerID = *input.OwnerUserID
+	}
+	if !enterpriseActiveMember(tenant.Organization.ID, ownerID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Connector owner must be an active organization member"})
+		return
+	}
+	var connector service.AdvancedChatConnectorDevice
+	var token string
+	var device model.EnterpriseDevice
+	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		var createErr error
+		connector, token, createErr = service.CreateEnterpriseConnectorToken(tx, ownerID, input.Name, input.Mode, input.ListenPort)
+		if createErr != nil {
+			return createErr
+		}
+		device = model.EnterpriseDevice{OrganizationID: tenant.Organization.ID, ExternalDeviceID: connector.ID, Name: connector.Name, Kind: "connector", OwnerUserID: &ownerID, ManagedByEnterprise: true, Status: model.EnterpriseDeviceStatusActive}
+		return tx.Create(&device).Error
+	}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create enterprise connector"})
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"token": token, "device": device, "mode": connector.Mode, "listen_port": connector.ListenPort})
+}
+func (api *EnterpriseAPI) RotateConnectorCommand(c *gin.Context) {
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return
+	}
+	id, err := parseEnterpriseID(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	var device model.EnterpriseDevice
+	if err := model.DB.Where("id = ? AND organization_id = ? AND kind = ?", id, tenant.Organization.ID, "connector").First(&device).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Connector device not found"})
+		return
+	}
+	connector, token, err := service.RotateEnterpriseConnectorToken(model.DB, device.ExternalDeviceID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to regenerate connector command"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"token": token, "device": device, "mode": connector.Mode, "listen_port": connector.ListenPort})
 }
 func (api *EnterpriseAPI) CreateDevice(c *gin.Context) {
 	_, ok := enterpriseCurrentUser(c)

@@ -699,6 +699,8 @@ func Run() error {
 		userGroup.PATCH("/enterprise/tasks/:id/status", enterpriseAPI.UpdateTaskStatus)
 		userGroup.GET("/enterprise/managed-tasks", middleware.PermissionMiddleware("member.manage"), enterpriseAPI.ListManagedTasks)
 		userGroup.GET("/enterprise/devices", middleware.PermissionMiddleware("tool.manage"), enterpriseAPI.ListDevices)
+		userGroup.POST("/enterprise/devices/connector-command", middleware.PermissionMiddleware("tool.manage"), enterpriseAPI.CreateConnectorCommand)
+		userGroup.POST("/enterprise/devices/:id/connector-command", middleware.PermissionMiddleware("tool.manage"), enterpriseAPI.RotateConnectorCommand)
 		userGroup.POST("/enterprise/devices", middleware.PermissionMiddleware("tool.manage"), enterpriseAPI.CreateDevice)
 		userGroup.PUT("/enterprise/devices/:id", middleware.PermissionMiddleware("tool.manage"), enterpriseAPI.UpdateDevice)
 		userGroup.GET("/enterprise/device-assignments", middleware.PermissionMiddleware("tool.manage"), enterpriseAPI.ListDeviceAssignments)
