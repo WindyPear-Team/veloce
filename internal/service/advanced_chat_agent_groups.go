@@ -111,7 +111,8 @@ func (api *advancedChatAPI) saveAgentGroup(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if err := writeAdvancedChatAgentGroup(c.Request.Context(), user.ID, nil, group); err != nil {
+	organizationID, workspaceID := advancedChatEnterpriseScope(c)
+	if err := writeAdvancedChatAgentGroup(c.Request.Context(), user.ID, nil, group, organizationID, workspaceID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -155,7 +156,7 @@ func readAdvancedChatAgentGroup(ctx context.Context, userID uint, device *Advanc
 	return advancedChatAgentGroupFromRecord(record)
 }
 
-func writeAdvancedChatAgentGroup(ctx context.Context, userID uint, device *AdvancedChatConnectorDevice, group advancedChatAgentGroup) error {
+func writeAdvancedChatAgentGroup(ctx context.Context, userID uint, device *AdvancedChatConnectorDevice, group advancedChatAgentGroup, scope ...uint) error {
 	agents, err := json.Marshal(group.Agents)
 	if err != nil {
 		return err
@@ -163,12 +164,23 @@ func writeAdvancedChatAgentGroup(ctx context.Context, userID uint, device *Advan
 	var record AdvancedChatAgentStudio
 	err = model.DB.WithContext(ctx).Where("user_id = ? AND studio_id = ?", userID, group.ID).First(&record).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
+		organizationID, workspaceID := uint(0), uint(0)
+		if len(scope) > 0 {
+			organizationID = scope[0]
+		}
+		if len(scope) > 1 {
+			workspaceID = scope[1]
+		}
 		record = AdvancedChatAgentStudio{
-			UserID:      userID,
-			StudioID:    group.ID,
-			Name:        group.Name,
-			Description: group.Description,
-			Agents:      string(agents),
+			UserID:         userID,
+			OrganizationID: organizationID,
+			WorkspaceID:    workspaceID,
+			OwnerUserID:    userID,
+			Visibility:     model.ResourceVisibilityPersonal,
+			StudioID:       group.ID,
+			Name:           group.Name,
+			Description:    group.Description,
+			Agents:         string(agents),
 		}
 		return model.DB.WithContext(ctx).Create(&record).Error
 	}

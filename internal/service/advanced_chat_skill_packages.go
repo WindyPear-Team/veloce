@@ -41,40 +41,48 @@ const (
 )
 
 type AdvancedChatSkillPackage struct {
-	ID          string     `gorm:"primaryKey;size:80" json:"id"`
-	UserID      uint       `gorm:"index;not null" json:"user_id"`
-	User        model.User `gorm:"foreignKey:UserID" json:"-"`
-	Name        string     `gorm:"size:160;not null" json:"name"`
-	SourceName  string     `gorm:"size:255;not null" json:"source_name"`
-	StoragePath string     `gorm:"type:text;not null" json:"-"`
-	Size        int64      `gorm:"not null" json:"size"`
-	FileCount   int        `gorm:"not null" json:"file_count"`
-	Hash        string     `gorm:"index;size:64;not null" json:"hash"`
-	Status      string     `gorm:"size:40;not null" json:"status"`
-	ErrorText   string     `gorm:"type:text;not null" json:"error_text"`
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
+	ID             string     `gorm:"primaryKey;size:80" json:"id"`
+	UserID         uint       `gorm:"index;not null" json:"user_id"`
+	User           model.User `gorm:"foreignKey:UserID" json:"-"`
+	OrganizationID uint       `gorm:"index" json:"organization_id,omitempty"`
+	WorkspaceID    uint       `gorm:"index" json:"workspace_id,omitempty"`
+	OwnerUserID    uint       `gorm:"index" json:"owner_user_id,omitempty"`
+	Visibility     string     `gorm:"size:20;not null;default:'personal';index" json:"visibility"`
+	Name           string     `gorm:"size:160;not null" json:"name"`
+	SourceName     string     `gorm:"size:255;not null" json:"source_name"`
+	StoragePath    string     `gorm:"type:text;not null" json:"-"`
+	Size           int64      `gorm:"not null" json:"size"`
+	FileCount      int        `gorm:"not null" json:"file_count"`
+	Hash           string     `gorm:"index;size:64;not null" json:"hash"`
+	Status         string     `gorm:"size:40;not null" json:"status"`
+	ErrorText      string     `gorm:"type:text;not null" json:"error_text"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
 }
 
 type AdvancedChatPackagedSkill struct {
-	ID            string                   `gorm:"primaryKey;size:80" json:"id"`
-	UserID        uint                     `gorm:"index;not null" json:"user_id"`
-	User          model.User               `gorm:"foreignKey:UserID" json:"-"`
-	PackageID     string                   `gorm:"index;size:80;not null" json:"package_id"`
-	Package       AdvancedChatSkillPackage `gorm:"foreignKey:PackageID" json:"-"`
-	Name          string                   `gorm:"size:120;not null" json:"name"`
-	Description   string                   `gorm:"type:text;not null" json:"description"`
-	Source        string                   `gorm:"size:40;not null" json:"source"`
-	SkillPath     string                   `gorm:"type:text;not null" json:"skill_path"`
-	RootPath      string                   `gorm:"type:text;not null" json:"root_path"`
-	MetadataJSON  string                   `gorm:"type:text;not null" json:"-"`
-	AllowedTools  string                   `gorm:"type:text;not null" json:"-"`
-	Compatibility string                   `gorm:"type:text;not null" json:"-"`
-	Enabled       bool                     `gorm:"not null;default:true" json:"enabled"`
-	Size          int64                    `gorm:"not null" json:"size"`
-	Hash          string                   `gorm:"index;size:64;not null" json:"hash"`
-	CreatedAt     time.Time                `json:"created_at"`
-	UpdatedAt     time.Time                `json:"updated_at"`
+	ID             string                   `gorm:"primaryKey;size:80" json:"id"`
+	UserID         uint                     `gorm:"index;not null" json:"user_id"`
+	User           model.User               `gorm:"foreignKey:UserID" json:"-"`
+	OrganizationID uint                     `gorm:"index" json:"organization_id,omitempty"`
+	WorkspaceID    uint                     `gorm:"index" json:"workspace_id,omitempty"`
+	OwnerUserID    uint                     `gorm:"index" json:"owner_user_id,omitempty"`
+	Visibility     string                   `gorm:"size:20;not null;default:'personal';index" json:"visibility"`
+	PackageID      string                   `gorm:"index;size:80;not null" json:"package_id"`
+	Package        AdvancedChatSkillPackage `gorm:"foreignKey:PackageID" json:"-"`
+	Name           string                   `gorm:"size:120;not null" json:"name"`
+	Description    string                   `gorm:"type:text;not null" json:"description"`
+	Source         string                   `gorm:"size:40;not null" json:"source"`
+	SkillPath      string                   `gorm:"type:text;not null" json:"skill_path"`
+	RootPath       string                   `gorm:"type:text;not null" json:"root_path"`
+	MetadataJSON   string                   `gorm:"type:text;not null" json:"-"`
+	AllowedTools   string                   `gorm:"type:text;not null" json:"-"`
+	Compatibility  string                   `gorm:"type:text;not null" json:"-"`
+	Enabled        bool                     `gorm:"not null;default:true" json:"enabled"`
+	Size           int64                    `gorm:"not null" json:"size"`
+	Hash           string                   `gorm:"index;size:64;not null" json:"hash"`
+	CreatedAt      time.Time                `json:"created_at"`
+	UpdatedAt      time.Time                `json:"updated_at"`
 }
 
 type advancedChatSkillPackageResponse struct {
@@ -397,6 +405,28 @@ func (api *advancedChatAPI) uploadSkillPackage(c *gin.Context) {
 	if err != nil {
 		c.JSON(status, gin.H{"error": message})
 		return
+	}
+	organizationID, workspaceID := advancedChatEnterpriseScope(c)
+	if organizationID != 0 {
+		visibility := model.NormalizeResourceVisibility(c.PostForm("visibility"))
+		if visibility == model.ResourceVisibilityWorkspace && workspaceID == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "A workspace is required for workspace visibility"})
+			return
+		}
+		updates := map[string]interface{}{"organization_id": organizationID, "workspace_id": workspaceID, "owner_user_id": user.ID, "visibility": visibility}
+		if err := model.DB.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Model(&AdvancedChatSkillPackage{}).Where("id = ?", pkg.ID).Updates(updates).Error; err != nil {
+				return err
+			}
+			return tx.Model(&AdvancedChatPackagedSkill{}).Where("package_id = ?", pkg.ID).Updates(updates).Error
+		}); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to scope skill package"})
+			return
+		}
+		pkg.OrganizationID, pkg.WorkspaceID, pkg.OwnerUserID, pkg.Visibility = organizationID, workspaceID, user.ID, visibility
+		for i := range skills {
+			skills[i].OrganizationID, skills[i].WorkspaceID, skills[i].OwnerUserID, skills[i].Visibility = organizationID, workspaceID, user.ID, visibility
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"package":         advancedChatSkillPackageResponseFromModel(pkg, skills),

@@ -105,17 +105,21 @@ type AdvancedChatSkill struct {
 }
 
 type AdvancedChatMCPServer struct {
-	ID          string            `json:"id"`
-	Name        string            `json:"name"`
-	Type        string            `json:"type,omitempty"`
-	URL         string            `json:"url,omitempty"`
-	Headers     string            `json:"headers,omitempty"`
-	Command     string            `json:"command,omitempty"`
-	Args        []string          `json:"args,omitempty"`
-	Env         map[string]string `json:"env,omitempty"`
-	Cwd         string            `json:"cwd,omitempty"`
-	Enabled     bool              `json:"enabled"`
-	RequestMode string            `json:"request_mode"`
+	ID             string            `json:"id"`
+	OrganizationID uint              `json:"organization_id,omitempty"`
+	WorkspaceID    uint              `json:"workspace_id,omitempty"`
+	OwnerUserID    uint              `json:"owner_user_id,omitempty"`
+	Visibility     string            `json:"visibility,omitempty"`
+	Name           string            `json:"name"`
+	Type           string            `json:"type,omitempty"`
+	URL            string            `json:"url,omitempty"`
+	Headers        string            `json:"headers,omitempty"`
+	Command        string            `json:"command,omitempty"`
+	Args           []string          `json:"args,omitempty"`
+	Env            map[string]string `json:"env,omitempty"`
+	Cwd            string            `json:"cwd,omitempty"`
+	Enabled        bool              `json:"enabled"`
+	RequestMode    string            `json:"request_mode"`
 }
 
 type advancedChatAPI struct{}
@@ -549,6 +553,20 @@ func (api *advancedChatAPI) updateUserMCPServers(c *gin.Context) {
 	servers, ok := normalizeMCPServers(c, input.CustomMCPServers, advancedChatMCPModeBackend, true)
 	if !ok {
 		return
+	}
+	organizationID, workspaceID := advancedChatEnterpriseScope(c)
+	if organizationID != 0 {
+		for index := range servers {
+			visibility := model.NormalizeResourceVisibility(servers[index].Visibility)
+			if visibility == model.ResourceVisibilityWorkspace && workspaceID == 0 {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "A workspace is required for workspace visibility"})
+				return
+			}
+			servers[index].OrganizationID = organizationID
+			servers[index].WorkspaceID = workspaceID
+			servers[index].OwnerUserID = user.ID
+			servers[index].Visibility = visibility
+		}
 	}
 	data, err := json.Marshal(servers)
 	if err != nil {

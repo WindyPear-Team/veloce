@@ -14,8 +14,11 @@ func InitCommunityAdvancedChatFeatures() error {
 	}
 	return model.DB.AutoMigrate(
 		&AdvancedChatAgent{},
+		&AdvancedChatAgentStudio{},
 		&AdvancedChatUserSettings{},
 		&AdvancedChatSkill{},
+		&AdvancedChatSkillPackage{},
+		&AdvancedChatPackagedSkill{},
 		&AdvancedChatSkillPackage{},
 		&AdvancedChatPackagedSkill{},
 		&AdvancedChatSessionFolder{},
