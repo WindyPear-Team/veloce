@@ -83,6 +83,7 @@ func Run() error {
 	checkInAPI := &api.CheckInAPI{}
 	paymentAPI := &api.PaymentAPI{}
 	passkeyAPI := &api.PasskeyAPI{AuthService: authService}
+	enterpriseAPI := &api.EnterpriseAPI{}
 
 	// Public routes
 	r.GET("/health", func(c *gin.Context) {
@@ -623,7 +624,7 @@ func Run() error {
 	service.ApplyPublicAPIRouteHooks(publicAPI)
 
 	userGroup := r.Group("/api/user")
-	userGroup.Use(middleware.AuthMiddleware(authService))
+	userGroup.Use(middleware.AuthMiddleware(authService), middleware.TenantContextMiddleware())
 	{
 		userGroup.GET("/me", userAPI.GetMe)
 		userGroup.POST("/avatar", userAPI.UploadAvatar)
@@ -676,6 +677,9 @@ func Run() error {
 		userGroup.POST("/api-keys/:id/reset-usage", userAPI.ResetAPIKeyUsage)
 		userGroup.DELETE("/api-keys/:id", userAPI.DeleteAPIKey)
 		userGroup.POST("/api-key/rotate", userAPI.RotateAPIKey)
+		userGroup.GET("/enterprise/organizations", enterpriseAPI.ListOrganizations)
+		userGroup.GET("/enterprise/workspaces", enterpriseAPI.ListWorkspaces)
+		userGroup.POST("/enterprise/context", enterpriseAPI.SelectContext)
 		service.RegisterCommunityAdvancedChatUserRoutes(userGroup)
 		messagechannel.RegisterUserRoutes(userGroup)
 		service.ApplyUserRouteHooks(userGroup)

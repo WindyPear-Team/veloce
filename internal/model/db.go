@@ -116,6 +116,11 @@ func InitDB() {
 
 	// Initial data
 	initData()
+	if config.EnterpriseFeaturesEnabled {
+		if err := EnsurePersonalTenantsForExistingUsers(DB); err != nil {
+			log.Fatalf("failed to initialize personal enterprise tenants: %v", err)
+		}
+	}
 }
 
 func databaseDialector() (gorm.Dialector, bool, error) {
