@@ -760,21 +760,26 @@ func (api *EnterpriseAPI) CreateQuotaAccount(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	initialLimit := strings.TrimSpace(input.InitialLimit)
+	amount := decimal.Zero
+	if initialLimit != "" {
+		var parseErr error
+		amount, parseErr = decimal.NewFromString(initialLimit)
+		if parseErr != nil || amount.LessThanOrEqual(decimal.Zero) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Initial limit must be a positive decimal"})
+			return
+		}
+		if strings.ToLower(strings.TrimSpace(input.ScopeType)) != model.QuotaScopeOrganization {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Only the organization account can receive an initial limit"})
+			return
+		}
+	}
 	account, err := service.EnsureEnterpriseQuotaAccount(model.DB, scope)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if raw := strings.TrimSpace(input.InitialLimit); raw != "" {
-		amount, parseErr := decimal.NewFromString(raw)
-		if parseErr != nil || amount.LessThanOrEqual(decimal.Zero) {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Initial limit must be a positive decimal"})
-			return
-		}
-		if account.ScopeType != model.QuotaScopeOrganization {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Only the organization account can receive an initial limit"})
-			return
-		}
+	if initialLimit != "" {
 		if err := model.DB.Transaction(func(tx *gorm.DB) error {
 			if err := tx.Model(&account).Update("limit_amount", account.LimitAmount.Add(amount)).Error; err != nil {
 				return err
