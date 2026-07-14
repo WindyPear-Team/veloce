@@ -70,6 +70,10 @@ func openEnterpriseBootstrapTestDB(t *testing.T, name string) *gorm.DB {
 		&Workspace{},
 		&OrganizationMember{},
 		&WorkspaceMember{},
+		&Permission{},
+		&Role{},
+		&RolePermission{},
+		&RoleBinding{},
 	); err != nil {
 		t.Fatalf("migrate enterprise models: %v", err)
 	}

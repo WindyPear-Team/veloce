@@ -88,6 +88,10 @@ func InitDB() {
 			&Workspace{},
 			&OrganizationMember{},
 			&WorkspaceMember{},
+			&Permission{},
+			&Role{},
+			&RolePermission{},
+			&RoleBinding{},
 		); err != nil {
 			log.Fatalf("failed to migrate enterprise database models: %v", err)
 		}

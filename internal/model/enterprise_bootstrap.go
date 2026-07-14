@@ -69,6 +69,9 @@ func ensurePersonalTenantWithDB(db *gorm.DB, user *User) error {
 	} else if err != nil {
 		return err
 	}
+	if err := EnsureOrganizationRBAC(db, organization.ID, user.ID); err != nil {
+		return err
+	}
 
 	joinedAt := time.Now()
 	organizationMember := OrganizationMember{}

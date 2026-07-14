@@ -150,6 +150,10 @@ func tenantTestDatabase(t *testing.T, name string) (*gorm.DB, model.User) {
 		&model.Workspace{},
 		&model.OrganizationMember{},
 		&model.WorkspaceMember{},
+		&model.Permission{},
+		&model.Role{},
+		&model.RolePermission{},
+		&model.RoleBinding{},
 	); err != nil {
 		t.Fatalf("migrate enterprise models: %v", err)
 	}
