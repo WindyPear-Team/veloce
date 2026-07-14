@@ -398,6 +398,18 @@ func ReadAdvancedChatFileData(file AdvancedChatFile) ([]byte, error) {
 	return advancedChatFileData(file)
 }
 
+// StoreAdvancedChatPoolFile stores a file under an internal pool resource
+// owner. Authorization is deliberately evaluated by the enterprise API.
+func StoreAdvancedChatPoolFile(ownerUserID uint, name, mimeType string, data []byte) (AdvancedChatFile, int, string, error) {
+	return storeAdvancedChatFile(ownerUserID, advancedChatFileStoreInput{
+		Name:               name,
+		MIMEType:           mimeType,
+		Data:               data,
+		Source:             "enterprise_pool",
+		RequireAllowedType: true,
+	})
+}
+
 func advancedChatExecutorMessage(userID uint, message advancedChatCompletionMessage) ChatExecutorMessage {
 	executorMessage := ChatExecutorMessage{
 		Role:    message.Role,

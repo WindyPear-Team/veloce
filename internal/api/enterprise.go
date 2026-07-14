@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -106,6 +107,10 @@ type enterpriseSharedPoolInput struct {
 }
 type enterprisePoolResourceInput struct {
 	ID string `json:"id"`
+}
+type enterpriseSharedSessionMessageInput struct {
+	Content string `json:"content"`
+	Title   string `json:"title"`
 }
 
 func (api *EnterpriseAPI) GetOrganization(c *gin.Context) {
@@ -608,7 +613,12 @@ func (api *EnterpriseAPI) CreateSharedPool(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if err := model.DB.Where("organization_id = ? AND scope_type = ? AND scope_key = ?", pool.OrganizationID, pool.ScopeType, pool.ScopeKey).FirstOrCreate(&pool).Error; err != nil {
+	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("organization_id = ? AND scope_type = ? AND scope_key = ?", pool.OrganizationID, pool.ScopeType, pool.ScopeKey).FirstOrCreate(&pool).Error; err != nil {
+			return err
+		}
+		return ensureEnterpriseSharedPoolIdentity(tx, &pool)
+	}); err != nil {
 		c.JSON(http.StatusConflict, gin.H{"error": "Failed to create shared pool"})
 		return
 	}
@@ -637,6 +647,38 @@ func (api *EnterpriseAPI) ListSharedPoolSessions(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, gin.H{"sessions": sessions})
 }
+func (api *EnterpriseAPI) ListSharedPoolDevices(c *gin.Context) {
+	pool, ok := enterpriseSharedPoolAccess(c)
+	if !ok {
+		return
+	}
+	assignments := model.DB.Where("organization_id = ? AND status = ? AND (expires_at IS NULL OR expires_at > ?)", pool.OrganizationID, model.EnterpriseDeviceAssignmentActive, time.Now())
+	if pool.ScopeType == model.EnterprisePoolScopeTask && pool.TaskID != nil {
+		assignments = assignments.Where("scope_type = ? AND task_id = ?", model.EnterpriseDeviceAssignmentTask, *pool.TaskID)
+	} else if pool.ScopeType == model.EnterprisePoolScopeDepartment && pool.DepartmentID != nil {
+		assignments = assignments.Where("scope_type = ? AND department_id = ?", model.EnterpriseDeviceAssignmentDepartment, *pool.DepartmentID)
+	} else {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid shared pool scope"})
+		return
+	}
+	var rows []model.EnterpriseDeviceAssignment
+	if err := assignments.Order("created_at DESC").Find(&rows).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list shared pool devices"})
+		return
+	}
+	deviceIDs := make([]uint, 0, len(rows))
+	for _, row := range rows {
+		deviceIDs = append(deviceIDs, row.DeviceID)
+	}
+	var devices []model.EnterpriseDevice
+	if len(deviceIDs) > 0 {
+		if err := model.DB.Where("organization_id = ? AND id IN ? AND status = ?", pool.OrganizationID, deviceIDs, model.EnterpriseDeviceStatusActive).Find(&devices).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load shared pool devices"})
+			return
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"devices": devices})
+}
 func (api *EnterpriseAPI) GetSharedPoolSession(c *gin.Context) {
 	pool, ok := enterpriseSharedPoolAccess(c)
 	if !ok {
@@ -655,6 +697,84 @@ func (api *EnterpriseAPI) GetSharedPoolSession(c *gin.Context) {
 	var session service.AdvancedChatSession
 	if err := model.DB.Where("id = ?", sessionID).First(&session).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Session not found"})
+		return
+	}
+	var messages []service.AdvancedChatMessage
+	if err := model.DB.Where("session_id = ?", session.ID).Order("sort_order ASC, created_at ASC").Find(&messages).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load shared session"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"session": session, "messages": messages})
+}
+func (api *EnterpriseAPI) AppendSharedPoolSessionMessage(c *gin.Context) {
+	user, ok := enterpriseCurrentUser(c)
+	if !ok {
+		return
+	}
+	pool, ok := enterpriseSharedPoolAccess(c)
+	if !ok {
+		return
+	}
+	sessionID := strings.TrimSpace(c.Param("session_id"))
+	if sessionID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Session id is required"})
+		return
+	}
+	var input enterpriseSharedSessionMessageInput
+	if err := c.ShouldBindJSON(&input); err != nil || strings.TrimSpace(input.Content) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Message content is required"})
+		return
+	}
+	if len([]rune(input.Content)) > 200000 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Message is too long"})
+		return
+	}
+	var session service.AdvancedChatSession
+	err := model.DB.Transaction(func(tx *gorm.DB) error {
+		var binding model.EnterpriseSharedSession
+		if err := tx.Where("pool_id = ? AND session_id = ?", pool.ID, sessionID).First(&binding).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("id = ?", sessionID).First(&session).Error; err != nil {
+			return err
+		}
+		var last service.AdvancedChatMessage
+		nextOrder := 0
+		if err := tx.Where("session_id = ?", sessionID).Order("sort_order DESC, created_at DESC").First(&last).Error; err == nil {
+			nextOrder = last.SortOrder + 1
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		message := service.AdvancedChatMessage{
+			ID:           "shared-" + strconv.FormatInt(time.Now().UnixNano(), 36),
+			SessionID:    sessionID,
+			UserID:       user.ID,
+			Role:         "user",
+			Content:      strings.TrimSpace(input.Content),
+			ContentParts: "[]",
+			ToolCalls:    "[]",
+			SortOrder:    nextOrder,
+		}
+		if err := tx.Create(&message).Error; err != nil {
+			return err
+		}
+		if session.Title == "New session" || session.Title == "Assistant session" {
+			title := strings.TrimSpace(input.Title)
+			if title != "" {
+				if len([]rune(title)) > 200 {
+					title = string([]rune(title)[:200])
+				}
+				session.Title = title
+			}
+		}
+		return tx.Model(&session).Updates(map[string]interface{}{"title": session.Title, "updated_at": time.Now()}).Error
+	})
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Shared session not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to append shared message"})
 		return
 	}
 	var messages []service.AdvancedChatMessage
@@ -683,8 +803,43 @@ func (api *EnterpriseAPI) ShareSessionToPool(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Personal session not found"})
 		return
 	}
-	entry := model.EnterpriseSharedSession{PoolID: pool.ID, SessionID: session.ID, SharedBy: user.ID}
-	if err := model.DB.Where("pool_id = ? AND session_id = ?", pool.ID, session.ID).FirstOrCreate(&entry).Error; err != nil {
+	var entry model.EnterpriseSharedSession
+	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := ensureEnterpriseSharedPoolIdentity(tx, &pool); err != nil {
+			return err
+		}
+		var existing model.EnterpriseSharedSession
+		if err := tx.Where("pool_id = ? AND source_session_id = ?", pool.ID, session.ID).First(&existing).Error; err == nil {
+			entry = existing
+			return nil
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		cloneID := enterprisePoolResourceID("session")
+		clone := session
+		clone.ID = cloneID
+		clone.UserID = pool.ResourceUserID
+		clone.FolderID = ""
+		if err := tx.Create(&clone).Error; err != nil {
+			return err
+		}
+		var messages []service.AdvancedChatMessage
+		if err := tx.Where("session_id = ?", session.ID).Order("sort_order ASC, created_at ASC").Find(&messages).Error; err != nil {
+			return err
+		}
+		for index := range messages {
+			messages[index].ID = fmt.Sprintf("%s-%d", enterprisePoolResourceID("message"), index)
+			messages[index].SessionID = cloneID
+			messages[index].SortOrder = index
+		}
+		if len(messages) > 0 {
+			if err := tx.Create(&messages).Error; err != nil {
+				return err
+			}
+		}
+		entry = model.EnterpriseSharedSession{PoolID: pool.ID, SessionID: cloneID, SourceSessionID: session.ID, SharedBy: user.ID}
+		return tx.Create(&entry).Error
+	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to share session"})
 		return
 	}
@@ -732,8 +887,30 @@ func (api *EnterpriseAPI) ShareFileToPool(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Personal file not found"})
 		return
 	}
-	entry := model.EnterpriseSharedFile{PoolID: pool.ID, FileID: file.ID, SharedBy: user.ID}
-	if err := model.DB.Where("pool_id = ? AND file_id = ?", pool.ID, file.ID).FirstOrCreate(&entry).Error; err != nil {
+	var entry model.EnterpriseSharedFile
+	if err := model.DB.Transaction(func(tx *gorm.DB) error { return ensureEnterpriseSharedPoolIdentity(tx, &pool) }); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to share file"})
+		return
+	}
+	if err := model.DB.Where("pool_id = ? AND source_file_id = ?", pool.ID, file.ID).First(&entry).Error; err == nil {
+		c.JSON(http.StatusCreated, entry)
+		return
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to share file"})
+		return
+	}
+	data, err := service.ReadAdvancedChatFileData(file)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to read personal file"})
+		return
+	}
+	clone, _, _, err := service.StoreAdvancedChatPoolFile(pool.ResourceUserID, file.Name, file.MIMEType, data)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create pool file"})
+		return
+	}
+	entry = model.EnterpriseSharedFile{PoolID: pool.ID, FileID: clone.ID, SourceFileID: file.ID, SharedBy: user.ID}
+	if err := model.DB.Create(&entry).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to share file"})
 		return
 	}
@@ -1303,7 +1480,38 @@ func ensureEnterpriseSharedPool(db *gorm.DB, organizationID uint, scope string, 
 	} else {
 		return errors.New("Invalid shared pool scope")
 	}
-	return db.Where("organization_id = ? AND scope_type = ? AND scope_key = ?", pool.OrganizationID, pool.ScopeType, pool.ScopeKey).FirstOrCreate(&pool).Error
+	if err := db.Where("organization_id = ? AND scope_type = ? AND scope_key = ?", pool.OrganizationID, pool.ScopeType, pool.ScopeKey).FirstOrCreate(&pool).Error; err != nil {
+		return err
+	}
+	return ensureEnterpriseSharedPoolIdentity(db, &pool)
+}
+
+func ensureEnterpriseSharedPoolIdentity(db *gorm.DB, pool *model.EnterpriseSharedPool) error {
+	if db == nil || pool == nil || pool.ID == 0 {
+		return errors.New("Invalid shared pool")
+	}
+	if pool.ResourceUserID != 0 {
+		return nil
+	}
+	username := fmt.Sprintf("enterprise-pool-%d", pool.ID)
+	email := fmt.Sprintf("enterprise-pool-%d@internal.invalid", pool.ID)
+	defaultGroup := model.Group{Name: "user"}
+	if err := db.Where("name = ?", defaultGroup.Name).FirstOrCreate(&defaultGroup).Error; err != nil {
+		return err
+	}
+	resourceUser := model.User{Username: username, Email: email, GroupID: defaultGroup.ID, APIKey: fmt.Sprintf("pool-internal-%d", pool.ID), EmailVerified: false}
+	if err := db.Where("username = ?", username).FirstOrCreate(&resourceUser).Error; err != nil {
+		return err
+	}
+	if err := db.Model(&model.EnterpriseSharedPool{}).Where("id = ? AND resource_user_id = ?", pool.ID, 0).Update("resource_user_id", resourceUser.ID).Error; err != nil {
+		return err
+	}
+	pool.ResourceUserID = resourceUser.ID
+	return nil
+}
+
+func enterprisePoolResourceID(kind string) string {
+	return fmt.Sprintf("pool-%s-%x", strings.TrimSpace(kind), time.Now().UnixNano())
 }
 
 func enterpriseDepartmentFromInput(organizationID, id uint, input enterpriseDepartmentInput) (model.Department, error) {

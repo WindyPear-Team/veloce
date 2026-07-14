@@ -83,9 +83,9 @@ type DepartmentMember struct {
 	DeletedAt      gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
-// EnterpriseSharedPool provides a task or department-level audience for chat
-// sessions and uploaded files. The bindings retain source ownership while the
-// pool defines who may discover and reuse them.
+// EnterpriseSharedPool is an isolated resource principal for a task or
+// department. ResourceUserID is an internal, non-login user that owns the
+// pool's chat sessions and files.
 type EnterpriseSharedPool struct {
 	ID              uint           `gorm:"primaryKey" json:"id"`
 	OrganizationID  uint           `gorm:"uniqueIndex:idx_enterprise_pool_scope;index;not null" json:"organization_id"`
@@ -94,6 +94,7 @@ type EnterpriseSharedPool struct {
 	DepartmentID    *uint          `gorm:"index" json:"department_id,omitempty"`
 	TaskID          *uint          `gorm:"index" json:"task_id,omitempty"`
 	Name            string         `gorm:"size:160;not null" json:"name"`
+	ResourceUserID  uint           `gorm:"index;not null;default:0" json:"resource_user_id"`
 	CreatedByUserID uint           `gorm:"index;not null" json:"created_by_user_id"`
 	CreatedAt       time.Time      `json:"created_at"`
 	UpdatedAt       time.Time      `json:"updated_at"`
@@ -101,21 +102,23 @@ type EnterpriseSharedPool struct {
 }
 
 type EnterpriseSharedSession struct {
-	ID        uint           `gorm:"primaryKey" json:"id"`
-	PoolID    uint           `gorm:"uniqueIndex:idx_enterprise_pool_session;index;not null" json:"pool_id"`
-	SessionID string         `gorm:"uniqueIndex:idx_enterprise_pool_session;size:80;not null" json:"session_id"`
-	SharedBy  uint           `gorm:"index;not null" json:"shared_by"`
-	CreatedAt time.Time      `json:"created_at"`
-	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+	ID              uint           `gorm:"primaryKey" json:"id"`
+	PoolID          uint           `gorm:"uniqueIndex:idx_enterprise_pool_session;index;not null" json:"pool_id"`
+	SessionID       string         `gorm:"uniqueIndex:idx_enterprise_pool_session;size:80;not null" json:"session_id"`
+	SourceSessionID string         `gorm:"index;size:80;not null;default:''" json:"source_session_id"`
+	SharedBy        uint           `gorm:"index;not null" json:"shared_by"`
+	CreatedAt       time.Time      `json:"created_at"`
+	DeletedAt       gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 type EnterpriseSharedFile struct {
-	ID        uint           `gorm:"primaryKey" json:"id"`
-	PoolID    uint           `gorm:"uniqueIndex:idx_enterprise_pool_file;index;not null" json:"pool_id"`
-	FileID    string         `gorm:"uniqueIndex:idx_enterprise_pool_file;size:80;not null" json:"file_id"`
-	SharedBy  uint           `gorm:"index;not null" json:"shared_by"`
-	CreatedAt time.Time      `json:"created_at"`
-	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+	ID           uint           `gorm:"primaryKey" json:"id"`
+	PoolID       uint           `gorm:"uniqueIndex:idx_enterprise_pool_file;index;not null" json:"pool_id"`
+	FileID       string         `gorm:"uniqueIndex:idx_enterprise_pool_file;size:80;not null" json:"file_id"`
+	SourceFileID string         `gorm:"index;size:80;not null;default:''" json:"source_file_id"`
+	SharedBy     uint           `gorm:"index;not null" json:"shared_by"`
+	CreatedAt    time.Time      `json:"created_at"`
+	DeletedAt    gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 type EnterpriseDevice struct {
