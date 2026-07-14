@@ -81,6 +81,17 @@ func InitDB() {
 	if err != nil {
 		log.Fatalf("failed to migrate database: %v", err)
 	}
+	if config.EnterpriseFeaturesEnabled {
+		if err := DB.AutoMigrate(
+			&Organization{},
+			&Department{},
+			&Workspace{},
+			&OrganizationMember{},
+			&WorkspaceMember{},
+		); err != nil {
+			log.Fatalf("failed to migrate enterprise database models: %v", err)
+		}
+	}
 	if !hadCachedInputPrice {
 		if err := DB.Model(&Model{}).
 			Where("cached_input_price = ? AND input_price > ?", decimal.Zero, decimal.Zero).

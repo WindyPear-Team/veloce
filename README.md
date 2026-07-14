@@ -71,7 +71,10 @@ OIDC_CLIENT_SECRET=your-client-secret
 OIDC_REDIRECT_URL=http://localhost:8080/auth/callback
 BOOTSTRAP_ADMIN_OIDC_SUBS=
 BOOTSTRAP_ADMIN_EMAILS=
+ENTERPRISE_FEATURES_ENABLED=false
 ```
+
+`ENTERPRISE_FEATURES_ENABLED` is the master switch for organization, multi-tenant, and governance features. It defaults to `false` so existing personal and community deployments keep their current behavior while enterprise capabilities are introduced incrementally.
 
 `DB_DRIVER` accepts `sqlite` (default), `postgres`, and `mysql`. SQLite uses
 `DB_PATH`. For PostgreSQL or MySQL, set `DB_DSN` (or `DATABASE_URL`) and the

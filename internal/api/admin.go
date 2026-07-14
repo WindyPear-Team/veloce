@@ -32,6 +32,7 @@ const (
 type systemSettingsResponse struct {
 	Edition                              string `json:"edition"`
 	SystemMode                           string `json:"system_mode"`
+	EnterpriseFeaturesEnabled            bool   `json:"enterprise_features_enabled"`
 	SiteName                             string `json:"site_name"`
 	BaseURL                              string `json:"base_url"`
 	IconURL                              string `json:"icon_url"`
@@ -539,6 +540,7 @@ func currentPublicSystemSettings() systemSettingsResponse {
 	return systemSettingsResponse{
 		Edition:                              service.CurrentEdition(),
 		SystemMode:                           service.CurrentSystemMode(),
+		EnterpriseFeaturesEnabled:            service.EnterpriseFeaturesEnabled(),
 		SiteName:                             settingString("site_name", "flai"),
 		BaseURL:                              settingString("base_url", ""),
 		IconURL:                              settingString("icon_url", ""),

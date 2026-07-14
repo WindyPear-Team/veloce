@@ -10,20 +10,21 @@ import (
 )
 
 var (
-	Environment              string
-	Port                     string
-	DBDriver                 string
-	DBPath                   string
-	DBDSN                    string
-	DBMaxOpenConns           int
-	DBMaxIdleConns           int
-	DBConnMaxLifetimeSeconds int
-	DataPath                 string
-	JWTSecret                string
-	OIDCIssuer               string
-	OIDCClientID             string
-	OIDCSecret               string
-	OIDCRedirect             string
+	Environment               string
+	Port                      string
+	DBDriver                  string
+	DBPath                    string
+	DBDSN                     string
+	DBMaxOpenConns            int
+	DBMaxIdleConns            int
+	DBConnMaxLifetimeSeconds  int
+	DataPath                  string
+	JWTSecret                 string
+	OIDCIssuer                string
+	OIDCClientID              string
+	OIDCSecret                string
+	OIDCRedirect              string
+	EnterpriseFeaturesEnabled bool
 
 	BootstrapAdminEmails   string
 	BootstrapAdminOIDCSubs string
@@ -56,8 +57,22 @@ func Init() {
 	OIDCClientID = os.Getenv("OIDC_CLIENT_ID")
 	OIDCSecret = os.Getenv("OIDC_CLIENT_SECRET")
 	OIDCRedirect = os.Getenv("OIDC_REDIRECT_URL")
+	EnterpriseFeaturesEnabled = getEnvBool("ENTERPRISE_FEATURES_ENABLED", false)
 	BootstrapAdminEmails = os.Getenv("BOOTSTRAP_ADMIN_EMAILS")
 	BootstrapAdminOIDCSubs = os.Getenv("BOOTSTRAP_ADMIN_OIDC_SUBS")
+}
+
+func getEnvBool(key string, fallback bool) bool {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.ParseBool(raw)
+	if err != nil {
+		log.Printf("invalid %s value %q; using %t", key, raw, fallback)
+		return fallback
+	}
+	return value
 }
 
 func getEnv(key, fallback string) string {
