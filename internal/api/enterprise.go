@@ -11,6 +11,7 @@ import (
 	"github.com/WindyPear-Team/veloce/internal/model"
 	"github.com/WindyPear-Team/veloce/internal/service"
 	"github.com/gin-gonic/gin"
+	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 )
 
@@ -38,6 +39,11 @@ type enterpriseBindingInput struct {
 	RoleID    uint   `json:"role_id"`
 	ScopeType string `json:"scope_type"`
 	ScopeID   uint   `json:"scope_id"`
+}
+type enterpriseDepartmentInput struct {
+	Slug     string `json:"slug"`
+	Name     string `json:"name"`
+	ParentID *uint  `json:"parent_id"`
 }
 
 type enterpriseTaskInput struct {
@@ -72,6 +78,19 @@ type enterpriseDeviceAssignmentInput struct {
 	AllowedTools   []string   `json:"allowed_tools"`
 	Classification string     `json:"classification"`
 	ExpiresAt      *time.Time `json:"expires_at"`
+}
+type enterpriseQuotaAccountInput struct {
+	ScopeType    string `json:"scope_type"`
+	DepartmentID *uint  `json:"department_id"`
+	UserID       *uint  `json:"user_id"`
+	TaskID       *uint  `json:"task_id"`
+	InitialLimit string `json:"initial_limit"`
+}
+type enterpriseQuotaAllocationInput struct {
+	ParentAccountID uint   `json:"parent_account_id"`
+	ChildAccountID  uint   `json:"child_account_id"`
+	Amount          string `json:"amount"`
+	ReferenceID     string `json:"reference_id"`
 }
 
 func (api *EnterpriseAPI) GetOrganization(c *gin.Context) {
@@ -218,6 +237,87 @@ func (api *EnterpriseAPI) UpdateMember(c *gin.Context) {
 	}
 	model.DB.First(&member, member.ID)
 	c.JSON(http.StatusOK, member)
+}
+
+func (api *EnterpriseAPI) ListDepartments(c *gin.Context) {
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return
+	}
+	var departments []model.Department
+	if err := model.DB.Where("organization_id = ?", tenant.Organization.ID).Order("name ASC").Find(&departments).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list departments"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"departments": departments})
+}
+func (api *EnterpriseAPI) CreateDepartment(c *gin.Context) {
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return
+	}
+	var input enterpriseDepartmentInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid department"})
+		return
+	}
+	department, err := enterpriseDepartmentFromInput(tenant.Organization.ID, 0, input)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := model.DB.Create(&department).Error; err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": "Failed to create department"})
+		return
+	}
+	c.JSON(http.StatusCreated, department)
+}
+func (api *EnterpriseAPI) UpdateDepartment(c *gin.Context) {
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return
+	}
+	id, err := parseEnterpriseID(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	var input enterpriseDepartmentInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid department"})
+		return
+	}
+	department, err := enterpriseDepartmentFromInput(tenant.Organization.ID, id, input)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := model.DB.Model(&department).Updates(map[string]interface{}{"slug": department.Slug, "name": department.Name, "parent_id": department.ParentID}).Error; err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": "Failed to update department"})
+		return
+	}
+	c.JSON(http.StatusOK, department)
+}
+func (api *EnterpriseAPI) DeleteDepartment(c *gin.Context) {
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return
+	}
+	id, err := parseEnterpriseID(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	result := model.DB.Where("id = ? AND organization_id = ?", id, tenant.Organization.ID).Delete(&model.Department{})
+	if result.Error != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete department"})
+		return
+	}
+	if result.RowsAffected == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Department not found"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Department deleted"})
 }
 
 func (api *EnterpriseAPI) ListRoles(c *gin.Context) {
@@ -534,6 +634,48 @@ func (api *EnterpriseAPI) CreateDevice(c *gin.Context) {
 	}
 	c.JSON(http.StatusCreated, device)
 }
+func (api *EnterpriseAPI) UpdateDevice(c *gin.Context) {
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return
+	}
+	id, err := parseEnterpriseID(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	var input enterpriseDeviceInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid device"})
+		return
+	}
+	var device model.EnterpriseDevice
+	if err := model.DB.Where("id = ? AND organization_id = ?", id, tenant.Organization.ID).First(&device).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Device not found"})
+		return
+	}
+	updates := map[string]interface{}{}
+	if value := strings.TrimSpace(input.Name); value != "" {
+		updates["name"] = value
+	}
+	if value := strings.TrimSpace(input.Kind); value != "" {
+		updates["kind"] = value
+	}
+	if input.OwnerUserID != nil {
+		if !enterpriseActiveMember(tenant.Organization.ID, *input.OwnerUserID) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Device owner must be an active organization member"})
+			return
+		}
+		updates["owner_user_id"] = *input.OwnerUserID
+	}
+	updates["managed_by_enterprise"] = input.ManagedByEnterprise
+	if err := model.DB.Model(&device).Updates(updates).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update device"})
+		return
+	}
+	model.DB.First(&device, id)
+	c.JSON(http.StatusOK, device)
+}
 func (api *EnterpriseAPI) ListDeviceAssignments(c *gin.Context) {
 	tenant, ok := enterpriseTenant(c)
 	if !ok {
@@ -567,6 +709,26 @@ func (api *EnterpriseAPI) AssignDevice(c *gin.Context) {
 	}
 	c.JSON(http.StatusCreated, assignment)
 }
+func (api *EnterpriseAPI) RevokeDeviceAssignment(c *gin.Context) {
+	user, ok := enterpriseCurrentUser(c)
+	if !ok {
+		return
+	}
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return
+	}
+	id, err := parseEnterpriseID(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := service.RevokeEnterpriseDeviceAssignment(model.DB, tenant.Organization.ID, id, user.ID); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Device assignment not found or already revoked"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Device assignment revoked"})
+}
 func (api *EnterpriseAPI) ListQuotaAccounts(c *gin.Context) {
 	tenant, ok := enterpriseTenant(c)
 	if !ok {
@@ -578,6 +740,156 @@ func (api *EnterpriseAPI) ListQuotaAccounts(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"accounts": accounts})
+}
+func (api *EnterpriseAPI) CreateQuotaAccount(c *gin.Context) {
+	user, ok := enterpriseCurrentUser(c)
+	if !ok {
+		return
+	}
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return
+	}
+	var input enterpriseQuotaAccountInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid quota account"})
+		return
+	}
+	scope := service.EnterpriseQuotaScope{OrganizationID: tenant.Organization.ID, ScopeType: input.ScopeType, DepartmentID: input.DepartmentID, UserID: input.UserID, TaskID: input.TaskID}
+	if err := validateEnterpriseQuotaScope(tenant.Organization.ID, scope); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	account, err := service.EnsureEnterpriseQuotaAccount(model.DB, scope)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if raw := strings.TrimSpace(input.InitialLimit); raw != "" {
+		amount, parseErr := decimal.NewFromString(raw)
+		if parseErr != nil || amount.LessThanOrEqual(decimal.Zero) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Initial limit must be a positive decimal"})
+			return
+		}
+		if account.ScopeType != model.QuotaScopeOrganization {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Only the organization account can receive an initial limit"})
+			return
+		}
+		if err := model.DB.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Model(&account).Update("limit_amount", account.LimitAmount.Add(amount)).Error; err != nil {
+				return err
+			}
+			return tx.Create(&model.QuotaLedger{OrganizationID: tenant.Organization.ID, AccountID: account.ID, EntryType: model.QuotaLedgerAllocation, Amount: amount, ReferenceType: "initial_quota", CreatedByUserID: user.ID}).Error
+		}); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to initialize quota"})
+			return
+		}
+		model.DB.First(&account, account.ID)
+	}
+	c.JSON(http.StatusCreated, account)
+}
+func (api *EnterpriseAPI) AllocateQuota(c *gin.Context) {
+	user, ok := enterpriseCurrentUser(c)
+	if !ok {
+		return
+	}
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return
+	}
+	var input enterpriseQuotaAllocationInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid quota allocation"})
+		return
+	}
+	amount, err := decimal.NewFromString(strings.TrimSpace(input.Amount))
+	if err != nil || amount.LessThanOrEqual(decimal.Zero) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Allocation amount must be a positive decimal"})
+		return
+	}
+	var count int64
+	model.DB.Model(&model.QuotaAccount{}).Where("organization_id = ? AND id IN ?", tenant.Organization.ID, []uint{input.ParentAccountID, input.ChildAccountID}).Count(&count)
+	if count != 2 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Quota accounts must belong to this organization"})
+		return
+	}
+	if err := service.AllocateEnterpriseQuota(model.DB, input.ParentAccountID, input.ChildAccountID, user.ID, amount, strings.TrimSpace(input.ReferenceID)); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Quota allocated"})
+}
+func (api *EnterpriseAPI) ListQuotaLedger(c *gin.Context) {
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return
+	}
+	query := model.DB.Where("organization_id = ?", tenant.Organization.ID)
+	if raw := c.Query("account_id"); raw != "" {
+		id, err := parseEnterpriseID(raw)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		query = query.Where("account_id = ?", id)
+	}
+	if raw := c.Query("task_id"); raw != "" {
+		id, err := parseEnterpriseID(raw)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		query = query.Where("task_id = ?", id)
+	}
+	var entries []model.QuotaLedger
+	if err := query.Order("id DESC").Limit(200).Find(&entries).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list quota ledger"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"entries": entries})
+}
+
+func validateEnterpriseQuotaScope(organizationID uint, scope service.EnterpriseQuotaScope) error {
+	if scope.DepartmentID != nil {
+		var item model.Department
+		if err := model.DB.Where("id = ? AND organization_id = ?", *scope.DepartmentID, organizationID).First(&item).Error; err != nil {
+			return errors.New("Department not found")
+		}
+	}
+	if scope.UserID != nil && !enterpriseActiveMember(organizationID, *scope.UserID) {
+		return errors.New("Quota employee must be an active organization member")
+	}
+	if scope.TaskID != nil {
+		var item model.EnterpriseTask
+		if err := model.DB.Where("id = ? AND organization_id = ?", *scope.TaskID, organizationID).First(&item).Error; err != nil {
+			return errors.New("Task not found")
+		}
+	}
+	return nil
+}
+
+func enterpriseDepartmentFromInput(organizationID, id uint, input enterpriseDepartmentInput) (model.Department, error) {
+	input.Name, input.Slug = strings.TrimSpace(input.Name), strings.ToLower(strings.TrimSpace(input.Slug))
+	if input.Name == "" || input.Slug == "" {
+		return model.Department{}, errors.New("Department name and slug are required")
+	}
+	if input.ParentID != nil {
+		if *input.ParentID == id {
+			return model.Department{}, errors.New("Department cannot be its own parent")
+		}
+		var parent model.Department
+		if err := model.DB.Where("id = ? AND organization_id = ?", *input.ParentID, organizationID).First(&parent).Error; err != nil {
+			return model.Department{}, errors.New("Parent department not found")
+		}
+	}
+	department := model.Department{ID: id, OrganizationID: organizationID, Name: input.Name, Slug: input.Slug, ParentID: input.ParentID}
+	if id != 0 {
+		if err := model.DB.Where("id = ? AND organization_id = ?", id, organizationID).First(&department).Error; err != nil {
+			return model.Department{}, errors.New("Department not found")
+		}
+		department.Name, department.Slug, department.ParentID = input.Name, input.Slug, input.ParentID
+	}
+	return department, nil
 }
 
 func enterpriseActiveMember(organizationID, userID uint) bool {
