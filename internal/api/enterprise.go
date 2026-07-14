@@ -70,6 +70,10 @@ type enterpriseMemberInput struct {
 	Role   *string `json:"role"`
 	Status *string `json:"status"`
 }
+type enterpriseCreateMemberInput struct {
+	UserID uint   `json:"user_id"`
+	Role   string `json:"role"`
+}
 type enterpriseMemberDepartmentsInput struct {
 	DepartmentIDs []uint `json:"department_ids"`
 }
@@ -224,11 +228,111 @@ func (api *EnterpriseAPI) ListMembers(c *gin.Context) {
 		return
 	}
 	var members []model.OrganizationMember
-	if err := model.DB.Preload("User").Where("organization_id = ?", tenant.Organization.ID).Order("id ASC").Find(&members).Error; err != nil {
+	if err := model.DB.Preload("User").Joins("JOIN users ON users.id = organization_members.user_id").
+		Where("organization_members.organization_id = ? AND users.username NOT LIKE ? AND users.email NOT LIKE ?", tenant.Organization.ID, "enterprise-pool-%", "%@internal.invalid").
+		Order("organization_members.id ASC").Find(&members).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list members"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"members": members})
+}
+
+func (api *EnterpriseAPI) CreateMember(c *gin.Context) {
+	user, ok := enterpriseCurrentUser(c)
+	if !ok {
+		return
+	}
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return
+	}
+	var input enterpriseCreateMemberInput
+	if err := c.ShouldBindJSON(&input); err != nil || input.UserID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "User is required"})
+		return
+	}
+	var account model.User
+	if err := model.DB.First(&account, input.UserID).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
+		return
+	}
+	if enterprisePoolAccount(account) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Internal pool accounts cannot become employees"})
+		return
+	}
+	role := model.NormalizeOrganizationMemberRole(input.Role)
+	joinedAt := time.Now()
+	member := model.OrganizationMember{}
+	if err := model.DB.Unscoped().Where("organization_id = ? AND user_id = ?", tenant.Organization.ID, account.ID).First(&member).Error; err == nil {
+		if member.DeletedAt.Valid {
+			if err := model.DB.Unscoped().Model(&member).Updates(map[string]interface{}{"deleted_at": nil, "role": role, "status": model.OrganizationMemberStatusActive, "joined_at": joinedAt}).Error; err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to restore member"})
+				return
+			}
+		} else {
+			c.JSON(http.StatusConflict, gin.H{"error": "User is already an enterprise member"})
+			return
+		}
+	} else if errors.Is(err, gorm.ErrRecordNotFound) {
+		member = model.OrganizationMember{OrganizationID: tenant.Organization.ID, UserID: account.ID, Role: role, Status: model.OrganizationMemberStatusActive, JoinedAt: &joinedAt}
+		if err := model.DB.Create(&member).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to add member"})
+			return
+		}
+	} else {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to add member"})
+		return
+	}
+	if err := model.EnsureOrganizationRoleBinding(model.DB, tenant.Organization.ID, account.ID, user.ID, model.BuiltinRoleMember); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to grant member permissions"})
+		return
+	}
+	if err := model.DB.Preload("User").First(&member, member.ID).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load member"})
+		return
+	}
+	c.JSON(http.StatusCreated, member)
+}
+
+func (api *EnterpriseAPI) DeleteMember(c *gin.Context) {
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return
+	}
+	userID, err := parseEnterpriseID(c.Param("user_id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	var member model.OrganizationMember
+	if err := model.DB.Where("organization_id = ? AND user_id = ?", tenant.Organization.ID, userID).First(&member).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Member not found"})
+		return
+	}
+	if member.Role == model.OrganizationMemberRoleOwner {
+		var owners int64
+		model.DB.Model(&model.OrganizationMember{}).Where("organization_id = ? AND role = ?", tenant.Organization.ID, model.OrganizationMemberRoleOwner).Count(&owners)
+		if owners <= 1 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Cannot remove the last organization owner"})
+			return
+		}
+	}
+	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("organization_id = ? AND user_id = ?", tenant.Organization.ID, userID).Delete(&model.DepartmentMember{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("organization_id = ? AND user_id = ?", tenant.Organization.ID, userID).Delete(&model.RoleBinding{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("user_id = ? AND task_id IN (?)", userID, tx.Model(&model.EnterpriseTask{}).Select("id").Where("organization_id = ?", tenant.Organization.ID)).Delete(&model.EnterpriseTaskAssignment{}).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&member).Error
+	}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to remove member"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Member removed"})
 }
 
 func (api *EnterpriseAPI) UpdateMember(c *gin.Context) {
@@ -1170,8 +1274,8 @@ func (api *EnterpriseAPI) writeTaskDetail(c *gin.Context, task model.EnterpriseT
 	var devices []model.EnterpriseDeviceAssignment
 	var pool model.EnterpriseSharedPool
 	var quota model.QuotaAccount
-	model.DB.Where("task_id = ?", task.ID).Order("role ASC, id ASC").Find(&assignments)
-	model.DB.Where("task_id = ?", task.ID).Find(&departments)
+	model.DB.Preload("User").Where("task_id = ?", task.ID).Order("role ASC, id ASC").Find(&assignments)
+	model.DB.Preload("Department").Where("task_id = ?", task.ID).Find(&departments)
 	model.DB.Where("task_id = ? AND status = ?", task.ID, model.EnterpriseDeviceAssignmentActive).Find(&devices)
 	model.DB.Where("organization_id = ? AND scope_type = ? AND task_id = ?", task.OrganizationID, model.EnterprisePoolScopeTask, task.ID).First(&pool)
 	if pool.ID != 0 {
@@ -1861,6 +1965,9 @@ func enterpriseDepartmentFromInput(organizationID, id uint, input enterpriseDepa
 
 func enterpriseActiveMember(organizationID, userID uint) bool {
 	return enterpriseActiveMemberWithDB(model.DB, organizationID, userID)
+}
+func enterprisePoolAccount(user model.User) bool {
+	return strings.HasPrefix(user.Username, "enterprise-pool-") || strings.HasSuffix(user.Email, "@internal.invalid")
 }
 func enterpriseActiveMemberWithDB(db *gorm.DB, organizationID, userID uint) bool {
 	var count int64

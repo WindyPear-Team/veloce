@@ -68,6 +68,7 @@ type EnterpriseTaskAssignment struct {
 	ID         uint           `gorm:"primaryKey" json:"id"`
 	TaskID     uint           `gorm:"uniqueIndex:idx_enterprise_task_assignment;index;not null" json:"task_id"`
 	UserID     uint           `gorm:"uniqueIndex:idx_enterprise_task_assignment;index;not null" json:"user_id"`
+	User       User           `gorm:"foreignKey:UserID" json:"user,omitempty"`
 	Role       string         `gorm:"uniqueIndex:idx_enterprise_task_assignment;size:20;not null" json:"role"`
 	AssignedBy uint           `gorm:"index;not null" json:"assigned_by"`
 	CreatedAt  time.Time      `json:"created_at"`
@@ -81,6 +82,7 @@ type EnterpriseTaskDepartment struct {
 	OrganizationID uint           `gorm:"uniqueIndex:idx_enterprise_task_department;index;not null" json:"organization_id"`
 	TaskID         uint           `gorm:"uniqueIndex:idx_enterprise_task_department;index;not null" json:"task_id"`
 	DepartmentID   uint           `gorm:"uniqueIndex:idx_enterprise_task_department;index;not null" json:"department_id"`
+	Department     Department     `gorm:"foreignKey:DepartmentID" json:"department,omitempty"`
 	AddedBy        uint           `gorm:"index;not null" json:"added_by"`
 	CreatedAt      time.Time      `json:"created_at"`
 	DeletedAt      gorm.DeletedAt `gorm:"index" json:"-"`

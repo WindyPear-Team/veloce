@@ -120,6 +120,19 @@ func EnsureOrganizationRoleBinding(db *gorm.DB, organizationID, userID, createdB
 		organizationID,
 	).First(&binding).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
+		var deletedBinding RoleBinding
+		if restoreErr := db.Unscoped().Where(
+			"organization_id = ? AND user_id = ? AND role_id = ? AND scope_type = ? AND scope_id = ?",
+			organizationID,
+			userID,
+			role.ID,
+			RoleBindingScopeOrganization,
+			organizationID,
+		).First(&deletedBinding).Error; restoreErr == nil && deletedBinding.DeletedAt.Valid {
+			return db.Unscoped().Model(&deletedBinding).Updates(map[string]interface{}{"deleted_at": nil, "created_by_user_id": createdByUserID}).Error
+		} else if restoreErr != nil && !errors.Is(restoreErr, gorm.ErrRecordNotFound) {
+			return restoreErr
+		}
 		return db.Create(&RoleBinding{
 			OrganizationID:  organizationID,
 			UserID:          userID,
