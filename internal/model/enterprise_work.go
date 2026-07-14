@@ -28,14 +28,16 @@ const (
 	EnterpriseDeviceAssignmentActive     = "active"
 	EnterpriseDeviceAssignmentRevoked    = "revoked"
 
-	QuotaScopeOrganization = "organization"
-	QuotaScopeDepartment   = "department"
-	QuotaScopeUser         = "user"
-	QuotaScopeTask         = "task"
-	QuotaLedgerAllocation  = "allocation"
-	QuotaLedgerReservation = "reservation"
-	QuotaLedgerConsumption = "consumption"
-	QuotaLedgerRelease     = "release"
+	QuotaScopeOrganization        = "organization"
+	QuotaScopeDepartment          = "department"
+	QuotaScopeUser                = "user"
+	QuotaScopeTask                = "task"
+	QuotaLedgerAllocation         = "allocation"
+	QuotaLedgerReservation        = "reservation"
+	QuotaLedgerConsumption        = "consumption"
+	QuotaLedgerRelease            = "release"
+	EnterprisePoolScopeTask       = "task"
+	EnterprisePoolScopeDepartment = "department"
 )
 
 // EnterpriseTask is the enterprise execution and accounting boundary. Existing
@@ -68,6 +70,52 @@ type EnterpriseTaskAssignment struct {
 	AssignedBy uint           `gorm:"index;not null" json:"assigned_by"`
 	CreatedAt  time.Time      `json:"created_at"`
 	DeletedAt  gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+// DepartmentMember is the explicit audience for department-scoped shared
+// pools. Organization membership alone does not grant department data access.
+type DepartmentMember struct {
+	ID             uint           `gorm:"primaryKey" json:"id"`
+	OrganizationID uint           `gorm:"uniqueIndex:idx_department_member;index;not null" json:"organization_id"`
+	DepartmentID   uint           `gorm:"uniqueIndex:idx_department_member;index;not null" json:"department_id"`
+	UserID         uint           `gorm:"uniqueIndex:idx_department_member;index;not null" json:"user_id"`
+	CreatedAt      time.Time      `json:"created_at"`
+	DeletedAt      gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+// EnterpriseSharedPool provides a task or department-level audience for chat
+// sessions and uploaded files. The bindings retain source ownership while the
+// pool defines who may discover and reuse them.
+type EnterpriseSharedPool struct {
+	ID              uint           `gorm:"primaryKey" json:"id"`
+	OrganizationID  uint           `gorm:"uniqueIndex:idx_enterprise_pool_scope;index;not null" json:"organization_id"`
+	ScopeType       string         `gorm:"uniqueIndex:idx_enterprise_pool_scope;size:20;not null" json:"scope_type"`
+	ScopeKey        string         `gorm:"uniqueIndex:idx_enterprise_pool_scope;size:80;not null" json:"scope_key"`
+	DepartmentID    *uint          `gorm:"index" json:"department_id,omitempty"`
+	TaskID          *uint          `gorm:"index" json:"task_id,omitempty"`
+	Name            string         `gorm:"size:160;not null" json:"name"`
+	CreatedByUserID uint           `gorm:"index;not null" json:"created_by_user_id"`
+	CreatedAt       time.Time      `json:"created_at"`
+	UpdatedAt       time.Time      `json:"updated_at"`
+	DeletedAt       gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+type EnterpriseSharedSession struct {
+	ID        uint           `gorm:"primaryKey" json:"id"`
+	PoolID    uint           `gorm:"uniqueIndex:idx_enterprise_pool_session;index;not null" json:"pool_id"`
+	SessionID string         `gorm:"uniqueIndex:idx_enterprise_pool_session;size:80;not null" json:"session_id"`
+	SharedBy  uint           `gorm:"index;not null" json:"shared_by"`
+	CreatedAt time.Time      `json:"created_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+type EnterpriseSharedFile struct {
+	ID        uint           `gorm:"primaryKey" json:"id"`
+	PoolID    uint           `gorm:"uniqueIndex:idx_enterprise_pool_file;index;not null" json:"pool_id"`
+	FileID    string         `gorm:"uniqueIndex:idx_enterprise_pool_file;size:80;not null" json:"file_id"`
+	SharedBy  uint           `gorm:"index;not null" json:"shared_by"`
+	CreatedAt time.Time      `json:"created_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 type EnterpriseDevice struct {

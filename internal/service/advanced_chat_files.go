@@ -392,6 +392,12 @@ func advancedChatFileContentFromModel(file AdvancedChatFile) advancedChatFileCon
 	}
 }
 
+// ReadAdvancedChatFileData is used after enterprise shared-pool authorization
+// has been evaluated by the enterprise API.
+func ReadAdvancedChatFileData(file AdvancedChatFile) ([]byte, error) {
+	return advancedChatFileData(file)
+}
+
 func advancedChatExecutorMessage(userID uint, message advancedChatCompletionMessage) ChatExecutorMessage {
 	executorMessage := ChatExecutorMessage{
 		Role:    message.Role,

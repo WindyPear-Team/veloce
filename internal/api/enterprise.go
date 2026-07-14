@@ -98,6 +98,15 @@ type enterpriseQuotaAllocationInput struct {
 	Amount          string `json:"amount"`
 	ReferenceID     string `json:"reference_id"`
 }
+type enterpriseSharedPoolInput struct {
+	ScopeType    string `json:"scope_type"`
+	DepartmentID *uint  `json:"department_id"`
+	TaskID       *uint  `json:"task_id"`
+	Name         string `json:"name"`
+}
+type enterprisePoolResourceInput struct {
+	ID string `json:"id"`
+}
 
 func (api *EnterpriseAPI) GetOrganization(c *gin.Context) {
 	if _, ok := enterpriseCurrentUser(c); !ok || !enterpriseFeatureAvailable(c) {
@@ -547,12 +556,220 @@ func (api *EnterpriseAPI) CreateTask(c *gin.Context) {
 				assignments = append(assignments, model.EnterpriseTaskAssignment{TaskID: task.ID, UserID: participantID, Role: model.EnterpriseTaskAssignmentParticipant, AssignedBy: user.ID})
 			}
 		}
-		return tx.Create(&assignments).Error
+		if err := tx.Create(&assignments).Error; err != nil {
+			return err
+		}
+		return ensureEnterpriseSharedPool(tx, tenant.Organization.ID, model.EnterprisePoolScopeTask, nil, &task.ID, task.Title, user.ID)
 	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create task"})
 		return
 	}
 	c.JSON(http.StatusCreated, task)
+}
+
+func (api *EnterpriseAPI) ListSharedPools(c *gin.Context) {
+	user, ok := enterpriseCurrentUser(c)
+	if !ok {
+		return
+	}
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return
+	}
+	var pools []model.EnterpriseSharedPool
+	if err := model.DB.Where("organization_id = ?", tenant.Organization.ID).Order("updated_at DESC").Find(&pools).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list shared pools"})
+		return
+	}
+	items := make([]model.EnterpriseSharedPool, 0, len(pools))
+	for _, pool := range pools {
+		if enterpriseCanAccessSharedPool(user, tenant.Organization.ID, pool) {
+			items = append(items, pool)
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"pools": items})
+}
+func (api *EnterpriseAPI) CreateSharedPool(c *gin.Context) {
+	user, ok := enterpriseCurrentUser(c)
+	if !ok {
+		return
+	}
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return
+	}
+	var input enterpriseSharedPoolInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid shared pool"})
+		return
+	}
+	pool, err := enterpriseSharedPoolFromInput(tenant.Organization.ID, input, user.ID)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := model.DB.Where("organization_id = ? AND scope_type = ? AND scope_key = ?", pool.OrganizationID, pool.ScopeType, pool.ScopeKey).FirstOrCreate(&pool).Error; err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": "Failed to create shared pool"})
+		return
+	}
+	c.JSON(http.StatusCreated, pool)
+}
+func (api *EnterpriseAPI) ListSharedPoolSessions(c *gin.Context) {
+	pool, ok := enterpriseSharedPoolAccess(c)
+	if !ok {
+		return
+	}
+	var rows []model.EnterpriseSharedSession
+	if err := model.DB.Where("pool_id = ?", pool.ID).Order("created_at DESC").Find(&rows).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list shared sessions"})
+		return
+	}
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.SessionID)
+	}
+	var sessions []service.AdvancedChatSession
+	if len(ids) > 0 {
+		if err := model.DB.Where("id IN ?", ids).Order("updated_at DESC").Find(&sessions).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load shared sessions"})
+			return
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"sessions": sessions})
+}
+func (api *EnterpriseAPI) GetSharedPoolSession(c *gin.Context) {
+	pool, ok := enterpriseSharedPoolAccess(c)
+	if !ok {
+		return
+	}
+	sessionID := strings.TrimSpace(c.Param("session_id"))
+	if sessionID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Session id is required"})
+		return
+	}
+	var binding model.EnterpriseSharedSession
+	if err := model.DB.Where("pool_id = ? AND session_id = ?", pool.ID, sessionID).First(&binding).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Shared session not found"})
+		return
+	}
+	var session service.AdvancedChatSession
+	if err := model.DB.Where("id = ?", sessionID).First(&session).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Session not found"})
+		return
+	}
+	var messages []service.AdvancedChatMessage
+	if err := model.DB.Where("session_id = ?", session.ID).Order("sort_order ASC, created_at ASC").Find(&messages).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load shared session"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"session": session, "messages": messages})
+}
+func (api *EnterpriseAPI) ShareSessionToPool(c *gin.Context) {
+	user, ok := enterpriseCurrentUser(c)
+	if !ok {
+		return
+	}
+	pool, ok := enterpriseSharedPoolAccess(c)
+	if !ok {
+		return
+	}
+	var input enterprisePoolResourceInput
+	if err := c.ShouldBindJSON(&input); err != nil || strings.TrimSpace(input.ID) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Session id is required"})
+		return
+	}
+	var session service.AdvancedChatSession
+	if err := model.DB.Where("id = ? AND user_id = ?", strings.TrimSpace(input.ID), user.ID).First(&session).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Personal session not found"})
+		return
+	}
+	entry := model.EnterpriseSharedSession{PoolID: pool.ID, SessionID: session.ID, SharedBy: user.ID}
+	if err := model.DB.Where("pool_id = ? AND session_id = ?", pool.ID, session.ID).FirstOrCreate(&entry).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to share session"})
+		return
+	}
+	c.JSON(http.StatusCreated, entry)
+}
+func (api *EnterpriseAPI) ListSharedPoolFiles(c *gin.Context) {
+	pool, ok := enterpriseSharedPoolAccess(c)
+	if !ok {
+		return
+	}
+	var rows []model.EnterpriseSharedFile
+	if err := model.DB.Where("pool_id = ?", pool.ID).Order("created_at DESC").Find(&rows).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list shared files"})
+		return
+	}
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.FileID)
+	}
+	var files []service.AdvancedChatFile
+	if len(ids) > 0 {
+		if err := model.DB.Where("id IN ?", ids).Order("created_at DESC").Find(&files).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load shared files"})
+			return
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"files": files})
+}
+func (api *EnterpriseAPI) ShareFileToPool(c *gin.Context) {
+	user, ok := enterpriseCurrentUser(c)
+	if !ok {
+		return
+	}
+	pool, ok := enterpriseSharedPoolAccess(c)
+	if !ok {
+		return
+	}
+	var input enterprisePoolResourceInput
+	if err := c.ShouldBindJSON(&input); err != nil || strings.TrimSpace(input.ID) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "File id is required"})
+		return
+	}
+	var file service.AdvancedChatFile
+	if err := model.DB.Where("id = ? AND user_id = ?", strings.TrimSpace(input.ID), user.ID).First(&file).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Personal file not found"})
+		return
+	}
+	entry := model.EnterpriseSharedFile{PoolID: pool.ID, FileID: file.ID, SharedBy: user.ID}
+	if err := model.DB.Where("pool_id = ? AND file_id = ?", pool.ID, file.ID).FirstOrCreate(&entry).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to share file"})
+		return
+	}
+	c.JSON(http.StatusCreated, entry)
+}
+func (api *EnterpriseAPI) DownloadSharedPoolFile(c *gin.Context) {
+	pool, ok := enterpriseSharedPoolAccess(c)
+	if !ok {
+		return
+	}
+	fileID := strings.TrimSpace(c.Param("file_id"))
+	if fileID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "File id is required"})
+		return
+	}
+	var binding model.EnterpriseSharedFile
+	if err := model.DB.Where("pool_id = ? AND file_id = ?", pool.ID, fileID).First(&binding).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Shared file not found"})
+		return
+	}
+	var file service.AdvancedChatFile
+	if err := model.DB.Where("id = ?", fileID).First(&file).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "File not found"})
+		return
+	}
+	data, err := service.ReadAdvancedChatFileData(file)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to read shared file"})
+		return
+	}
+	name := strings.ReplaceAll(file.Name, `"`, "")
+	if name == "" {
+		name = "file"
+	}
+	c.Header("Content-Disposition", `attachment; filename="`+name+`"`)
+	c.Data(http.StatusOK, file.MIMEType, data)
 }
 
 func (api *EnterpriseAPI) UpdateTaskStatus(c *gin.Context) {
@@ -965,6 +1182,94 @@ func validateEnterpriseQuotaScope(organizationID uint, scope service.EnterpriseQ
 		}
 	}
 	return nil
+}
+
+func enterpriseSharedPoolAccess(c *gin.Context) (model.EnterpriseSharedPool, bool) {
+	user, ok := enterpriseCurrentUser(c)
+	if !ok {
+		return model.EnterpriseSharedPool{}, false
+	}
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return model.EnterpriseSharedPool{}, false
+	}
+	id, err := parseEnterpriseID(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return model.EnterpriseSharedPool{}, false
+	}
+	var pool model.EnterpriseSharedPool
+	if err := model.DB.Where("id = ? AND organization_id = ?", id, tenant.Organization.ID).First(&pool).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Shared pool not found"})
+		return model.EnterpriseSharedPool{}, false
+	}
+	if !enterpriseCanAccessSharedPool(user, tenant.Organization.ID, pool) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Shared pool access denied"})
+		return model.EnterpriseSharedPool{}, false
+	}
+	return pool, true
+}
+func enterpriseCanAccessSharedPool(user *model.User, organizationID uint, pool model.EnterpriseSharedPool) bool {
+	if user == nil || user.ID == 0 {
+		return false
+	}
+	if user.IsAdmin {
+		return true
+	}
+	if pool.ScopeType == model.EnterprisePoolScopeTask && pool.TaskID != nil {
+		if enterpriseTaskAssignedTo(*pool.TaskID, user.ID) {
+			return true
+		}
+		var count int64
+		return model.DB.Model(&model.EnterpriseTask{}).Where("id = ? AND organization_id = ? AND (created_by_user_id = ? OR owner_user_id = ?)", *pool.TaskID, organizationID, user.ID, user.ID).Count(&count).Error == nil && count > 0
+	}
+	if pool.ScopeType == model.EnterprisePoolScopeDepartment && pool.DepartmentID != nil {
+		var count int64
+		return model.DB.Model(&model.DepartmentMember{}).Where("organization_id = ? AND department_id = ? AND user_id = ?", organizationID, *pool.DepartmentID, user.ID).Count(&count).Error == nil && count > 0
+	}
+	return false
+}
+func enterpriseSharedPoolFromInput(organizationID uint, input enterpriseSharedPoolInput, userID uint) (model.EnterpriseSharedPool, error) {
+	scope := strings.ToLower(strings.TrimSpace(input.ScopeType))
+	name := strings.TrimSpace(input.Name)
+	if name == "" {
+		return model.EnterpriseSharedPool{}, errors.New("Shared pool name is required")
+	}
+	pool := model.EnterpriseSharedPool{OrganizationID: organizationID, ScopeType: scope, DepartmentID: input.DepartmentID, TaskID: input.TaskID, Name: name, CreatedByUserID: userID}
+	switch scope {
+	case model.EnterprisePoolScopeTask:
+		if input.TaskID == nil || input.DepartmentID != nil {
+			return pool, errors.New("Task pool requires exactly one task")
+		}
+		var task model.EnterpriseTask
+		if err := model.DB.Where("id = ? AND organization_id = ?", *input.TaskID, organizationID).First(&task).Error; err != nil {
+			return pool, errors.New("Task not found")
+		}
+		pool.ScopeKey = "task:" + strconv.FormatUint(uint64(*input.TaskID), 10)
+	case model.EnterprisePoolScopeDepartment:
+		if input.DepartmentID == nil || input.TaskID != nil {
+			return pool, errors.New("Department pool requires exactly one department")
+		}
+		var department model.Department
+		if err := model.DB.Where("id = ? AND organization_id = ?", *input.DepartmentID, organizationID).First(&department).Error; err != nil {
+			return pool, errors.New("Department not found")
+		}
+		pool.ScopeKey = "department:" + strconv.FormatUint(uint64(*input.DepartmentID), 10)
+	default:
+		return pool, errors.New("Unsupported shared pool scope")
+	}
+	return pool, nil
+}
+func ensureEnterpriseSharedPool(db *gorm.DB, organizationID uint, scope string, departmentID, taskID *uint, name string, userID uint) error {
+	pool := model.EnterpriseSharedPool{OrganizationID: organizationID, ScopeType: scope, DepartmentID: departmentID, TaskID: taskID, Name: strings.TrimSpace(name), CreatedByUserID: userID}
+	if scope == model.EnterprisePoolScopeTask && taskID != nil {
+		pool.ScopeKey = "task:" + strconv.FormatUint(uint64(*taskID), 10)
+	} else if scope == model.EnterprisePoolScopeDepartment && departmentID != nil {
+		pool.ScopeKey = "department:" + strconv.FormatUint(uint64(*departmentID), 10)
+	} else {
+		return errors.New("Invalid shared pool scope")
+	}
+	return db.Where("organization_id = ? AND scope_type = ? AND scope_key = ?", pool.OrganizationID, pool.ScopeType, pool.ScopeKey).FirstOrCreate(&pool).Error
 }
 
 func enterpriseDepartmentFromInput(organizationID, id uint, input enterpriseDepartmentInput) (model.Department, error) {
