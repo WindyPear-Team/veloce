@@ -597,10 +597,14 @@ func (api *EnterpriseAPI) ListRoles(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list roles"})
 		return
 	}
+	items := make([]gin.H, 0, len(roles))
 	for i := range roles {
 		roles[i].Description = strings.TrimSpace(roles[i].Description)
+		var codes []string
+		model.DB.Table("role_permissions").Select("permissions.code").Joins("JOIN permissions ON permissions.id = role_permissions.permission_id").Where("role_permissions.role_id = ?", roles[i].ID).Order("permissions.code ASC").Scan(&codes)
+		items = append(items, gin.H{"id": roles[i].ID, "name": roles[i].Name, "slug": roles[i].Slug, "description": roles[i].Description, "builtin": roles[i].Builtin, "permissions": codes})
 	}
-	c.JSON(http.StatusOK, gin.H{"roles": roles})
+	c.JSON(http.StatusOK, gin.H{"roles": items})
 }
 
 func (api *EnterpriseAPI) CreateRole(c *gin.Context) {
