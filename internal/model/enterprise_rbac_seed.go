@@ -192,13 +192,8 @@ func ensureEnterpriseBuiltinRole(db *gorm.DB, organizationID uint, definition en
 		if !ok {
 			return Role{}, fmt.Errorf("built-in role %s references unknown permission %s", definition.Slug, code)
 		}
-		var rolePermission RolePermission
-		err := db.Where("role_id = ? AND permission_id = ?", role.ID, permission.ID).First(&rolePermission).Error
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			if err := db.Create(&RolePermission{RoleID: role.ID, PermissionID: permission.ID}).Error; err != nil {
-				return Role{}, err
-			}
-		} else if err != nil {
+		rolePermission := RolePermission{RoleID: role.ID, PermissionID: permission.ID}
+		if err := db.Where(&rolePermission).FirstOrCreate(&rolePermission).Error; err != nil {
 			return Role{}, err
 		}
 	}
