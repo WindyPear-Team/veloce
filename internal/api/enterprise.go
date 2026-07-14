@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/WindyPear-Team/veloce/internal/middleware"
 	"github.com/WindyPear-Team/veloce/internal/model"
@@ -37,6 +38,19 @@ type enterpriseBindingInput struct {
 	RoleID    uint   `json:"role_id"`
 	ScopeType string `json:"scope_type"`
 	ScopeID   uint   `json:"scope_id"`
+}
+
+type enterpriseTaskInput struct {
+	Title              string `json:"title"`
+	Description        string `json:"description"`
+	DepartmentID       *uint  `json:"department_id"`
+	OwnerUserID        *uint  `json:"owner_user_id"`
+	AssigneeUserIDs    []uint `json:"assignee_user_ids"`
+	ParticipantUserIDs []uint `json:"participant_user_ids"`
+}
+
+type enterpriseTaskStatusInput struct {
+	Status string `json:"status"`
 }
 
 func (api *EnterpriseAPI) GetOrganization(c *gin.Context) {
@@ -280,6 +294,156 @@ func (api *EnterpriseAPI) DeleteRoleBinding(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "Role revoked"})
+}
+
+func (api *EnterpriseAPI) ListTasks(c *gin.Context) {
+	user, ok := enterpriseCurrentUser(c)
+	if !ok {
+		return
+	}
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return
+	}
+	var tasks []model.EnterpriseTask
+	query := model.DB.Where("organization_id = ?", tenant.Organization.ID).
+		Where("created_by_user_id = ? OR owner_user_id = ? OR id IN (?)", user.ID, user.ID, model.DB.Model(&model.EnterpriseTaskAssignment{}).Select("task_id").Where("user_id = ?", user.ID)).
+		Order("updated_at DESC")
+	if err := query.Find(&tasks).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list tasks"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"tasks": tasks})
+}
+
+func (api *EnterpriseAPI) CreateTask(c *gin.Context) {
+	user, ok := enterpriseCurrentUser(c)
+	if !ok {
+		return
+	}
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return
+	}
+	var input enterpriseTaskInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid task"})
+		return
+	}
+	input.Title, input.Description = strings.TrimSpace(input.Title), strings.TrimSpace(input.Description)
+	if input.Title == "" || len([]rune(input.Title)) > 200 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Task title is required and must not exceed 200 characters"})
+		return
+	}
+	ownerID := user.ID
+	if input.OwnerUserID != nil {
+		ownerID = *input.OwnerUserID
+	}
+	if !enterpriseActiveMember(tenant.Organization.ID, ownerID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Task owner must be an active organization member"})
+		return
+	}
+	if input.DepartmentID != nil {
+		var department model.Department
+		if err := model.DB.Where("id = ? AND organization_id = ?", *input.DepartmentID, tenant.Organization.ID).First(&department).Error; err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Department not found"})
+			return
+		}
+	}
+	task := model.EnterpriseTask{OrganizationID: tenant.Organization.ID, DepartmentID: input.DepartmentID, CreatedByUserID: user.ID, OwnerUserID: ownerID, Title: input.Title, Description: input.Description, Status: model.EnterpriseTaskStatusAssigned}
+	if tenant.Workspace != nil {
+		task.WorkspaceID = &tenant.Workspace.ID
+	}
+	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&task).Error; err != nil {
+			return err
+		}
+		assignments := []model.EnterpriseTaskAssignment{{TaskID: task.ID, UserID: ownerID, Role: model.EnterpriseTaskAssignmentOwner, AssignedBy: user.ID}}
+		for _, assigneeID := range uniqueEnterpriseUserIDs(input.AssigneeUserIDs) {
+			if assigneeID != ownerID && enterpriseActiveMemberWithDB(tx, tenant.Organization.ID, assigneeID) {
+				assignments = append(assignments, model.EnterpriseTaskAssignment{TaskID: task.ID, UserID: assigneeID, Role: model.EnterpriseTaskAssignmentAssignee, AssignedBy: user.ID})
+			}
+		}
+		for _, participantID := range uniqueEnterpriseUserIDs(input.ParticipantUserIDs) {
+			if participantID != ownerID && enterpriseActiveMemberWithDB(tx, tenant.Organization.ID, participantID) {
+				assignments = append(assignments, model.EnterpriseTaskAssignment{TaskID: task.ID, UserID: participantID, Role: model.EnterpriseTaskAssignmentParticipant, AssignedBy: user.ID})
+			}
+		}
+		return tx.Create(&assignments).Error
+	}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create task"})
+		return
+	}
+	c.JSON(http.StatusCreated, task)
+}
+
+func (api *EnterpriseAPI) UpdateTaskStatus(c *gin.Context) {
+	user, ok := enterpriseCurrentUser(c)
+	if !ok {
+		return
+	}
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return
+	}
+	id, err := parseEnterpriseID(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	var input enterpriseTaskStatusInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid task status"})
+		return
+	}
+	status := model.NormalizeEnterpriseTaskStatus(input.Status)
+	var task model.EnterpriseTask
+	if err := model.DB.Where("id = ? AND organization_id = ?", id, tenant.Organization.ID).First(&task).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Task not found"})
+		return
+	}
+	if task.OwnerUserID != user.ID && task.CreatedByUserID != user.ID && !enterpriseTaskAssignedTo(task.ID, user.ID) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Task access denied"})
+		return
+	}
+	updates := map[string]interface{}{"status": status}
+	if status == model.EnterpriseTaskStatusRunning {
+		updates["started_at"] = time.Now()
+	}
+	if status == model.EnterpriseTaskStatusCompleted || status == model.EnterpriseTaskStatusCancelled {
+		updates["completed_at"] = time.Now()
+	}
+	if err := model.DB.Model(&task).Updates(updates).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update task"})
+		return
+	}
+	model.DB.First(&task, task.ID)
+	c.JSON(http.StatusOK, task)
+}
+
+func enterpriseActiveMember(organizationID, userID uint) bool {
+	return enterpriseActiveMemberWithDB(model.DB, organizationID, userID)
+}
+func enterpriseActiveMemberWithDB(db *gorm.DB, organizationID, userID uint) bool {
+	var count int64
+	return db.Model(&model.OrganizationMember{}).Where("organization_id = ? AND user_id = ? AND status = ?", organizationID, userID, model.OrganizationMemberStatusActive).Count(&count).Error == nil && count == 1
+}
+func enterpriseTaskAssignedTo(taskID, userID uint) bool {
+	var count int64
+	return model.DB.Model(&model.EnterpriseTaskAssignment{}).Where("task_id = ? AND user_id = ?", taskID, userID).Count(&count).Error == nil && count > 0
+}
+func uniqueEnterpriseUserIDs(values []uint) []uint {
+	seen := map[uint]struct{}{}
+	result := make([]uint, 0, len(values))
+	for _, value := range values {
+		if value != 0 {
+			if _, ok := seen[value]; !ok {
+				seen[value] = struct{}{}
+				result = append(result, value)
+			}
+		}
+	}
+	return result
 }
 
 func enterpriseTenant(c *gin.Context) (*middleware.TenantContext, bool) {
