@@ -53,6 +53,9 @@ var enterprisePermissionDefinitions = []enterprisePermissionDefinition{
 	{Resource: "audit", Action: PermissionActionExport, Description: "Export enterprise audit events"},
 	{Resource: "cost", Action: PermissionActionRead, Description: "View enterprise cost reports"},
 	{Resource: "cost", Action: PermissionActionManage, Description: "Manage budgets and cost policies"},
+	{Resource: "cost", Action: "pool_fund", Description: "Allocate organization budget to pools"},
+	{Resource: "cost", Action: "pool_reclaim", Description: "Reclaim pool budget to organization budget"},
+	{Resource: "cost", Action: "user_grant", Description: "Grant organization budget to employees"},
 	{Resource: "security", Action: PermissionActionManage, Description: "Manage enterprise security policies"},
 }
 

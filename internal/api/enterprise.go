@@ -118,6 +118,14 @@ type enterpriseQuotaAllocationInput struct {
 	Amount          string `json:"amount"`
 	ReferenceID     string `json:"reference_id"`
 }
+type enterprisePoolBudgetInput struct {
+	PoolID uint   `json:"pool_id"`
+	Amount string `json:"amount"`
+}
+type enterpriseUserBudgetInput struct {
+	UserID uint   `json:"user_id"`
+	Amount string `json:"amount"`
+}
 type enterpriseSharedPoolInput struct {
 	ScopeType    string `json:"scope_type"`
 	DepartmentID *uint  `json:"department_id"`
@@ -1788,11 +1796,171 @@ func (api *EnterpriseAPI) AllocateQuota(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Quota accounts must belong to this organization"})
 		return
 	}
+	var parent, child model.QuotaAccount
+	model.DB.First(&parent, input.ParentAccountID)
+	model.DB.First(&child, input.ChildAccountID)
+	if parent.ScopeType != model.QuotaScopeOrganization || child.ScopeType != model.QuotaScopePool {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Only organization budget may be allocated to a pool"})
+		return
+	}
 	if err := service.AllocateEnterpriseQuota(model.DB, input.ParentAccountID, input.ChildAccountID, user.ID, amount, strings.TrimSpace(input.ReferenceID)); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "Quota allocated"})
+}
+
+func (api *EnterpriseAPI) FundPoolFromPersonalBalance(c *gin.Context) {
+	user, ok := enterpriseCurrentUser(c)
+	if !ok {
+		return
+	}
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return
+	}
+	var input enterprisePoolBudgetInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid pool funding"})
+		return
+	}
+	amount, err := decimal.NewFromString(strings.TrimSpace(input.Amount))
+	if err != nil || amount.LessThanOrEqual(decimal.Zero) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Amount must be a positive decimal"})
+		return
+	}
+	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		var pool model.EnterpriseSharedPool
+		if err := tx.Where("id = ? AND organization_id = ?", input.PoolID, tenant.Organization.ID).First(&pool).Error; err != nil {
+			return err
+		}
+		if !enterpriseCanAccessSharedPool(user, tenant.Organization.ID, pool) {
+			return errors.New("Pool access denied")
+		}
+		var account model.QuotaAccount
+		if err := tx.Where("organization_id = ? AND pool_id = ?", tenant.Organization.ID, pool.ID).First(&account).Error; err != nil {
+			return err
+		}
+		var actor model.User
+		if err := tx.First(&actor, user.ID).Error; err != nil {
+			return err
+		}
+		if actor.Balance.LessThan(amount) {
+			return errors.New("Insufficient personal balance")
+		}
+		if err := tx.Model(&actor).Update("balance", actor.Balance.Sub(amount)).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&account).Update("limit_amount", account.LimitAmount.Add(amount)).Error; err != nil {
+			return err
+		}
+		return tx.Create(&model.QuotaLedger{OrganizationID: tenant.Organization.ID, AccountID: account.ID, PoolID: &pool.ID, EntryType: model.QuotaLedgerAllocation, Amount: amount, ReferenceType: "personal_balance_to_pool", CreatedByUserID: user.ID}).Error
+	}); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Personal balance allocated to pool"})
+}
+
+func (api *EnterpriseAPI) FundPoolFromOrganizationBudget(c *gin.Context) {
+	api.moveOrganizationBudget(c, false)
+}
+func (api *EnterpriseAPI) ReclaimPoolToOrganizationBudget(c *gin.Context) {
+	api.moveOrganizationBudget(c, true)
+}
+func (api *EnterpriseAPI) moveOrganizationBudget(c *gin.Context, reclaim bool) {
+	user, ok := enterpriseCurrentUser(c)
+	if !ok {
+		return
+	}
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return
+	}
+	var input enterprisePoolBudgetInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid pool budget transfer"})
+		return
+	}
+	amount, err := decimal.NewFromString(strings.TrimSpace(input.Amount))
+	if err != nil || amount.LessThanOrEqual(decimal.Zero) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Amount must be a positive decimal"})
+		return
+	}
+	org, err := service.EnsureEnterpriseQuotaAccount(model.DB, service.EnterpriseQuotaScope{OrganizationID: tenant.Organization.ID, ScopeType: model.QuotaScopeOrganization})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load organization budget"})
+		return
+	}
+	var pool model.EnterpriseSharedPool
+	if err := model.DB.Where("id = ? AND organization_id = ?", input.PoolID, tenant.Organization.ID).First(&pool).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Pool not found"})
+		return
+	}
+	var poolAccount model.QuotaAccount
+	if err := model.DB.Where("organization_id = ? AND pool_id = ?", tenant.Organization.ID, pool.ID).First(&poolAccount).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Pool budget not found"})
+		return
+	}
+	parent, child := org.ID, poolAccount.ID
+	if reclaim {
+		parent, child = poolAccount.ID, org.ID
+	}
+	if err := service.AllocateEnterpriseQuota(model.DB, parent, child, user.ID, amount, "organization_pool_budget"); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Organization budget transferred"})
+}
+
+func (api *EnterpriseAPI) GrantOrganizationBudgetToUser(c *gin.Context) {
+	user, ok := enterpriseCurrentUser(c)
+	if !ok {
+		return
+	}
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return
+	}
+	var input enterpriseUserBudgetInput
+	if err := c.ShouldBindJSON(&input); err != nil || input.UserID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid employee budget grant"})
+		return
+	}
+	amount, err := decimal.NewFromString(strings.TrimSpace(input.Amount))
+	if err != nil || amount.LessThanOrEqual(decimal.Zero) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Amount must be a positive decimal"})
+		return
+	}
+	if !enterpriseActiveMember(tenant.Organization.ID, input.UserID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Employee not found"})
+		return
+	}
+	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		org, err := service.EnsureEnterpriseQuotaAccount(tx, service.EnterpriseQuotaScope{OrganizationID: tenant.Organization.ID, ScopeType: model.QuotaScopeOrganization})
+		if err != nil {
+			return err
+		}
+		available := org.LimitAmount.Sub(org.ReservedAmount).Sub(org.ConsumedAmount)
+		if amount.GreaterThan(available) {
+			return service.ErrEnterpriseQuotaExceeded
+		}
+		var employee model.User
+		if err := tx.First(&employee, input.UserID).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&org).Update("limit_amount", org.LimitAmount.Sub(amount)).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&employee).Update("balance", employee.Balance.Add(amount)).Error; err != nil {
+			return err
+		}
+		return tx.Create(&model.QuotaLedger{OrganizationID: tenant.Organization.ID, AccountID: org.ID, EntryType: model.QuotaLedgerAllocation, Amount: amount.Neg(), ReferenceType: "organization_budget_to_user", ReferenceID: strconv.FormatUint(uint64(employee.ID), 10), CreatedByUserID: user.ID}).Error
+	}); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Organization budget granted"})
 }
 func (api *EnterpriseAPI) ListQuotaLedger(c *gin.Context) {
 	tenant, ok := enterpriseTenant(c)
