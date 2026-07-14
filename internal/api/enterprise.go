@@ -772,6 +772,40 @@ func (api *EnterpriseAPI) DownloadSharedPoolFile(c *gin.Context) {
 	c.Data(http.StatusOK, file.MIMEType, data)
 }
 
+func (api *EnterpriseAPI) GetSharedPoolFileContent(c *gin.Context) {
+	pool, ok := enterpriseSharedPoolAccess(c)
+	if !ok {
+		return
+	}
+	fileID := strings.TrimSpace(c.Param("file_id"))
+	if fileID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "File id is required"})
+		return
+	}
+	var binding model.EnterpriseSharedFile
+	if err := model.DB.Where("pool_id = ? AND file_id = ?", pool.ID, fileID).First(&binding).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Shared file not found"})
+		return
+	}
+	var file service.AdvancedChatFile
+	if err := model.DB.Where("id = ?", fileID).First(&file).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "File not found"})
+		return
+	}
+	textRunes := []rune(file.TextExtract)
+	truncated := false
+	if len(textRunes) > 20000 {
+		textRunes = textRunes[:20000]
+		truncated = true
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"id":        file.ID,
+		"text":      string(textRunes),
+		"binary":    strings.TrimSpace(file.TextExtract) == "",
+		"truncated": truncated || len([]rune(file.TextExtract)) >= 100000,
+	})
+}
+
 func (api *EnterpriseAPI) UpdateTaskStatus(c *gin.Context) {
 	user, ok := enterpriseCurrentUser(c)
 	if !ok {

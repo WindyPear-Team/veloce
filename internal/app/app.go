@@ -704,6 +704,7 @@ func Run() error {
 		userGroup.GET("/enterprise/shared-pools/:id/sessions/:session_id", enterpriseAPI.GetSharedPoolSession)
 		userGroup.POST("/enterprise/shared-pools/:id/sessions", enterpriseAPI.ShareSessionToPool)
 		userGroup.GET("/enterprise/shared-pools/:id/files", enterpriseAPI.ListSharedPoolFiles)
+		userGroup.GET("/enterprise/shared-pools/:id/files/:file_id/content", enterpriseAPI.GetSharedPoolFileContent)
 		userGroup.GET("/enterprise/shared-pools/:id/files/:file_id/download", enterpriseAPI.DownloadSharedPoolFile)
 		userGroup.POST("/enterprise/shared-pools/:id/files", enterpriseAPI.ShareFileToPool)
 		userGroup.GET("/enterprise/devices", middleware.PermissionMiddleware("tool.manage"), enterpriseAPI.ListDevices)
