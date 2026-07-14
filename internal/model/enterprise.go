@@ -31,6 +31,10 @@ const (
 	WorkspaceMemberRoleAdmin  = "admin"
 	WorkspaceMemberRoleMember = "member"
 	WorkspaceMemberRoleViewer = "viewer"
+
+	ResourceVisibilityPersonal     = "personal"
+	ResourceVisibilityWorkspace    = "workspace"
+	ResourceVisibilityOrganization = "organization"
 )
 
 // Organization is the single enterprise profile for this private deployment.
@@ -174,6 +178,17 @@ func NormalizeWorkspaceMemberRole(value string) string {
 		return WorkspaceMemberRoleViewer
 	default:
 		return WorkspaceMemberRoleMember
+	}
+}
+
+func NormalizeResourceVisibility(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case ResourceVisibilityWorkspace:
+		return ResourceVisibilityWorkspace
+	case ResourceVisibilityOrganization:
+		return ResourceVisibilityOrganization
+	default:
+		return ResourceVisibilityPersonal
 	}
 }
 

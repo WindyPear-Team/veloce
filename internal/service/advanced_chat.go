@@ -15,21 +15,25 @@ import (
 )
 
 type AdvancedChatAgent struct {
-	ID            uint       `gorm:"primaryKey" json:"id"`
-	UserID        uint       `gorm:"uniqueIndex:idx_advanced_chat_agent_user_name;uniqueIndex:idx_advanced_chat_agent_user_stable_id;not null" json:"user_id"`
-	User          model.User `gorm:"foreignKey:UserID" json:"-"`
-	StableID      *string    `gorm:"uniqueIndex:idx_advanced_chat_agent_user_stable_id;size:80" json:"-"`
-	Name          string     `gorm:"uniqueIndex:idx_advanced_chat_agent_user_name;size:100;not null" json:"name"`
-	Prompt        string     `gorm:"type:text;not null" json:"prompt"`
-	DefaultModel  string     `gorm:"size:100;not null" json:"default_model"`
-	UserChannelID uint       `gorm:"index" json:"user_channel_id"`
-	Stream        bool       `gorm:"not null;default:false" json:"stream"`
-	SkillIDs      string     `gorm:"type:text;not null;default:'[]'" json:"-"`
-	Skills        []string   `gorm:"-" json:"skill_ids"`
-	MCPServerIDs  string     `gorm:"type:text;not null;default:'[]'" json:"-"`
-	MCPServers    []string   `gorm:"-" json:"mcp_server_ids"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     time.Time  `json:"updated_at"`
+	ID             uint       `gorm:"primaryKey" json:"id"`
+	UserID         uint       `gorm:"uniqueIndex:idx_advanced_chat_agent_user_name;uniqueIndex:idx_advanced_chat_agent_user_stable_id;not null" json:"user_id"`
+	User           model.User `gorm:"foreignKey:UserID" json:"-"`
+	OrganizationID uint       `gorm:"index" json:"organization_id,omitempty"`
+	WorkspaceID    uint       `gorm:"index" json:"workspace_id,omitempty"`
+	OwnerUserID    uint       `gorm:"index" json:"owner_user_id,omitempty"`
+	Visibility     string     `gorm:"size:20;not null;default:'personal';index" json:"visibility"`
+	StableID       *string    `gorm:"uniqueIndex:idx_advanced_chat_agent_user_stable_id;size:80" json:"-"`
+	Name           string     `gorm:"uniqueIndex:idx_advanced_chat_agent_user_name;size:100;not null" json:"name"`
+	Prompt         string     `gorm:"type:text;not null" json:"prompt"`
+	DefaultModel   string     `gorm:"size:100;not null" json:"default_model"`
+	UserChannelID  uint       `gorm:"index" json:"user_channel_id"`
+	Stream         bool       `gorm:"not null;default:false" json:"stream"`
+	SkillIDs       string     `gorm:"type:text;not null;default:'[]'" json:"-"`
+	Skills         []string   `gorm:"-" json:"skill_ids"`
+	MCPServerIDs   string     `gorm:"type:text;not null;default:'[]'" json:"-"`
+	MCPServers     []string   `gorm:"-" json:"mcp_server_ids"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
 }
 
 const (
@@ -38,28 +42,36 @@ const (
 )
 
 type advancedChatAgentResponse struct {
-	ID            string    `json:"id"`
-	Name          string    `json:"name"`
-	Prompt        string    `json:"prompt"`
-	DefaultModel  string    `json:"default_model"`
-	UserChannelID uint      `json:"user_channel_id,omitempty"`
-	Stream        bool      `json:"stream"`
-	SkillIDs      []string  `json:"skill_ids"`
-	MCPServerIDs  []string  `json:"mcp_server_ids"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID             string    `json:"id"`
+	Name           string    `json:"name"`
+	OrganizationID uint      `json:"organization_id,omitempty"`
+	WorkspaceID    uint      `json:"workspace_id,omitempty"`
+	OwnerUserID    uint      `json:"owner_user_id,omitempty"`
+	Visibility     string    `json:"visibility"`
+	Prompt         string    `json:"prompt"`
+	DefaultModel   string    `json:"default_model"`
+	UserChannelID  uint      `json:"user_channel_id,omitempty"`
+	Stream         bool      `json:"stream"`
+	SkillIDs       []string  `json:"skill_ids"`
+	MCPServerIDs   []string  `json:"mcp_server_ids"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 type AdvancedChatAgentStudio struct {
-	ID          uint       `gorm:"primaryKey" json:"-"`
-	UserID      uint       `gorm:"uniqueIndex:idx_advanced_chat_agent_studio_user_studio;not null" json:"user_id"`
-	User        model.User `gorm:"foreignKey:UserID" json:"-"`
-	StudioID    string     `gorm:"uniqueIndex:idx_advanced_chat_agent_studio_user_studio;size:80;not null" json:"id"`
-	Name        string     `gorm:"size:120;not null" json:"name"`
-	Description string     `gorm:"type:text;not null" json:"description"`
-	Agents      string     `gorm:"type:text;not null" json:"-"`
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
+	ID             uint       `gorm:"primaryKey" json:"-"`
+	UserID         uint       `gorm:"uniqueIndex:idx_advanced_chat_agent_studio_user_studio;not null" json:"user_id"`
+	User           model.User `gorm:"foreignKey:UserID" json:"-"`
+	OrganizationID uint       `gorm:"index" json:"organization_id,omitempty"`
+	WorkspaceID    uint       `gorm:"index" json:"workspace_id,omitempty"`
+	OwnerUserID    uint       `gorm:"index" json:"owner_user_id,omitempty"`
+	Visibility     string     `gorm:"size:20;not null;default:'personal';index" json:"visibility"`
+	StudioID       string     `gorm:"uniqueIndex:idx_advanced_chat_agent_studio_user_studio;size:80;not null" json:"id"`
+	Name           string     `gorm:"size:120;not null" json:"name"`
+	Description    string     `gorm:"type:text;not null" json:"description"`
+	Agents         string     `gorm:"type:text;not null" json:"-"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
 }
 
 type AdvancedChatUserSettings struct {
@@ -76,16 +88,20 @@ type AdvancedChatUserSettings struct {
 }
 
 type AdvancedChatSkill struct {
-	ID           uint       `gorm:"primaryKey" json:"id"`
-	UserID       uint       `gorm:"uniqueIndex:idx_advanced_chat_skill_user_name;not null" json:"user_id"`
-	User         model.User `gorm:"foreignKey:UserID" json:"-"`
-	Name         string     `gorm:"uniqueIndex:idx_advanced_chat_skill_user_name;size:100;not null" json:"name"`
-	Description  string     `gorm:"type:text;not null" json:"description"`
-	Prompt       string     `gorm:"type:text;not null" json:"prompt"`
-	MCPServerIDs string     `gorm:"type:text;not null" json:"-"`
-	MCPServers   []string   `gorm:"-" json:"mcp_server_ids"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
+	ID             uint       `gorm:"primaryKey" json:"id"`
+	UserID         uint       `gorm:"uniqueIndex:idx_advanced_chat_skill_user_name;not null" json:"user_id"`
+	User           model.User `gorm:"foreignKey:UserID" json:"-"`
+	OrganizationID uint       `gorm:"index" json:"organization_id,omitempty"`
+	WorkspaceID    uint       `gorm:"index" json:"workspace_id,omitempty"`
+	OwnerUserID    uint       `gorm:"index" json:"owner_user_id,omitempty"`
+	Visibility     string     `gorm:"size:20;not null;default:'personal';index" json:"visibility"`
+	Name           string     `gorm:"uniqueIndex:idx_advanced_chat_skill_user_name;size:100;not null" json:"name"`
+	Description    string     `gorm:"type:text;not null" json:"description"`
+	Prompt         string     `gorm:"type:text;not null" json:"prompt"`
+	MCPServerIDs   string     `gorm:"type:text;not null" json:"-"`
+	MCPServers     []string   `gorm:"-" json:"mcp_server_ids"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
 }
 
 type AdvancedChatMCPServer struct {
@@ -112,6 +128,7 @@ type advancedChatAgentInput struct {
 	Stream        bool     `json:"stream"`
 	SkillIDs      []string `json:"skill_ids"`
 	MCPServerIDs  []string `json:"mcp_server_ids"`
+	Visibility    string   `json:"visibility"`
 }
 
 type advancedChatAdminSettingsResponse struct {
@@ -793,15 +810,28 @@ func advancedChatAgentFromInput(c *gin.Context, userID uint, input advancedChatA
 	}
 	skillIDsJSON, _ := json.Marshal(skillIDs)
 	mcpServerIDsJSON, _ := json.Marshal(mcpServerIDs)
+	organizationID, workspaceID := advancedChatEnterpriseScope(c)
+	visibility := model.NormalizeResourceVisibility(input.Visibility)
+	if organizationID == 0 {
+		visibility = model.ResourceVisibilityPersonal
+	}
+	if visibility == model.ResourceVisibilityWorkspace && workspaceID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "A workspace is required for workspace visibility"})
+		return AdvancedChatAgent{}, false
+	}
 	return AdvancedChatAgent{
-		UserID:        userID,
-		Name:          name,
-		Prompt:        prompt,
-		DefaultModel:  defaultModel,
-		UserChannelID: userChannelID,
-		Stream:        input.Stream,
-		SkillIDs:      string(skillIDsJSON),
-		MCPServerIDs:  string(mcpServerIDsJSON),
+		UserID:         userID,
+		OwnerUserID:    userID,
+		OrganizationID: organizationID,
+		WorkspaceID:    workspaceID,
+		Visibility:     visibility,
+		Name:           name,
+		Prompt:         prompt,
+		DefaultModel:   defaultModel,
+		UserChannelID:  userChannelID,
+		Stream:         input.Stream,
+		SkillIDs:       string(skillIDsJSON),
+		MCPServerIDs:   string(mcpServerIDsJSON),
 	}, true
 }
 
@@ -823,18 +853,35 @@ func advancedChatAgentResponseFromModel(agent *AdvancedChatAgent) advancedChatAg
 		id = strings.TrimSpace(*agent.StableID)
 	}
 	return advancedChatAgentResponse{
-		ID:            id,
-		Name:          agent.Name,
-		Prompt:        agent.Prompt,
-		DefaultModel:  agent.DefaultModel,
-		UserChannelID: agent.UserChannelID,
-		Stream:        agent.Stream,
-		SkillIDs:      agent.Skills,
-		MCPServerIDs:  agent.MCPServers,
-		CreatedAt:     agent.CreatedAt,
-		UpdatedAt:     agent.UpdatedAt,
+		ID:             id,
+		Name:           agent.Name,
+		OrganizationID: agent.OrganizationID,
+		WorkspaceID:    agent.WorkspaceID,
+		OwnerUserID:    agent.OwnerUserID,
+		Visibility:     agent.Visibility,
+		Prompt:         agent.Prompt,
+		DefaultModel:   agent.DefaultModel,
+		UserChannelID:  agent.UserChannelID,
+		Stream:         agent.Stream,
+		SkillIDs:       agent.Skills,
+		MCPServerIDs:   agent.MCPServers,
+		CreatedAt:      agent.CreatedAt,
+		UpdatedAt:      agent.UpdatedAt,
 	}
 }
+
+func advancedChatEnterpriseScope(c *gin.Context) (uint, uint) {
+	if !serviceEnterpriseFeaturesEnabled() || c == nil {
+		return 0, 0
+	}
+	organizationID, _ := c.Get("enterprise_organization_id")
+	workspaceID, _ := c.Get("enterprise_workspace_id")
+	organization, _ := organizationID.(uint)
+	workspace, _ := workspaceID.(uint)
+	return organization, workspace
+}
+
+func serviceEnterpriseFeaturesEnabled() bool { return model.EnterpriseModeEnabledWithDB(model.DB) }
 
 func isAdvancedChatDefaultAgent(agent *AdvancedChatAgent) bool {
 	return agent != nil && agent.StableID != nil && strings.TrimSpace(*agent.StableID) == advancedChatDefaultAgentID

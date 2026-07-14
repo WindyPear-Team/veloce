@@ -7,13 +7,14 @@ import (
 	"strings"
 
 	"github.com/WindyPear-Team/veloce/internal/model"
-	"github.com/WindyPear-Team/veloce/internal/service"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
 const (
 	tenantContextKey    = "enterprise_tenant_context"
+	organizationIDKey   = "enterprise_organization_id"
+	workspaceIDKey      = "enterprise_workspace_id"
 	workspaceIDHeader   = "X-Workspace-ID"
 	workspaceSlugHeader = "X-Workspace-Slug"
 )
@@ -30,7 +31,7 @@ type TenantContext struct {
 // disabled, preserving the existing community behavior.
 func TenantContextMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if !service.EnterpriseFeaturesEnabled() {
+		if !model.EnterpriseModeEnabledWithDB(model.DB) {
 			c.Next()
 			return
 		}
@@ -51,6 +52,10 @@ func TenantContextMiddleware() gin.HandlerFunc {
 			return
 		}
 		c.Set(tenantContextKey, tenant)
+		c.Set(organizationIDKey, tenant.Organization.ID)
+		if tenant.Workspace != nil {
+			c.Set(workspaceIDKey, tenant.Workspace.ID)
+		}
 		c.Next()
 	}
 }

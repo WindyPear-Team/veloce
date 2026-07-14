@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/WindyPear-Team/veloce/internal/model"
-	"github.com/WindyPear-Team/veloce/internal/service"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -16,7 +15,7 @@ import (
 // intentionally not a bypass: platform and enterprise trust boundaries differ.
 func PermissionMiddleware(code string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if !service.EnterpriseFeaturesEnabled() {
+		if !model.EnterpriseModeEnabledWithDB(model.DB) {
 			c.Next()
 			return
 		}
