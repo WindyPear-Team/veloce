@@ -72,7 +72,7 @@ BOOTSTRAP_ADMIN_EMAILS=
 ENTERPRISE_FEATURES_ENABLED=false
 ```
 
-`ENTERPRISE_FEATURES_ENABLED` 是企业组织、多租户和治理功能的总开关，默认关闭。企业功能仍在逐步实施时，关闭该开关可保持现有个人版和社区版行为不变。
+`ENTERPRISE_FEATURES_ENABLED` 是单企业私有部署的组织、Workspace 和治理功能总开关，默认关闭。一套部署只对应一个企业；关闭该开关可保持现有个人版和社区版行为不变。
 
 `DB_DRIVER` 支持 `sqlite`（默认）、`postgres` 与 `mysql`。SQLite 使用
 `DB_PATH`；PostgreSQL/MySQL 使用 `DB_DSN`（也支持 `DATABASE_URL`），应用启动时会自动创建或迁移表结构。

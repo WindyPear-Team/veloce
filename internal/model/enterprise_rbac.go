@@ -37,8 +37,7 @@ type Permission struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
-// Role belongs to one organization. The same stable slug may be reused in a
-// different tenant, but it is unique inside its organization.
+// Role belongs to the deployment's single enterprise organization.
 type Role struct {
 	ID             uint           `gorm:"primaryKey" json:"id"`
 	OrganizationID uint           `gorm:"uniqueIndex:idx_role_org_slug;index;not null" json:"organization_id"`

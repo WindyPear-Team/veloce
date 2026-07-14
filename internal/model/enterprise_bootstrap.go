@@ -10,20 +10,22 @@ import (
 	"gorm.io/gorm"
 )
 
-// AfterCreate provisions the personal tenant boundary for every newly created
-// user while enterprise features are enabled. Using the create transaction
-// keeps user and tenant bootstrap atomic across all registration methods.
+const EnterpriseOrganizationSlug = "enterprise"
+
+// AfterCreate joins every new user to the single enterprise represented by
+// this private deployment. The first user creates and owns the enterprise;
+// subsequent users become standard members.
 func (user *User) AfterCreate(tx *gorm.DB) error {
 	if !config.EnterpriseFeaturesEnabled || user == nil || user.ID == 0 {
 		return nil
 	}
-	return ensurePersonalTenantWithDB(tx, user)
+	return ensureEnterpriseTenantWithDB(tx, user)
 }
 
-// EnsurePersonalTenantForUser is safe to call repeatedly. It creates the
-// user's personal organization, owner memberships, and personal workspace if
-// any part of the bootstrap data is missing.
-func EnsurePersonalTenantForUser(db *gorm.DB, user *User) error {
+// EnsureEnterpriseTenantForUser is idempotent. One deployment owns exactly one
+// enterprise organization, while each employee receives a personal workspace
+// inside that organization.
+func EnsureEnterpriseTenantForUser(db *gorm.DB, user *User) error {
 	if db == nil {
 		return errors.New("database is required")
 	}
@@ -31,48 +33,69 @@ func EnsurePersonalTenantForUser(db *gorm.DB, user *User) error {
 		return errors.New("persisted user is required")
 	}
 	return db.Transaction(func(tx *gorm.DB) error {
-		return ensurePersonalTenantWithDB(tx, user)
+		return ensureEnterpriseTenantWithDB(tx, user)
 	})
 }
 
-// EnsurePersonalTenantsForExistingUsers backfills enterprise tenant data for
-// installations that already contained users when the feature was enabled.
-func EnsurePersonalTenantsForExistingUsers(db *gorm.DB) error {
+// EnsureEnterpriseTenantForExistingUsers backfills the single enterprise and
+// employee workspaces for installations that already contain users.
+func EnsureEnterpriseTenantForExistingUsers(db *gorm.DB) error {
 	if db == nil {
 		return errors.New("database is required")
 	}
 	var users []User
-	return db.Order("id ASC").FindInBatches(&users, 100, func(batch *gorm.DB, _ int) error {
+	err := db.Order("id ASC").FindInBatches(&users, 100, func(batch *gorm.DB, _ int) error {
 		for index := range users {
-			if err := ensurePersonalTenantWithDB(batch, &users[index]); err != nil {
-				return fmt.Errorf("bootstrap personal tenant for user %d: %w", users[index].ID, err)
+			if err := ensureEnterpriseTenantWithDB(batch, &users[index]); err != nil {
+				return fmt.Errorf("bootstrap enterprise tenant for user %d: %w", users[index].ID, err)
 			}
 		}
 		return nil
 	}).Error
+	if err != nil {
+		return err
+	}
+	// Early enterprise-development builds created one organization per user.
+	// They never owned shared enterprise resources, so retire those records once
+	// all users have been attached to the singleton enterprise.
+	return db.Model(&Organization{}).
+		Where("slug LIKE ? AND slug <> ?", "personal-u-%", EnterpriseOrganizationSlug).
+		Update("status", OrganizationStatusSuspended).Error
 }
 
-func ensurePersonalTenantWithDB(db *gorm.DB, user *User) error {
+func ensureEnterpriseTenantWithDB(db *gorm.DB, user *User) error {
 	organization := Organization{}
-	organizationSlug := personalOrganizationSlug(user.ID)
-	err := db.Where("slug = ?", organizationSlug).First(&organization).Error
+	err := db.Where("slug = ?", EnterpriseOrganizationSlug).First(&organization).Error
+	createdOrganization := false
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		organization = Organization{
-			Slug:            organizationSlug,
-			Name:            personalOrganizationName(user),
+			Slug:            EnterpriseOrganizationSlug,
+			Name:            "Enterprise",
 			Status:          OrganizationStatusActive,
 			CreatedByUserID: user.ID,
 		}
 		if err := db.Create(&organization).Error; err != nil {
 			return err
 		}
+		createdOrganization = true
 	} else if err != nil {
 		return err
 	}
-	if err := EnsureOrganizationRBAC(db, organization.ID, user.ID); err != nil {
+
+	ownerUserID := uint(0)
+	if createdOrganization || organization.CreatedByUserID == user.ID {
+		ownerUserID = user.ID
+	}
+	if err := EnsureOrganizationRBAC(db, organization.ID, ownerUserID); err != nil {
 		return err
 	}
 
+	memberRole := OrganizationMemberRoleMember
+	builtinRole := BuiltinRoleMember
+	if ownerUserID != 0 {
+		memberRole = OrganizationMemberRoleOwner
+		builtinRole = BuiltinRoleOrganizationAdmin
+	}
 	joinedAt := time.Now()
 	organizationMember := OrganizationMember{}
 	err = db.Where("organization_id = ? AND user_id = ?", organization.ID, user.ID).First(&organizationMember).Error
@@ -80,7 +103,7 @@ func ensurePersonalTenantWithDB(db *gorm.DB, user *User) error {
 		organizationMember = OrganizationMember{
 			OrganizationID: organization.ID,
 			UserID:         user.ID,
-			Role:           OrganizationMemberRoleOwner,
+			Role:           memberRole,
 			Status:         OrganizationMemberStatusActive,
 			JoinedAt:       &joinedAt,
 		}
@@ -90,14 +113,18 @@ func ensurePersonalTenantWithDB(db *gorm.DB, user *User) error {
 	} else if err != nil {
 		return err
 	}
+	if err := EnsureOrganizationRoleBinding(db, organization.ID, user.ID, user.ID, builtinRole); err != nil {
+		return err
+	}
 
+	workspaceSlug := personalWorkspaceSlug(user.ID)
 	workspace := Workspace{}
-	err = db.Where("organization_id = ? AND slug = ?", organization.ID, "personal").First(&workspace).Error
+	err = db.Where("organization_id = ? AND slug = ?", organization.ID, workspaceSlug).First(&workspace).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		workspace = Workspace{
 			OrganizationID:  organization.ID,
-			Slug:            "personal",
-			Name:            "Personal",
+			Slug:            workspaceSlug,
+			Name:            personalWorkspaceName(user),
 			Type:            WorkspaceTypePersonal,
 			Status:          WorkspaceStatusActive,
 			CreatedByUserID: user.ID,
@@ -112,21 +139,20 @@ func ensurePersonalTenantWithDB(db *gorm.DB, user *User) error {
 	workspaceMember := WorkspaceMember{}
 	err = db.Where("workspace_id = ? AND user_id = ?", workspace.ID, user.ID).First(&workspaceMember).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		workspaceMember = WorkspaceMember{
+		return db.Create(&WorkspaceMember{
 			WorkspaceID: workspace.ID,
 			UserID:      user.ID,
 			Role:        WorkspaceMemberRoleOwner,
-		}
-		return db.Create(&workspaceMember).Error
+		}).Error
 	}
 	return err
 }
 
-func personalOrganizationSlug(userID uint) string {
+func personalWorkspaceSlug(userID uint) string {
 	return fmt.Sprintf("personal-u-%d", userID)
 }
 
-func personalOrganizationName(user *User) string {
+func personalWorkspaceName(user *User) string {
 	name := strings.TrimSpace(user.Username)
 	if name == "" {
 		name = strings.TrimSpace(user.Email)
@@ -134,5 +160,5 @@ func personalOrganizationName(user *User) string {
 	if name == "" {
 		name = fmt.Sprintf("User %d", user.ID)
 	}
-	return name + " Personal Organization"
+	return name + " Personal Workspace"
 }

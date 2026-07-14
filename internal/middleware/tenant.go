@@ -13,11 +13,9 @@ import (
 )
 
 const (
-	tenantContextKey       = "enterprise_tenant_context"
-	organizationIDHeader   = "X-Organization-ID"
-	organizationSlugHeader = "X-Organization-Slug"
-	workspaceIDHeader      = "X-Workspace-ID"
-	workspaceSlugHeader    = "X-Workspace-Slug"
+	tenantContextKey    = "enterprise_tenant_context"
+	workspaceIDHeader   = "X-Workspace-ID"
+	workspaceSlugHeader = "X-Workspace-Slug"
 )
 
 type TenantContext struct {
@@ -44,10 +42,8 @@ func TenantContextMiddleware() gin.HandlerFunc {
 			return
 		}
 		tenant, status, err := ResolveTenantContext(model.DB, user.ID, TenantSelection{
-			OrganizationID:   strings.TrimSpace(c.GetHeader(organizationIDHeader)),
-			OrganizationSlug: strings.TrimSpace(c.GetHeader(organizationSlugHeader)),
-			WorkspaceID:      strings.TrimSpace(c.GetHeader(workspaceIDHeader)),
-			WorkspaceSlug:    strings.TrimSpace(c.GetHeader(workspaceSlugHeader)),
+			WorkspaceID:   strings.TrimSpace(c.GetHeader(workspaceIDHeader)),
+			WorkspaceSlug: strings.TrimSpace(c.GetHeader(workspaceSlugHeader)),
 		})
 		if err != nil {
 			c.JSON(status, gin.H{"error": err.Error()})
@@ -60,17 +56,15 @@ func TenantContextMiddleware() gin.HandlerFunc {
 }
 
 type TenantSelection struct {
-	OrganizationID   string
-	OrganizationSlug string
-	WorkspaceID      string
-	WorkspaceSlug    string
+	WorkspaceID   string
+	WorkspaceSlug string
 }
 
 func ResolveTenantContext(db *gorm.DB, userID uint, selection TenantSelection) (*TenantContext, int, error) {
 	if db == nil {
 		return nil, http.StatusInternalServerError, errors.New("enterprise database is unavailable")
 	}
-	organizationMember, organization, status, err := resolveOrganization(db, userID, selection)
+	organizationMember, organization, status, err := resolveOrganization(db, userID)
 	if err != nil {
 		return nil, status, err
 	}
@@ -153,21 +147,11 @@ func normalizedRoleSet(roles []string) map[string]struct{} {
 	return result
 }
 
-func resolveOrganization(db *gorm.DB, userID uint, selection TenantSelection) (model.OrganizationMember, model.Organization, int, error) {
+func resolveOrganization(db *gorm.DB, userID uint) (model.OrganizationMember, model.Organization, int, error) {
 	query := db.Model(&model.OrganizationMember{}).
 		Joins("JOIN organizations ON organizations.id = organization_members.organization_id AND organizations.deleted_at IS NULL").
 		Where("organization_members.user_id = ? AND organization_members.status = ? AND organization_members.deleted_at IS NULL", userID, model.OrganizationMemberStatusActive).
-		Where("organizations.status = ?", model.OrganizationStatusActive)
-
-	if selection.OrganizationID != "" {
-		organizationID, err := parsePositiveID(selection.OrganizationID, "organization")
-		if err != nil {
-			return model.OrganizationMember{}, model.Organization{}, http.StatusBadRequest, err
-		}
-		query = query.Where("organizations.id = ?", organizationID)
-	} else if selection.OrganizationSlug != "" {
-		query = query.Where("organizations.slug = ?", selection.OrganizationSlug)
-	}
+		Where("organizations.status = ? AND organizations.slug = ?", model.OrganizationStatusActive, model.EnterpriseOrganizationSlug)
 
 	var membership model.OrganizationMember
 	if err := query.Order("organization_members.id ASC").First(&membership).Error; err != nil {

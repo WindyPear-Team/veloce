@@ -102,6 +102,36 @@ func EnsureOrganizationRBAC(db *gorm.DB, organizationID, ownerUserID uint) error
 	return err
 }
 
+func EnsureOrganizationRoleBinding(db *gorm.DB, organizationID, userID, createdByUserID uint, roleSlug string) error {
+	if db == nil || organizationID == 0 || userID == 0 || createdByUserID == 0 {
+		return errors.New("organization, user, and creator are required")
+	}
+	var role Role
+	if err := db.Where("organization_id = ? AND slug = ?", organizationID, roleSlug).First(&role).Error; err != nil {
+		return err
+	}
+	var binding RoleBinding
+	err := db.Where(
+		"organization_id = ? AND user_id = ? AND role_id = ? AND scope_type = ? AND scope_id = ?",
+		organizationID,
+		userID,
+		role.ID,
+		RoleBindingScopeOrganization,
+		organizationID,
+	).First(&binding).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return db.Create(&RoleBinding{
+			OrganizationID:  organizationID,
+			UserID:          userID,
+			RoleID:          role.ID,
+			ScopeType:       RoleBindingScopeOrganization,
+			ScopeID:         organizationID,
+			CreatedByUserID: createdByUserID,
+		}).Error
+	}
+	return err
+}
+
 func ensureEnterprisePermissions(db *gorm.DB) (map[string]Permission, error) {
 	result := make(map[string]Permission, len(enterprisePermissionDefinitions))
 	for _, definition := range enterprisePermissionDefinitions {

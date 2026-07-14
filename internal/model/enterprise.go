@@ -33,7 +33,7 @@ const (
 	WorkspaceMemberRoleViewer = "viewer"
 )
 
-// Organization is the top-level tenant boundary for enterprise resources.
+// Organization is the single enterprise profile for this private deployment.
 // Slug is a stable, human-readable identifier used by URLs and API clients.
 // CreatedByUserID intentionally remains a scalar during the first migration
 // step; membership and ownership relationships are introduced separately.
@@ -65,8 +65,7 @@ type OrganizationMember struct {
 	DeletedAt      gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
-// Department models a tenant-scoped department tree. Slugs are unique within
-// an organization, while the same slug may be reused by another tenant.
+// Department models the enterprise department tree.
 type Department struct {
 	ID             uint           `gorm:"primaryKey" json:"id"`
 	OrganizationID uint           `gorm:"uniqueIndex:idx_department_org_slug;index;not null" json:"organization_id"`

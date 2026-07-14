@@ -677,7 +677,7 @@ func Run() error {
 		userGroup.POST("/api-keys/:id/reset-usage", userAPI.ResetAPIKeyUsage)
 		userGroup.DELETE("/api-keys/:id", userAPI.DeleteAPIKey)
 		userGroup.POST("/api-key/rotate", userAPI.RotateAPIKey)
-		userGroup.GET("/enterprise/organizations", enterpriseAPI.ListOrganizations)
+		userGroup.GET("/enterprise/organization", enterpriseAPI.GetOrganization)
 		userGroup.GET("/enterprise/workspaces", enterpriseAPI.ListWorkspaces)
 		userGroup.POST("/enterprise/context", enterpriseAPI.SelectContext)
 		service.RegisterCommunityAdvancedChatUserRoutes(userGroup)

@@ -1,8 +1,8 @@
 package api
 
 import (
-	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/WindyPear-Team/veloce/internal/middleware"
@@ -13,43 +13,26 @@ import (
 
 type EnterpriseAPI struct{}
 
-type enterpriseOrganizationResponse struct {
-	Organization model.Organization `json:"organization"`
-	Role         string             `json:"role"`
-}
-
 type enterpriseWorkspaceResponse struct {
 	Workspace model.Workspace `json:"workspace"`
 	Role      string          `json:"role"`
 }
 
 type enterpriseContextInput struct {
-	OrganizationID   *uint  `json:"organization_id"`
-	OrganizationSlug string `json:"organization_slug"`
-	WorkspaceID      *uint  `json:"workspace_id"`
-	WorkspaceSlug    string `json:"workspace_slug"`
+	WorkspaceID   *uint  `json:"workspace_id"`
+	WorkspaceSlug string `json:"workspace_slug"`
 }
 
-func (api *EnterpriseAPI) ListOrganizations(c *gin.Context) {
-	user, ok := enterpriseCurrentUser(c)
-	if !ok || !enterpriseFeatureAvailable(c) {
+func (api *EnterpriseAPI) GetOrganization(c *gin.Context) {
+	if _, ok := enterpriseCurrentUser(c); !ok || !enterpriseFeatureAvailable(c) {
 		return
 	}
-	var memberships []model.OrganizationMember
-	if err := model.DB.Preload("Organization").
-		Where("user_id = ? AND status = ?", user.ID, model.OrganizationMemberStatusActive).
-		Order("id ASC").Find(&memberships).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list organizations"})
+	tenant, ok := middleware.CurrentTenantContext(c)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Enterprise tenant context is unavailable"})
 		return
 	}
-	items := make([]enterpriseOrganizationResponse, 0, len(memberships))
-	for _, membership := range memberships {
-		if membership.Organization.ID == 0 || membership.Organization.Status != model.OrganizationStatusActive {
-			continue
-		}
-		items = append(items, enterpriseOrganizationResponse{Organization: membership.Organization, Role: membership.Role})
-	}
-	c.JSON(http.StatusOK, gin.H{"organizations": items})
+	c.JSON(http.StatusOK, gin.H{"organization": tenant.Organization, "role": tenant.OrganizationMember.Role})
 }
 
 func (api *EnterpriseAPI) ListWorkspaces(c *gin.Context) {
@@ -92,14 +75,10 @@ func (api *EnterpriseAPI) SelectContext(c *gin.Context) {
 		return
 	}
 	selection := middleware.TenantSelection{
-		OrganizationSlug: strings.TrimSpace(input.OrganizationSlug),
-		WorkspaceSlug:    strings.TrimSpace(input.WorkspaceSlug),
-	}
-	if input.OrganizationID != nil {
-		selection.OrganizationID = fmt.Sprint(*input.OrganizationID)
+		WorkspaceSlug: strings.TrimSpace(input.WorkspaceSlug),
 	}
 	if input.WorkspaceID != nil {
-		selection.WorkspaceID = fmt.Sprint(*input.WorkspaceID)
+		selection.WorkspaceID = strconv.FormatUint(uint64(*input.WorkspaceID), 10)
 	}
 	tenant, status, err := middleware.ResolveTenantContext(model.DB, user.ID, selection)
 	if err != nil {

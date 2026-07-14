@@ -74,7 +74,7 @@ BOOTSTRAP_ADMIN_EMAILS=
 ENTERPRISE_FEATURES_ENABLED=false
 ```
 
-`ENTERPRISE_FEATURES_ENABLED` is the master switch for organization, multi-tenant, and governance features. It defaults to `false` so existing personal and community deployments keep their current behavior while enterprise capabilities are introduced incrementally.
+`ENTERPRISE_FEATURES_ENABLED` is the master switch for single-enterprise private-deployment organization, workspace, and governance features. One deployment represents one enterprise. It defaults to `false` so existing personal and community deployments keep their current behavior.
 
 `DB_DRIVER` accepts `sqlite` (default), `postgres`, and `mysql`. SQLite uses
 `DB_PATH`. For PostgreSQL or MySQL, set `DB_DSN` (or `DATABASE_URL`) and the
