@@ -588,7 +588,9 @@ func (api *EnterpriseAPI) ListRoleBindings(c *gin.Context) {
 		return
 	}
 	var bindings []model.RoleBinding
-	if err := model.DB.Preload("Role").Where("organization_id = ?", tenant.Organization.ID).Order("id ASC").Find(&bindings).Error; err != nil {
+	if err := model.DB.Preload("Role").Preload("User").Joins("JOIN users ON users.id = role_bindings.user_id").
+		Where("role_bindings.organization_id = ? AND users.username NOT LIKE ? AND users.email NOT LIKE ?", tenant.Organization.ID, "enterprise-pool-%", "%@internal.invalid").
+		Order("role_bindings.id ASC").Find(&bindings).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list role bindings"})
 		return
 	}
@@ -614,8 +616,7 @@ func (api *EnterpriseAPI) CreateRoleBinding(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid role binding scope"})
 		return
 	}
-	var membership model.OrganizationMember
-	if err := model.DB.Where("organization_id = ? AND user_id = ? AND status = ?", tenant.Organization.ID, input.UserID, model.OrganizationMemberStatusActive).First(&membership).Error; err != nil {
+	if !enterpriseActiveMember(tenant.Organization.ID, input.UserID) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Active organization member not found"})
 		return
 	}
@@ -671,7 +672,7 @@ func (api *EnterpriseAPI) ListTasks(c *gin.Context) {
 		return
 	}
 	var tasks []model.EnterpriseTask
-	query := model.DB.Where("organization_id = ?", tenant.Organization.ID).
+	query := model.DB.Preload("Owner").Where("organization_id = ?", tenant.Organization.ID).
 		Where("created_by_user_id = ? OR owner_user_id = ? OR id IN (?)", user.ID, user.ID, model.DB.Model(&model.EnterpriseTaskAssignment{}).Select("task_id").Where("user_id = ?", user.ID)).
 		Order("updated_at DESC")
 	if err := query.Find(&tasks).Error; err != nil {
@@ -686,7 +687,7 @@ func (api *EnterpriseAPI) ListManagedTasks(c *gin.Context) {
 		return
 	}
 	var tasks []model.EnterpriseTask
-	if err := model.DB.Where("organization_id = ?", tenant.Organization.ID).Order("updated_at DESC").Find(&tasks).Error; err != nil {
+	if err := model.DB.Preload("Owner").Where("organization_id = ?", tenant.Organization.ID).Order("updated_at DESC").Find(&tasks).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list tasks"})
 		return
 	}
@@ -796,6 +797,10 @@ func (api *EnterpriseAPI) CreateSharedPool(c *gin.Context) {
 	var input enterpriseSharedPoolInput
 	if err := c.ShouldBindJSON(&input); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid shared pool"})
+		return
+	}
+	if strings.EqualFold(strings.TrimSpace(input.ScopeType), model.EnterprisePoolScopeTask) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Task pools are created automatically with their task"})
 		return
 	}
 	pool, err := enterpriseSharedPoolFromInput(tenant.Organization.ID, input, user.ID)
@@ -1593,7 +1598,7 @@ func (api *EnterpriseAPI) ListDeviceAssignments(c *gin.Context) {
 		return
 	}
 	var assignments []model.EnterpriseDeviceAssignment
-	if err := model.DB.Where("organization_id = ?", tenant.Organization.ID).Order("created_at DESC").Find(&assignments).Error; err != nil {
+	if err := model.DB.Preload("User").Where("organization_id = ?", tenant.Organization.ID).Order("created_at DESC").Find(&assignments).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list device assignments"})
 		return
 	}
@@ -1971,7 +1976,9 @@ func enterprisePoolAccount(user model.User) bool {
 }
 func enterpriseActiveMemberWithDB(db *gorm.DB, organizationID, userID uint) bool {
 	var count int64
-	return db.Model(&model.OrganizationMember{}).Where("organization_id = ? AND user_id = ? AND status = ?", organizationID, userID, model.OrganizationMemberStatusActive).Count(&count).Error == nil && count == 1
+	return db.Model(&model.OrganizationMember{}).Joins("JOIN users ON users.id = organization_members.user_id").
+		Where("organization_members.organization_id = ? AND organization_members.user_id = ? AND organization_members.status = ? AND users.username NOT LIKE ? AND users.email NOT LIKE ?", organizationID, userID, model.OrganizationMemberStatusActive, "enterprise-pool-%", "%@internal.invalid").
+		Count(&count).Error == nil && count == 1
 }
 func enterpriseTaskAssignedTo(taskID, userID uint) bool {
 	var count int64

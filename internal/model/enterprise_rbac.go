@@ -68,7 +68,7 @@ type RoleBinding struct {
 	OrganizationID  uint           `gorm:"uniqueIndex:idx_role_binding_identity;index;not null" json:"organization_id"`
 	Organization    Organization   `gorm:"foreignKey:OrganizationID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
 	UserID          uint           `gorm:"uniqueIndex:idx_role_binding_identity;index;not null" json:"user_id"`
-	User            User           `gorm:"foreignKey:UserID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
+	User            User           `gorm:"foreignKey:UserID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"user,omitempty"`
 	RoleID          uint           `gorm:"uniqueIndex:idx_role_binding_identity;index;not null" json:"role_id"`
 	Role            Role           `gorm:"foreignKey:RoleID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
 	ScopeType       string         `gorm:"uniqueIndex:idx_role_binding_identity;size:20;not null;index" json:"scope_type"`

@@ -51,6 +51,7 @@ type EnterpriseTask struct {
 	WorkspaceID     *uint          `gorm:"index" json:"workspace_id,omitempty"`
 	CreatedByUserID uint           `gorm:"index;not null" json:"created_by_user_id"`
 	OwnerUserID     uint           `gorm:"index;not null" json:"owner_user_id"`
+	Owner           User           `gorm:"foreignKey:OwnerUserID" json:"owner,omitempty"`
 	ParentTaskID    *uint          `gorm:"index" json:"parent_task_id,omitempty"`
 	Title           string         `gorm:"size:200;not null" json:"title"`
 	Description     string         `gorm:"type:text;not null;default:''" json:"description"`
@@ -158,6 +159,7 @@ type EnterpriseDeviceAssignment struct {
 	ScopeType      string         `gorm:"size:20;not null;index" json:"scope_type"`
 	DepartmentID   *uint          `gorm:"index" json:"department_id,omitempty"`
 	UserID         *uint          `gorm:"index" json:"user_id,omitempty"`
+	User           *User          `gorm:"foreignKey:UserID" json:"user,omitempty"`
 	TaskID         *uint          `gorm:"index" json:"task_id,omitempty"`
 	AllowedTools   string         `gorm:"type:text;not null;default:'[]'" json:"allowed_tools"`
 	Classification string         `gorm:"size:40;not null;default:''" json:"classification"`
