@@ -56,17 +56,20 @@ type Organization struct {
 // organization-scoped role. Fine-grained RBAC bindings will be layered on top
 // of this bootstrap role in a later migration.
 type OrganizationMember struct {
-	ID             uint           `gorm:"primaryKey" json:"id"`
-	OrganizationID uint           `gorm:"uniqueIndex:idx_organization_member;index;not null" json:"organization_id"`
-	Organization   Organization   `gorm:"foreignKey:OrganizationID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
-	UserID         uint           `gorm:"uniqueIndex:idx_organization_member;index;not null" json:"user_id"`
-	User           User           `gorm:"foreignKey:UserID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
-	Role           string         `gorm:"size:20;not null;default:'member';index" json:"role"`
-	Status         string         `gorm:"size:20;not null;default:'active';index" json:"status"`
-	JoinedAt       *time.Time     `json:"joined_at,omitempty"`
-	CreatedAt      time.Time      `json:"created_at"`
-	UpdatedAt      time.Time      `json:"updated_at"`
-	DeletedAt      gorm.DeletedAt `gorm:"index" json:"-"`
+	ID             uint         `gorm:"primaryKey" json:"id"`
+	OrganizationID uint         `gorm:"uniqueIndex:idx_organization_member;index;not null" json:"organization_id"`
+	Organization   Organization `gorm:"foreignKey:OrganizationID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
+	UserID         uint         `gorm:"uniqueIndex:idx_organization_member;index;not null" json:"user_id"`
+	// User is returned with employee-management responses so the UI can show
+	// the real account name rather than an internal user ID. Sensitive user
+	// fields (password and API key) are excluded by User's own JSON tags.
+	User      User           `gorm:"foreignKey:UserID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"user"`
+	Role      string         `gorm:"size:20;not null;default:'member';index" json:"role"`
+	Status    string         `gorm:"size:20;not null;default:'active';index" json:"status"`
+	JoinedAt  *time.Time     `json:"joined_at,omitempty"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 // Department models the enterprise department tree.

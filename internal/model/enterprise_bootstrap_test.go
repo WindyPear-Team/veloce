@@ -1,6 +1,7 @@
 package model
 
 import (
+	"encoding/json"
 	"fmt"
 	"testing"
 
@@ -96,6 +97,23 @@ func TestExistingUserEnterpriseBackfillIncludesEveryBatch(t *testing.T) {
 		t.Fatalf("employee membership count = %d, want %d", members, len(users))
 	}
 	assertEnterpriseEmployee(t, db, organization.ID, users[len(users)-1], OrganizationMemberRoleMember, BuiltinRoleMember)
+}
+
+func TestOrganizationMemberJSONIncludesEmployeeAccount(t *testing.T) {
+	payload, err := json.Marshal(OrganizationMember{
+		UserID: 7,
+		User:   User{ID: 7, Username: "existing-admin", Email: "admin@example.com"},
+	})
+	if err != nil {
+		t.Fatalf("marshal employee membership: %v", err)
+	}
+	var result map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &result); err != nil {
+		t.Fatalf("unmarshal employee membership: %v", err)
+	}
+	if _, ok := result["user"]; !ok {
+		t.Fatalf("employee membership response must include the user account: %s", payload)
+	}
 }
 
 func openEnterpriseBootstrapTestDB(t *testing.T, name string) *gorm.DB {
