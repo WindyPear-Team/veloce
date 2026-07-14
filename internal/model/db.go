@@ -93,6 +93,7 @@ func InitDB() {
 		&RoleBinding{},
 		&EnterpriseTask{},
 		&EnterpriseTaskAssignment{},
+		&EnterpriseTaskDepartment{},
 		&DepartmentMember{},
 		&EnterpriseSharedPool{},
 		&EnterpriseSharedSession{},

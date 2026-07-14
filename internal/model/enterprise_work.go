@@ -13,6 +13,7 @@ const (
 	EnterpriseTaskStatusAssigned  = "assigned"
 	EnterpriseTaskStatusRunning   = "running"
 	EnterpriseTaskStatusBlocked   = "blocked"
+	EnterpriseTaskStatusReview    = "review"
 	EnterpriseTaskStatusCompleted = "completed"
 	EnterpriseTaskStatusCancelled = "cancelled"
 
@@ -71,6 +72,18 @@ type EnterpriseTaskAssignment struct {
 	AssignedBy uint           `gorm:"index;not null" json:"assigned_by"`
 	CreatedAt  time.Time      `json:"created_at"`
 	DeletedAt  gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+// EnterpriseTaskDepartment records every department participating in a task.
+// EnterpriseTask.DepartmentID remains the task's primary department.
+type EnterpriseTaskDepartment struct {
+	ID             uint           `gorm:"primaryKey" json:"id"`
+	OrganizationID uint           `gorm:"uniqueIndex:idx_enterprise_task_department;index;not null" json:"organization_id"`
+	TaskID         uint           `gorm:"uniqueIndex:idx_enterprise_task_department;index;not null" json:"task_id"`
+	DepartmentID   uint           `gorm:"uniqueIndex:idx_enterprise_task_department;index;not null" json:"department_id"`
+	AddedBy        uint           `gorm:"index;not null" json:"added_by"`
+	CreatedAt      time.Time      `json:"created_at"`
+	DeletedAt      gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
 // DepartmentMember is the explicit audience for department-scoped shared
@@ -188,7 +201,7 @@ type QuotaLedger struct {
 
 func NormalizeEnterpriseTaskStatus(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case EnterpriseTaskStatusAssigned, EnterpriseTaskStatusRunning, EnterpriseTaskStatusBlocked, EnterpriseTaskStatusCompleted, EnterpriseTaskStatusCancelled:
+	case EnterpriseTaskStatusAssigned, EnterpriseTaskStatusRunning, EnterpriseTaskStatusBlocked, EnterpriseTaskStatusReview, EnterpriseTaskStatusCompleted, EnterpriseTaskStatusCancelled:
 		return strings.ToLower(strings.TrimSpace(value))
 	default:
 		return EnterpriseTaskStatusDraft

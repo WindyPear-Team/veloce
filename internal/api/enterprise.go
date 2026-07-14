@@ -59,6 +59,13 @@ type enterpriseTaskInput struct {
 type enterpriseTaskStatusInput struct {
 	Status string `json:"status"`
 }
+type enterpriseTaskParticipantInput struct {
+	UserID uint   `json:"user_id"`
+	Role   string `json:"role"`
+}
+type enterpriseTaskDepartmentInput struct {
+	DepartmentID uint `json:"department_id"`
+}
 type enterpriseMemberInput struct {
 	Role   *string `json:"role"`
 	Status *string `json:"status"`
@@ -565,6 +572,11 @@ func (api *EnterpriseAPI) CreateTask(c *gin.Context) {
 		if err := tx.Create(&assignments).Error; err != nil {
 			return err
 		}
+		if task.DepartmentID != nil {
+			if err := tx.Where("organization_id = ? AND task_id = ? AND department_id = ?", task.OrganizationID, task.ID, *task.DepartmentID).FirstOrCreate(&model.EnterpriseTaskDepartment{OrganizationID: task.OrganizationID, TaskID: task.ID, DepartmentID: *task.DepartmentID, AddedBy: user.ID}).Error; err != nil {
+				return err
+			}
+		}
 		return ensureEnterpriseSharedPool(tx, tenant.Organization.ID, model.EnterprisePoolScopeTask, nil, &task.ID, task.Title, user.ID)
 	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create task"})
@@ -1013,6 +1025,13 @@ func (api *EnterpriseAPI) UpdateTaskStatus(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "Task access denied"})
 		return
 	}
+	if status == model.EnterpriseTaskStatusCompleted && task.OwnerUserID != user.ID && !user.IsAdmin {
+		status = model.EnterpriseTaskStatusReview
+	}
+	if (status == model.EnterpriseTaskStatusCompleted || status == model.EnterpriseTaskStatusCancelled) && task.OwnerUserID != user.ID && !user.IsAdmin {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Only the task leader can confirm completion or cancellation"})
+		return
+	}
 	updates := map[string]interface{}{"status": status}
 	if status == model.EnterpriseTaskStatusRunning {
 		updates["started_at"] = time.Now()
@@ -1026,6 +1045,198 @@ func (api *EnterpriseAPI) UpdateTaskStatus(c *gin.Context) {
 	}
 	model.DB.First(&task, task.ID)
 	c.JSON(http.StatusOK, task)
+}
+
+func (api *EnterpriseAPI) GetTaskDetail(c *gin.Context) {
+	user, ok := enterpriseCurrentUser(c)
+	if !ok {
+		return
+	}
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return
+	}
+	id, err := parseEnterpriseID(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	var task model.EnterpriseTask
+	if err := model.DB.Where("id = ? AND organization_id = ?", id, tenant.Organization.ID).First(&task).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Task not found"})
+		return
+	}
+	if task.OwnerUserID != user.ID && task.CreatedByUserID != user.ID && !enterpriseTaskAssignedTo(task.ID, user.ID) && !user.IsAdmin {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Task access denied"})
+		return
+	}
+	api.writeTaskDetail(c, task)
+}
+
+func (api *EnterpriseAPI) GetManagedTaskDetail(c *gin.Context) {
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return
+	}
+	id, err := parseEnterpriseID(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	var task model.EnterpriseTask
+	if err := model.DB.Where("id = ? AND organization_id = ?", id, tenant.Organization.ID).First(&task).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Task not found"})
+		return
+	}
+	api.writeTaskDetail(c, task)
+}
+
+func (api *EnterpriseAPI) writeTaskDetail(c *gin.Context, task model.EnterpriseTask) {
+	var assignments []model.EnterpriseTaskAssignment
+	var departments []model.EnterpriseTaskDepartment
+	var devices []model.EnterpriseDeviceAssignment
+	var pool model.EnterpriseSharedPool
+	var quota model.QuotaAccount
+	model.DB.Where("task_id = ?", task.ID).Order("role ASC, id ASC").Find(&assignments)
+	model.DB.Where("task_id = ?", task.ID).Find(&departments)
+	model.DB.Where("task_id = ? AND status = ?", task.ID, model.EnterpriseDeviceAssignmentActive).Find(&devices)
+	model.DB.Where("organization_id = ? AND scope_type = ? AND task_id = ?", task.OrganizationID, model.EnterprisePoolScopeTask, task.ID).First(&pool)
+	if pool.ID != 0 {
+		model.DB.Where("organization_id = ? AND pool_id = ?", task.OrganizationID, pool.ID).First(&quota)
+	}
+	c.JSON(http.StatusOK, gin.H{"task": task, "assignments": assignments, "departments": departments, "device_assignments": devices, "pool": pool, "quota_account": quota})
+}
+
+func (api *EnterpriseAPI) AddTaskParticipant(c *gin.Context) {
+	user, ok := enterpriseCurrentUser(c)
+	if !ok {
+		return
+	}
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return
+	}
+	taskID, err := parseEnterpriseID(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	var input enterpriseTaskParticipantInput
+	if err := c.ShouldBindJSON(&input); err != nil || input.UserID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Participant is required"})
+		return
+	}
+	if !enterpriseActiveMember(tenant.Organization.ID, input.UserID) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Participant must be an active organization member"})
+		return
+	}
+	role := strings.ToLower(strings.TrimSpace(input.Role))
+	if role != model.EnterpriseTaskAssignmentAssignee {
+		role = model.EnterpriseTaskAssignmentParticipant
+	}
+	var task model.EnterpriseTask
+	if err := model.DB.Where("id = ? AND organization_id = ?", taskID, tenant.Organization.ID).First(&task).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Task not found"})
+		return
+	}
+	assignment := model.EnterpriseTaskAssignment{TaskID: task.ID, UserID: input.UserID, Role: role, AssignedBy: user.ID}
+	if err := model.DB.Where("task_id = ? AND user_id = ? AND role = ?", task.ID, input.UserID, role).FirstOrCreate(&assignment).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to add participant"})
+		return
+	}
+	c.JSON(http.StatusCreated, assignment)
+}
+
+func (api *EnterpriseAPI) DeleteTaskParticipant(c *gin.Context) {
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return
+	}
+	taskID, err := parseEnterpriseID(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	userID, err := parseEnterpriseID(c.Param("user_id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	var task model.EnterpriseTask
+	if err := model.DB.Where("id = ? AND organization_id = ?", taskID, tenant.Organization.ID).First(&task).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Task not found"})
+		return
+	}
+	if task.OwnerUserID == userID {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Task leader cannot be removed"})
+		return
+	}
+	result := model.DB.Where("task_id = ? AND user_id = ?", task.ID, userID).Delete(&model.EnterpriseTaskAssignment{})
+	if result.Error != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to remove participant"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Participant removed"})
+}
+
+func (api *EnterpriseAPI) AddTaskDepartment(c *gin.Context) {
+	user, ok := enterpriseCurrentUser(c)
+	if !ok {
+		return
+	}
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return
+	}
+	taskID, err := parseEnterpriseID(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	var input enterpriseTaskDepartmentInput
+	if err := c.ShouldBindJSON(&input); err != nil || input.DepartmentID == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Department is required"})
+		return
+	}
+	var department model.Department
+	if err := model.DB.Where("id = ? AND organization_id = ?", input.DepartmentID, tenant.Organization.ID).First(&department).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Department not found"})
+		return
+	}
+	var task model.EnterpriseTask
+	if err := model.DB.Where("id = ? AND organization_id = ?", taskID, tenant.Organization.ID).First(&task).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Task not found"})
+		return
+	}
+	item := model.EnterpriseTaskDepartment{OrganizationID: tenant.Organization.ID, TaskID: task.ID, DepartmentID: input.DepartmentID, AddedBy: user.ID}
+	if err := model.DB.Where("organization_id = ? AND task_id = ? AND department_id = ?", tenant.Organization.ID, task.ID, input.DepartmentID).FirstOrCreate(&item).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to add department"})
+		return
+	}
+	c.JSON(http.StatusCreated, item)
+}
+
+func (api *EnterpriseAPI) DeleteTaskDepartment(c *gin.Context) {
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return
+	}
+	taskID, err := parseEnterpriseID(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	departmentID, err := parseEnterpriseID(c.Param("department_id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	result := model.DB.Where("organization_id = ? AND task_id = ? AND department_id = ?", tenant.Organization.ID, taskID, departmentID).Delete(&model.EnterpriseTaskDepartment{})
+	if result.Error != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to remove department"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Department removed"})
 }
 
 func (api *EnterpriseAPI) ListDevices(c *gin.Context) {
@@ -1447,6 +1658,10 @@ func enterpriseCanAccessSharedPool(user *model.User, organizationID uint, pool m
 		return true
 	}
 	if pool.ScopeType == model.EnterprisePoolScopeTask && pool.TaskID != nil {
+		var task model.EnterpriseTask
+		if model.DB.Where("id = ? AND organization_id = ?", *pool.TaskID, organizationID).First(&task).Error != nil || task.Status != model.EnterpriseTaskStatusRunning {
+			return false
+		}
 		if enterpriseTaskAssignedTo(*pool.TaskID, user.ID) {
 			return true
 		}
