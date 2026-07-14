@@ -91,6 +91,12 @@ func InitDB() {
 		&Role{},
 		&RolePermission{},
 		&RoleBinding{},
+		&EnterpriseTask{},
+		&EnterpriseTaskAssignment{},
+		&EnterpriseDevice{},
+		&EnterpriseDeviceAssignment{},
+		&QuotaAccount{},
+		&QuotaLedger{},
 	); err != nil {
 		log.Fatalf("failed to migrate enterprise database models: %v", err)
 	}
