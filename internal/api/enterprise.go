@@ -72,7 +72,6 @@ type enterpriseMemberInput struct {
 	Status *string `json:"status"`
 }
 type enterpriseCreateMemberInput struct {
-	UserID   uint   `json:"user_id"`
 	Username string `json:"username"`
 	Email    string `json:"email"`
 	Password string `json:"password"`
@@ -267,61 +266,53 @@ func (api *EnterpriseAPI) CreateMember(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid employee account"})
 		return
 	}
-	if input.UserID == 0 && (strings.TrimSpace(input.Username) == "" || strings.TrimSpace(input.Email) == "" || input.Password == "") {
+	if strings.TrimSpace(input.Username) == "" || strings.TrimSpace(input.Email) == "" || input.Password == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Username, email, and password are required"})
 		return
 	}
 	var account model.User
-	createdAccount := input.UserID == 0
-	if !createdAccount {
-		if err := model.DB.First(&account, input.UserID).Error; err != nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "User not found"})
-			return
-		}
-	} else {
-		input.Username = strings.TrimSpace(input.Username)
-		input.Email = strings.ToLower(strings.TrimSpace(input.Email))
-		if len([]rune(input.Username)) < 3 || len([]rune(input.Username)) > 100 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Username must be between 3 and 100 characters"})
-			return
-		}
-		if input.Email == "" || !strings.Contains(input.Email, "@") {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Valid email is required"})
-			return
-		}
-		if len(input.Password) < 8 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Password must be at least 8 characters"})
-			return
-		}
-		var count int64
-		if err := model.DB.Model(&model.User{}).Where("username = ? OR email = ?", input.Username, input.Email).Count(&count).Error; err != nil || count > 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Username or email already exists"})
-			return
-		}
-		passwordHash, err := bcrypt.GenerateFromPassword([]byte(input.Password), bcrypt.DefaultCost)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to secure password"})
-			return
-		}
-		group, err := model.EnsureDefaultGroup()
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to prepare user group"})
-			return
-		}
-		apiKey, _, err := service.GenerateAPIKey()
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create employee account"})
-			return
-		}
-		account = model.User{Username: input.Username, Email: input.Email, PasswordHash: string(passwordHash), EmailVerified: true, GroupID: group.ID, APIKey: apiKey}
-		if err := model.DB.Create(&account).Error; err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to create employee account"})
-			return
-		}
-		if err := model.DB.Where(&model.UserGroupMembership{UserID: account.ID, GroupID: group.ID}).FirstOrCreate(&model.UserGroupMembership{UserID: account.ID, GroupID: group.ID}).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to initialize employee account"})
-			return
-		}
+	input.Username = strings.TrimSpace(input.Username)
+	input.Email = strings.ToLower(strings.TrimSpace(input.Email))
+	if len([]rune(input.Username)) < 3 || len([]rune(input.Username)) > 100 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Username must be between 3 and 100 characters"})
+		return
+	}
+	if input.Email == "" || !strings.Contains(input.Email, "@") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Valid email is required"})
+		return
+	}
+	if len(input.Password) < 8 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Password must be at least 8 characters"})
+		return
+	}
+	var count int64
+	if err := model.DB.Model(&model.User{}).Where("username = ? OR email = ?", input.Username, input.Email).Count(&count).Error; err != nil || count > 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Username or email already exists"})
+		return
+	}
+	passwordHash, err := bcrypt.GenerateFromPassword([]byte(input.Password), bcrypt.DefaultCost)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to secure password"})
+		return
+	}
+	group, err := model.EnsureDefaultGroup()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to prepare user group"})
+		return
+	}
+	apiKey, _, err := service.GenerateAPIKey()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create employee account"})
+		return
+	}
+	account = model.User{Username: input.Username, Email: input.Email, PasswordHash: string(passwordHash), EmailVerified: true, GroupID: group.ID, APIKey: apiKey}
+	if err := model.DB.Create(&account).Error; err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to create employee account"})
+		return
+	}
+	if err := model.DB.Where(&model.UserGroupMembership{UserID: account.ID, GroupID: group.ID}).FirstOrCreate(&model.UserGroupMembership{UserID: account.ID, GroupID: group.ID}).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to initialize employee account"})
+		return
 	}
 	if enterprisePoolAccount(account) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Internal pool accounts cannot become employees"})
@@ -336,9 +327,6 @@ func (api *EnterpriseAPI) CreateMember(c *gin.Context) {
 				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to restore member"})
 				return
 			}
-		} else if !createdAccount {
-			c.JSON(http.StatusConflict, gin.H{"error": "User is already an enterprise member"})
-			return
 		} else if err := model.DB.Model(&member).Updates(map[string]interface{}{"role": role, "status": model.OrganizationMemberStatusActive, "joined_at": joinedAt}).Error; err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to initialize employee membership"})
 			return
