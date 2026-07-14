@@ -53,6 +53,23 @@ type enterpriseTaskStatusInput struct {
 	Status string `json:"status"`
 }
 
+type enterpriseDeviceInput struct {
+	ExternalDeviceID    string `json:"external_device_id"`
+	Name                string `json:"name"`
+	Kind                string `json:"kind"`
+	OwnerUserID         *uint  `json:"owner_user_id"`
+	ManagedByEnterprise bool   `json:"managed_by_enterprise"`
+}
+type enterpriseDeviceAssignmentInput struct {
+	DeviceID       uint       `json:"device_id"`
+	UserID         *uint      `json:"user_id"`
+	DepartmentID   *uint      `json:"department_id"`
+	TaskID         *uint      `json:"task_id"`
+	AllowedTools   []string   `json:"allowed_tools"`
+	Classification string     `json:"classification"`
+	ExpiresAt      *time.Time `json:"expires_at"`
+}
+
 func (api *EnterpriseAPI) GetOrganization(c *gin.Context) {
 	if _, ok := enterpriseCurrentUser(c); !ok || !enterpriseFeatureAvailable(c) {
 		return
@@ -419,6 +436,93 @@ func (api *EnterpriseAPI) UpdateTaskStatus(c *gin.Context) {
 	}
 	model.DB.First(&task, task.ID)
 	c.JSON(http.StatusOK, task)
+}
+
+func (api *EnterpriseAPI) ListDevices(c *gin.Context) {
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return
+	}
+	var devices []model.EnterpriseDevice
+	if err := model.DB.Where("organization_id = ?", tenant.Organization.ID).Order("created_at DESC").Find(&devices).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list devices"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"devices": devices})
+}
+func (api *EnterpriseAPI) CreateDevice(c *gin.Context) {
+	_, ok := enterpriseCurrentUser(c)
+	if !ok {
+		return
+	}
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return
+	}
+	var input enterpriseDeviceInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid device"})
+		return
+	}
+	input.ExternalDeviceID, input.Name, input.Kind = strings.TrimSpace(input.ExternalDeviceID), strings.TrimSpace(input.Name), strings.TrimSpace(input.Kind)
+	if input.ExternalDeviceID == "" || input.Name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Device id and name are required"})
+		return
+	}
+	if input.Kind == "" {
+		input.Kind = "connector"
+	}
+	device := model.EnterpriseDevice{OrganizationID: tenant.Organization.ID, ExternalDeviceID: input.ExternalDeviceID, Name: input.Name, Kind: input.Kind, OwnerUserID: input.OwnerUserID, ManagedByEnterprise: input.ManagedByEnterprise, Status: model.EnterpriseDeviceStatusActive}
+	if err := model.DB.Create(&device).Error; err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": "Failed to create device"})
+		return
+	}
+	c.JSON(http.StatusCreated, device)
+}
+func (api *EnterpriseAPI) ListDeviceAssignments(c *gin.Context) {
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return
+	}
+	var assignments []model.EnterpriseDeviceAssignment
+	if err := model.DB.Where("organization_id = ?", tenant.Organization.ID).Order("created_at DESC").Find(&assignments).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list device assignments"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"assignments": assignments})
+}
+func (api *EnterpriseAPI) AssignDevice(c *gin.Context) {
+	user, ok := enterpriseCurrentUser(c)
+	if !ok {
+		return
+	}
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return
+	}
+	var input enterpriseDeviceAssignmentInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid device assignment"})
+		return
+	}
+	assignment, err := service.AssignEnterpriseDevice(model.DB, service.EnterpriseDeviceAssignmentInput{OrganizationID: tenant.Organization.ID, DeviceID: input.DeviceID, DepartmentID: input.DepartmentID, UserID: input.UserID, TaskID: input.TaskID, AllowedTools: input.AllowedTools, Classification: input.Classification, AssignedBy: user.ID, ExpiresAt: input.ExpiresAt})
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusCreated, assignment)
+}
+func (api *EnterpriseAPI) ListQuotaAccounts(c *gin.Context) {
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return
+	}
+	var accounts []model.QuotaAccount
+	if err := model.DB.Where("organization_id = ?", tenant.Organization.ID).Order("scope_type ASC, id ASC").Find(&accounts).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list quota accounts"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"accounts": accounts})
 }
 
 func enterpriseActiveMember(organizationID, userID uint) bool {
