@@ -70,6 +70,9 @@ type enterpriseMemberInput struct {
 	Role   *string `json:"role"`
 	Status *string `json:"status"`
 }
+type enterpriseMemberDepartmentsInput struct {
+	DepartmentIDs []uint `json:"department_ids"`
+}
 
 type enterpriseDeviceInput struct {
 	ExternalDeviceID    string `json:"external_device_id"`
@@ -265,6 +268,76 @@ func (api *EnterpriseAPI) UpdateMember(c *gin.Context) {
 	}
 	model.DB.First(&member, member.ID)
 	c.JSON(http.StatusOK, member)
+}
+
+func (api *EnterpriseAPI) ListMemberDepartments(c *gin.Context) {
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return
+	}
+	userID, err := parseEnterpriseID(c.Param("user_id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	var items []model.DepartmentMember
+	if err := model.DB.Where("organization_id = ? AND user_id = ?", tenant.Organization.ID, userID).Order("department_id ASC").Find(&items).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list member departments"})
+		return
+	}
+	departmentIDs := make([]uint, 0, len(items))
+	for _, item := range items {
+		departmentIDs = append(departmentIDs, item.DepartmentID)
+	}
+	c.JSON(http.StatusOK, gin.H{"department_ids": departmentIDs})
+}
+
+func (api *EnterpriseAPI) ReplaceMemberDepartments(c *gin.Context) {
+	user, ok := enterpriseCurrentUser(c)
+	if !ok {
+		return
+	}
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return
+	}
+	userID, err := parseEnterpriseID(c.Param("user_id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	var input enterpriseMemberDepartmentsInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid member departments"})
+		return
+	}
+	if !enterpriseActiveMember(tenant.Organization.ID, userID) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Member not found"})
+		return
+	}
+	ids := uniqueEnterpriseUserIDs(input.DepartmentIDs)
+	if len(ids) > 0 {
+		var count int64
+		if err := model.DB.Model(&model.Department{}).Where("organization_id = ? AND id IN ?", tenant.Organization.ID, ids).Count(&count).Error; err != nil || count != int64(len(ids)) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Department not found"})
+			return
+		}
+	}
+	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("organization_id = ? AND user_id = ?", tenant.Organization.ID, userID).Delete(&model.DepartmentMember{}).Error; err != nil {
+			return err
+		}
+		for _, departmentID := range ids {
+			if err := tx.Create(&model.DepartmentMember{OrganizationID: tenant.Organization.ID, DepartmentID: departmentID, UserID: userID}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update member departments"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"department_ids": ids, "updated_by": user.ID})
 }
 
 func (api *EnterpriseAPI) ListDepartments(c *gin.Context) {

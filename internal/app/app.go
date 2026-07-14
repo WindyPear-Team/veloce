@@ -684,6 +684,8 @@ func Run() error {
 		userGroup.GET("/enterprise/permissions", middleware.PermissionMiddleware("role.read"), enterpriseAPI.ListPermissions)
 		userGroup.GET("/enterprise/members", middleware.PermissionMiddleware("member.read"), enterpriseAPI.ListMembers)
 		userGroup.PATCH("/enterprise/members/:user_id", middleware.PermissionMiddleware("member.manage"), enterpriseAPI.UpdateMember)
+		userGroup.GET("/enterprise/members/:user_id/departments", middleware.PermissionMiddleware("member.read"), enterpriseAPI.ListMemberDepartments)
+		userGroup.PUT("/enterprise/members/:user_id/departments", middleware.PermissionMiddleware("member.manage"), enterpriseAPI.ReplaceMemberDepartments)
 		userGroup.GET("/enterprise/departments", middleware.PermissionMiddleware("member.read"), enterpriseAPI.ListDepartments)
 		userGroup.POST("/enterprise/departments", middleware.PermissionMiddleware("member.manage"), enterpriseAPI.CreateDepartment)
 		userGroup.PUT("/enterprise/departments/:id", middleware.PermissionMiddleware("member.manage"), enterpriseAPI.UpdateDepartment)
