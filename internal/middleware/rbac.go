@@ -1,0 +1,89 @@
+package middleware
+
+import (
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/WindyPear-Team/veloce/internal/model"
+	"github.com/WindyPear-Team/veloce/internal/service"
+	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
+)
+
+// PermissionMiddleware checks a resource.action capability in the current
+// organization and, when selected, the current workspace. Platform IsAdmin is
+// intentionally not a bypass: platform and enterprise trust boundaries differ.
+func PermissionMiddleware(code string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !service.EnterpriseFeaturesEnabled() {
+			c.Next()
+			return
+		}
+		tenant, ok := CurrentTenantContext(c)
+		if !ok {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Enterprise tenant context is required"})
+			c.Abort()
+			return
+		}
+		userValue, exists := c.Get("user")
+		user, ok := userValue.(*model.User)
+		if !exists || !ok || user == nil || !HasPermission(model.DB, user.ID, tenant.Organization.ID, workspaceID(tenant), code) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Permission is not granted"})
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
+}
+
+func workspaceID(tenant *TenantContext) uint {
+	if tenant == nil || tenant.Workspace == nil {
+		return 0
+	}
+	return tenant.Workspace.ID
+}
+
+// HasPermission resolves active role bindings at organization and workspace
+// scope. It is deliberately query based until a cache with explicit invalidation
+// is introduced; authorization changes therefore take effect immediately.
+func HasPermission(db *gorm.DB, userID, organizationID, workspaceID uint, code string) bool {
+	if db == nil || userID == 0 || organizationID == 0 || strings.TrimSpace(code) == "" {
+		return false
+	}
+	query := db.Table("role_bindings").
+		Joins("JOIN roles ON roles.id = role_bindings.role_id AND roles.deleted_at IS NULL").
+		Joins("JOIN role_permissions ON role_permissions.role_id = roles.id").
+		Joins("JOIN permissions ON permissions.id = role_permissions.permission_id").
+		Where("role_bindings.user_id = ? AND role_bindings.organization_id = ? AND role_bindings.deleted_at IS NULL", userID, organizationID).
+		Where("permissions.code = ?", strings.ToLower(strings.TrimSpace(code))).
+		Where("role_bindings.expires_at IS NULL OR role_bindings.expires_at > ?", time.Now())
+	if workspaceID == 0 {
+		query = query.Where("role_bindings.scope_type = ? AND role_bindings.scope_id = ?", model.RoleBindingScopeOrganization, organizationID)
+	} else {
+		query = query.Where("(role_bindings.scope_type = ? AND role_bindings.scope_id = ?) OR (role_bindings.scope_type = ? AND role_bindings.scope_id = ?)", model.RoleBindingScopeOrganization, organizationID, model.RoleBindingScopeWorkspace, workspaceID)
+	}
+	var count int64
+	return query.Count(&count).Error == nil && count > 0
+}
+
+func EffectivePermissions(db *gorm.DB, userID, organizationID, workspaceID uint) []string {
+	if db == nil || userID == 0 || organizationID == 0 {
+		return []string{}
+	}
+	var codes []string
+	query := db.Table("role_bindings").
+		Distinct("permissions.code").
+		Joins("JOIN roles ON roles.id = role_bindings.role_id AND roles.deleted_at IS NULL").
+		Joins("JOIN role_permissions ON role_permissions.role_id = roles.id").
+		Joins("JOIN permissions ON permissions.id = role_permissions.permission_id").
+		Where("role_bindings.user_id = ? AND role_bindings.organization_id = ? AND role_bindings.deleted_at IS NULL", userID, organizationID).
+		Where("role_bindings.expires_at IS NULL OR role_bindings.expires_at > ?", time.Now())
+	if workspaceID == 0 {
+		query = query.Where("role_bindings.scope_type = ? AND role_bindings.scope_id = ?", model.RoleBindingScopeOrganization, organizationID)
+	} else {
+		query = query.Where("(role_bindings.scope_type = ? AND role_bindings.scope_id = ?) OR (role_bindings.scope_type = ? AND role_bindings.scope_id = ?)", model.RoleBindingScopeOrganization, organizationID, model.RoleBindingScopeWorkspace, workspaceID)
+	}
+	query.Order("permissions.code ASC").Pluck("permissions.code", &codes)
+	return codes
+}
