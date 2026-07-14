@@ -32,6 +32,7 @@ const (
 	QuotaScopeDepartment          = "department"
 	QuotaScopeUser                = "user"
 	QuotaScopeTask                = "task"
+	QuotaScopePool                = "pool"
 	QuotaLedgerAllocation         = "allocation"
 	QuotaLedgerReservation        = "reservation"
 	QuotaLedgerConsumption        = "consumption"
@@ -163,6 +164,7 @@ type QuotaAccount struct {
 	DepartmentID   *uint           `gorm:"index" json:"department_id,omitempty"`
 	UserID         *uint           `gorm:"index" json:"user_id,omitempty"`
 	TaskID         *uint           `gorm:"index" json:"task_id,omitempty"`
+	PoolID         *uint           `gorm:"index" json:"pool_id,omitempty"`
 	LimitAmount    decimal.Decimal `gorm:"type:decimal(20,6);not null;default:0" json:"limit_amount"`
 	ReservedAmount decimal.Decimal `gorm:"type:decimal(20,6);not null;default:0" json:"reserved_amount"`
 	ConsumedAmount decimal.Decimal `gorm:"type:decimal(20,6);not null;default:0" json:"consumed_amount"`
@@ -175,6 +177,7 @@ type QuotaLedger struct {
 	OrganizationID  uint            `gorm:"index;not null" json:"organization_id"`
 	AccountID       uint            `gorm:"index;not null" json:"account_id"`
 	TaskID          *uint           `gorm:"index" json:"task_id,omitempty"`
+	PoolID          *uint           `gorm:"index" json:"pool_id,omitempty"`
 	EntryType       string          `gorm:"size:20;not null;index" json:"entry_type"`
 	Amount          decimal.Decimal `gorm:"type:decimal(20,6);not null" json:"amount"`
 	ReferenceType   string          `gorm:"size:40;not null;default:''" json:"reference_type"`

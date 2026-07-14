@@ -52,3 +52,44 @@ func TestEnterpriseTaskQuotaReservationConsumptionAndRelease(t *testing.T) {
 		t.Fatalf("expected quota exceeded, got %v", err)
 	}
 }
+
+func TestEnterprisePoolQuotaUsesPoolAsSubjectAndEmployeeAsActor(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:enterprise-pool-quota-service?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&model.Organization{}, &model.EnterpriseSharedPool{}, &model.QuotaAccount{}, &model.QuotaLedger{}); err != nil {
+		t.Fatal(err)
+	}
+	org := model.Organization{Slug: "pool-quota-service", Name: "Pool quota", CreatedByUserID: 1}
+	if err := db.Create(&org).Error; err != nil {
+		t.Fatal(err)
+	}
+	pool := model.EnterpriseSharedPool{OrganizationID: org.ID, ScopeType: model.EnterprisePoolScopeTask, ScopeKey: "task:1", Name: "Task pool", CreatedByUserID: 1}
+	if err := db.Create(&pool).Error; err != nil {
+		t.Fatal(err)
+	}
+	account, err := EnsureEnterpriseQuotaAccount(db, EnterpriseQuotaScope{OrganizationID: org.ID, ScopeType: model.QuotaScopePool, PoolID: &pool.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Model(&account).Update("limit_amount", decimal.NewFromInt(10)).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := ReserveEnterprisePoolQuota(db, account.ID, pool.ID, 42, decimal.NewFromInt(7), "reserve"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ConsumeEnterprisePoolQuota(db, account.ID, pool.ID, 42, decimal.NewFromInt(4), "consume"); err != nil {
+		t.Fatal(err)
+	}
+	if err := ReserveEnterprisePoolQuota(db, account.ID, pool.ID, 42, decimal.NewFromInt(7), "overflow"); !errors.Is(err, ErrEnterpriseQuotaExceeded) {
+		t.Fatalf("expected quota exceeded, got %v", err)
+	}
+	var ledger model.QuotaLedger
+	if err := db.Where("account_id = ? AND entry_type = ?", account.ID, model.QuotaLedgerConsumption).First(&ledger).Error; err != nil {
+		t.Fatal(err)
+	}
+	if ledger.PoolID == nil || *ledger.PoolID != pool.ID || ledger.CreatedByUserID != 42 {
+		t.Fatalf("unexpected pool ledger %+v", ledger)
+	}
+}

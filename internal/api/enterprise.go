@@ -91,6 +91,7 @@ type enterpriseQuotaAccountInput struct {
 	DepartmentID *uint  `json:"department_id"`
 	UserID       *uint  `json:"user_id"`
 	TaskID       *uint  `json:"task_id"`
+	PoolID       *uint  `json:"pool_id"`
 	InitialLimit string `json:"initial_limit"`
 }
 type enterpriseQuotaAllocationInput struct {
@@ -617,7 +618,7 @@ func (api *EnterpriseAPI) CreateSharedPool(c *gin.Context) {
 		if err := tx.Where("organization_id = ? AND scope_type = ? AND scope_key = ?", pool.OrganizationID, pool.ScopeType, pool.ScopeKey).FirstOrCreate(&pool).Error; err != nil {
 			return err
 		}
-		return ensureEnterpriseSharedPoolIdentity(tx, &pool)
+		return ensureEnterpriseSharedPoolResources(tx, &pool)
 	}); err != nil {
 		c.JSON(http.StatusConflict, gin.H{"error": "Failed to create shared pool"})
 		return
@@ -805,7 +806,7 @@ func (api *EnterpriseAPI) ShareSessionToPool(c *gin.Context) {
 	}
 	var entry model.EnterpriseSharedSession
 	if err := model.DB.Transaction(func(tx *gorm.DB) error {
-		if err := ensureEnterpriseSharedPoolIdentity(tx, &pool); err != nil {
+		if err := ensureEnterpriseSharedPoolResources(tx, &pool); err != nil {
 			return err
 		}
 		var existing model.EnterpriseSharedSession
@@ -888,7 +889,7 @@ func (api *EnterpriseAPI) ShareFileToPool(c *gin.Context) {
 		return
 	}
 	var entry model.EnterpriseSharedFile
-	if err := model.DB.Transaction(func(tx *gorm.DB) error { return ensureEnterpriseSharedPoolIdentity(tx, &pool) }); err != nil {
+	if err := model.DB.Transaction(func(tx *gorm.DB) error { return ensureEnterpriseSharedPoolResources(tx, &pool) }); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to share file"})
 		return
 	}
@@ -1277,7 +1278,7 @@ func (api *EnterpriseAPI) CreateQuotaAccount(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid quota account"})
 		return
 	}
-	scope := service.EnterpriseQuotaScope{OrganizationID: tenant.Organization.ID, ScopeType: input.ScopeType, DepartmentID: input.DepartmentID, UserID: input.UserID, TaskID: input.TaskID}
+	scope := service.EnterpriseQuotaScope{OrganizationID: tenant.Organization.ID, ScopeType: input.ScopeType, DepartmentID: input.DepartmentID, UserID: input.UserID, TaskID: input.TaskID, PoolID: input.PoolID}
 	if err := validateEnterpriseQuotaScope(tenant.Organization.ID, scope); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -1368,6 +1369,14 @@ func (api *EnterpriseAPI) ListQuotaLedger(c *gin.Context) {
 		}
 		query = query.Where("task_id = ?", id)
 	}
+	if raw := c.Query("pool_id"); raw != "" {
+		id, err := parseEnterpriseID(raw)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		query = query.Where("pool_id = ?", id)
+	}
 	var entries []model.QuotaLedger
 	if err := query.Order("id DESC").Limit(200).Find(&entries).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list quota ledger"})
@@ -1377,6 +1386,10 @@ func (api *EnterpriseAPI) ListQuotaLedger(c *gin.Context) {
 }
 
 func validateEnterpriseQuotaScope(organizationID uint, scope service.EnterpriseQuotaScope) error {
+	scopeType := strings.ToLower(strings.TrimSpace(scope.ScopeType))
+	if scopeType == model.QuotaScopeDepartment || scopeType == model.QuotaScopeUser || scopeType == model.QuotaScopeTask {
+		return errors.New("Allocate quota to a shared pool; departments, employees, and tasks are not quota subjects")
+	}
 	if scope.DepartmentID != nil {
 		var item model.Department
 		if err := model.DB.Where("id = ? AND organization_id = ?", *scope.DepartmentID, organizationID).First(&item).Error; err != nil {
@@ -1390,6 +1403,12 @@ func validateEnterpriseQuotaScope(organizationID uint, scope service.EnterpriseQ
 		var item model.EnterpriseTask
 		if err := model.DB.Where("id = ? AND organization_id = ?", *scope.TaskID, organizationID).First(&item).Error; err != nil {
 			return errors.New("Task not found")
+		}
+	}
+	if scope.PoolID != nil {
+		var item model.EnterpriseSharedPool
+		if err := model.DB.Where("id = ? AND organization_id = ?", *scope.PoolID, organizationID).First(&item).Error; err != nil {
+			return errors.New("Shared pool not found")
 		}
 	}
 	return nil
@@ -1483,7 +1502,21 @@ func ensureEnterpriseSharedPool(db *gorm.DB, organizationID uint, scope string, 
 	if err := db.Where("organization_id = ? AND scope_type = ? AND scope_key = ?", pool.OrganizationID, pool.ScopeType, pool.ScopeKey).FirstOrCreate(&pool).Error; err != nil {
 		return err
 	}
-	return ensureEnterpriseSharedPoolIdentity(db, &pool)
+	return ensureEnterpriseSharedPoolResources(db, &pool)
+}
+
+// ensureEnterpriseSharedPoolResources establishes the pool as both resource
+// principal and quota subject. Employees remain actors in its audit trail.
+func ensureEnterpriseSharedPoolResources(db *gorm.DB, pool *model.EnterpriseSharedPool) error {
+	if err := ensureEnterpriseSharedPoolIdentity(db, pool); err != nil {
+		return err
+	}
+	_, err := service.EnsureEnterpriseQuotaAccount(db, service.EnterpriseQuotaScope{
+		OrganizationID: pool.OrganizationID,
+		ScopeType:      model.QuotaScopePool,
+		PoolID:         &pool.ID,
+	})
+	return err
 }
 
 func ensureEnterpriseSharedPoolIdentity(db *gorm.DB, pool *model.EnterpriseSharedPool) error {
