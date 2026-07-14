@@ -4,16 +4,15 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/WindyPear-Team/veloce/internal/config"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
 
 func TestUserCreateJoinsSingleEnterpriseWhenEnabled(t *testing.T) {
 	db := openEnterpriseBootstrapTestDB(t, "create")
-	previous := config.EnterpriseFeaturesEnabled
-	config.EnterpriseFeaturesEnabled = true
-	defer func() { config.EnterpriseFeaturesEnabled = previous }()
+	if err := SetSystemSettingWithDB(db, "system_mode", EnterpriseSystemMode); err != nil {
+		t.Fatalf("enable enterprise mode: %v", err)
+	}
 
 	owner := User{Username: "enterprise-owner", Email: "owner@example.com", APIKey: "enterprise-owner-key"}
 	if err := db.Create(&owner).Error; err != nil {
@@ -32,10 +31,6 @@ func TestUserCreateJoinsSingleEnterpriseWhenEnabled(t *testing.T) {
 
 func TestExistingUserEnterpriseBackfillIsIdempotent(t *testing.T) {
 	db := openEnterpriseBootstrapTestDB(t, "backfill")
-	previous := config.EnterpriseFeaturesEnabled
-	config.EnterpriseFeaturesEnabled = false
-	defer func() { config.EnterpriseFeaturesEnabled = previous }()
-
 	users := []User{
 		{Username: "existing-owner", Email: "existing-owner@example.com", APIKey: "existing-owner-key"},
 		{Username: "existing-member", Email: "existing-member@example.com", APIKey: "existing-member-key"},
@@ -50,7 +45,9 @@ func TestExistingUserEnterpriseBackfillIsIdempotent(t *testing.T) {
 		t.Fatalf("create legacy personal organization: %v", err)
 	}
 
-	config.EnterpriseFeaturesEnabled = true
+	if err := SetSystemSettingWithDB(db, "system_mode", EnterpriseSystemMode); err != nil {
+		t.Fatalf("enable enterprise mode: %v", err)
+	}
 	if err := EnsureEnterpriseTenantForExistingUsers(db); err != nil {
 		t.Fatalf("backfill enterprise tenant: %v", err)
 	}
@@ -79,7 +76,7 @@ func openEnterpriseBootstrapTestDB(t *testing.T, name string) *gorm.DB {
 	}
 	if err := db.AutoMigrate(
 		&User{}, &Organization{}, &Department{}, &Workspace{}, &OrganizationMember{}, &WorkspaceMember{},
-		&Permission{}, &Role{}, &RolePermission{}, &RoleBinding{},
+		&Permission{}, &Role{}, &RolePermission{}, &RoleBinding{}, &SystemSetting{},
 	); err != nil {
 		t.Fatalf("migrate enterprise models: %v", err)
 	}

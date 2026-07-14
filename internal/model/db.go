@@ -81,20 +81,18 @@ func InitDB() {
 	if err != nil {
 		log.Fatalf("failed to migrate database: %v", err)
 	}
-	if config.EnterpriseFeaturesEnabled {
-		if err := DB.AutoMigrate(
-			&Organization{},
-			&Department{},
-			&Workspace{},
-			&OrganizationMember{},
-			&WorkspaceMember{},
-			&Permission{},
-			&Role{},
-			&RolePermission{},
-			&RoleBinding{},
-		); err != nil {
-			log.Fatalf("failed to migrate enterprise database models: %v", err)
-		}
+	if err := DB.AutoMigrate(
+		&Organization{},
+		&Department{},
+		&Workspace{},
+		&OrganizationMember{},
+		&WorkspaceMember{},
+		&Permission{},
+		&Role{},
+		&RolePermission{},
+		&RoleBinding{},
+	); err != nil {
+		log.Fatalf("failed to migrate enterprise database models: %v", err)
 	}
 	if !hadCachedInputPrice {
 		if err := DB.Model(&Model{}).
@@ -120,7 +118,7 @@ func InitDB() {
 
 	// Initial data
 	initData()
-	if config.EnterpriseFeaturesEnabled {
+	if EnterpriseModeEnabledWithDB(DB) {
 		if err := EnsureEnterpriseTenantForExistingUsers(DB); err != nil {
 			log.Fatalf("failed to initialize enterprise tenant: %v", err)
 		}
@@ -580,8 +578,15 @@ func GetSystemSettingWithDB(db *gorm.DB, key, fallback string) string {
 }
 
 func SetSystemSetting(key, value string) error {
+	return SetSystemSettingWithDB(DB, key, value)
+}
+
+func SetSystemSettingWithDB(db *gorm.DB, key, value string) error {
+	if db == nil {
+		return fmt.Errorf("database is required")
+	}
 	setting := SystemSetting{Key: key}
-	return DB.Where(&SystemSetting{Key: key}).
+	return db.Where(&SystemSetting{Key: key}).
 		Assign(SystemSetting{Value: value}).
 		FirstOrCreate(&setting).Error
 }

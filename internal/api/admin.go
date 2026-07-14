@@ -367,9 +367,17 @@ func (api *SystemAPI) UpdateSettings(c *gin.Context) {
 		}
 	}
 	if input.SystemMode != nil {
+		previousSystemMode := service.CurrentSystemMode()
 		if err := model.SetSystemSetting("system_mode", systemMode); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update system settings"})
 			return
+		}
+		if systemMode == service.SystemModeEnterprise {
+			if err := model.EnsureEnterpriseTenantForExistingUsers(model.DB); err != nil {
+				_ = model.SetSystemSetting("system_mode", previousSystemMode)
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to initialize enterprise mode"})
+				return
+			}
 		}
 	}
 

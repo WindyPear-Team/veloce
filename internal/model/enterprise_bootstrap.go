@@ -6,20 +6,29 @@ import (
 	"strings"
 	"time"
 
-	"github.com/WindyPear-Team/veloce/internal/config"
 	"gorm.io/gorm"
 )
 
-const EnterpriseOrganizationSlug = "enterprise"
+const (
+	EnterpriseOrganizationSlug = "enterprise"
+	EnterpriseSystemMode       = "enterprise"
+)
 
 // AfterCreate joins every new user to the single enterprise represented by
 // this private deployment. The first user creates and owns the enterprise;
 // subsequent users become standard members.
 func (user *User) AfterCreate(tx *gorm.DB) error {
-	if !config.EnterpriseFeaturesEnabled || user == nil || user.ID == 0 {
+	if !EnterpriseModeEnabledWithDB(tx) || user == nil || user.ID == 0 {
 		return nil
 	}
 	return ensureEnterpriseTenantWithDB(tx, user)
+}
+
+func EnterpriseModeEnabledWithDB(db *gorm.DB) bool {
+	if db == nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(GetSystemSettingWithDB(db, "system_mode", "operation")), EnterpriseSystemMode)
 }
 
 // EnsureEnterpriseTenantForUser is idempotent. One deployment owns exactly one

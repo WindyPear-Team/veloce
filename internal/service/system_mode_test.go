@@ -36,3 +36,31 @@ func TestPersonalModeEnabledInTxUsesTransactionConnection(t *testing.T) {
 		t.Fatalf("read setting in transaction: %v", err)
 	}
 }
+
+func TestNormalizeSystemModeSupportsEnterpriseMode(t *testing.T) {
+	if got := NormalizeSystemMode(" ENTERPRISE "); got != SystemModeEnterprise {
+		t.Fatalf("normalized mode = %q, want %q", got, SystemModeEnterprise)
+	}
+	if got := NormalizeSystemMode("unknown"); got != SystemModeOperation {
+		t.Fatalf("unknown mode = %q, want operation", got)
+	}
+}
+
+func TestEnterpriseModeEnabledUsesSystemSetting(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:enterprise-system-mode-test?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	if err := db.AutoMigrate(&model.SystemSetting{}); err != nil {
+		t.Fatalf("migrate settings: %v", err)
+	}
+	if err := model.SetSystemSettingWithDB(db, "system_mode", SystemModeEnterprise); err != nil {
+		t.Fatalf("set enterprise mode: %v", err)
+	}
+	previous := model.DB
+	model.DB = db
+	defer func() { model.DB = previous }()
+	if !EnterpriseModeEnabled() || !EnterpriseFeaturesEnabled() {
+		t.Fatal("expected enterprise features to follow the system mode setting")
+	}
+}

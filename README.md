@@ -71,10 +71,9 @@ OIDC_CLIENT_SECRET=your-client-secret
 OIDC_REDIRECT_URL=http://localhost:8080/auth/callback
 BOOTSTRAP_ADMIN_OIDC_SUBS=
 BOOTSTRAP_ADMIN_EMAILS=
-ENTERPRISE_FEATURES_ENABLED=false
 ```
 
-`ENTERPRISE_FEATURES_ENABLED` is the master switch for single-enterprise private-deployment organization, workspace, and governance features. One deployment represents one enterprise. It defaults to `false` so existing personal and community deployments keep their current behavior.
+Enterprise features are enabled manually by selecting Enterprise Mode in the admin runtime-mode setting; no environment flag is required. One deployment represents one enterprise. Switching back to operation or personal mode preserves enterprise data while disabling enterprise APIs.
 
 `DB_DRIVER` accepts `sqlite` (default), `postgres`, and `mysql`. SQLite uses
 `DB_PATH`. For PostgreSQL or MySQL, set `DB_DSN` (or `DATABASE_URL`) and the

@@ -69,10 +69,9 @@ OIDC_CLIENT_SECRET=your-client-secret
 OIDC_REDIRECT_URL=http://localhost:8080/auth/callback
 BOOTSTRAP_ADMIN_OIDC_SUBS=
 BOOTSTRAP_ADMIN_EMAILS=
-ENTERPRISE_FEATURES_ENABLED=false
 ```
 
-`ENTERPRISE_FEATURES_ENABLED` 是单企业私有部署的组织、Workspace 和治理功能总开关，默认关闭。一套部署只对应一个企业；关闭该开关可保持现有个人版和社区版行为不变。
+企业功能通过管理后台“运行模式”中的“企业模式”手动开启，不使用环境变量。一套部署只对应一个企业；切换回运营模式或自用模式时企业数据会保留，但企业接口停止启用。
 
 `DB_DRIVER` 支持 `sqlite`（默认）、`postgres` 与 `mysql`。SQLite 使用
 `DB_PATH`；PostgreSQL/MySQL 使用 `DB_DSN`（也支持 `DATABASE_URL`），应用启动时会自动创建或迁移表结构。
