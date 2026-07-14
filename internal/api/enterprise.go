@@ -239,6 +239,10 @@ func (api *EnterpriseAPI) ListMembers(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if err := model.EnsureEnterpriseTenantForExistingUsers(model.DB); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to synchronize employee accounts"})
+		return
+	}
 	var members []model.OrganizationMember
 	if err := model.DB.Preload("User").Joins("JOIN users ON users.id = organization_members.user_id").
 		Where("organization_members.organization_id = ? AND users.username NOT LIKE ? AND users.email NOT LIKE ?", tenant.Organization.ID, "enterprise-pool-%", "%@internal.invalid").
@@ -259,8 +263,12 @@ func (api *EnterpriseAPI) CreateMember(c *gin.Context) {
 		return
 	}
 	var input enterpriseCreateMemberInput
-	if err := c.ShouldBindJSON(&input); err != nil || input.UserID == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "User is required"})
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid employee account"})
+		return
+	}
+	if input.UserID == 0 && (strings.TrimSpace(input.Username) == "" || strings.TrimSpace(input.Email) == "" || input.Password == "") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Username, email, and password are required"})
 		return
 	}
 	var account model.User
