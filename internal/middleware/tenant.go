@@ -95,6 +95,64 @@ func CurrentTenantContext(c *gin.Context) (*TenantContext, bool) {
 	return tenant, ok && tenant != nil
 }
 
+// OrganizationRoleMiddleware authorizes enterprise organization roles only.
+// Platform-level IsAdmin deliberately does not bypass this check: platform
+// administration and tenant administration are separate trust boundaries.
+func OrganizationRoleMiddleware(roles ...string) gin.HandlerFunc {
+	allowed := normalizedRoleSet(roles)
+	return func(c *gin.Context) {
+		tenant, ok := CurrentTenantContext(c)
+		if !ok {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Enterprise tenant context is required"})
+			c.Abort()
+			return
+		}
+		if _, ok := allowed[NormalizeOrganizationRole(tenant.OrganizationMember.Role)]; !ok {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Organization role is not permitted"})
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
+}
+
+func WorkspaceRoleMiddleware(roles ...string) gin.HandlerFunc {
+	allowed := normalizedRoleSet(roles)
+	return func(c *gin.Context) {
+		tenant, ok := CurrentTenantContext(c)
+		if !ok || tenant.WorkspaceMember == nil {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Enterprise workspace context is required"})
+			c.Abort()
+			return
+		}
+		if _, ok := allowed[NormalizeWorkspaceRole(tenant.WorkspaceMember.Role)]; !ok {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Workspace role is not permitted"})
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
+}
+
+func NormalizeOrganizationRole(value string) string {
+	return model.NormalizeOrganizationMemberRole(value)
+}
+
+func NormalizeWorkspaceRole(value string) string {
+	return model.NormalizeWorkspaceMemberRole(value)
+}
+
+func normalizedRoleSet(roles []string) map[string]struct{} {
+	result := make(map[string]struct{}, len(roles))
+	for _, role := range roles {
+		role = strings.ToLower(strings.TrimSpace(role))
+		if role != "" {
+			result[role] = struct{}{}
+		}
+	}
+	return result
+}
+
 func resolveOrganization(db *gorm.DB, userID uint, selection TenantSelection) (model.OrganizationMember, model.Organization, int, error) {
 	query := db.Model(&model.OrganizationMember{}).
 		Joins("JOIN organizations ON organizations.id = organization_members.organization_id AND organizations.deleted_at IS NULL").

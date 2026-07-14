@@ -177,3 +177,27 @@ func NormalizeWorkspaceMemberRole(value string) string {
 		return WorkspaceMemberRoleMember
 	}
 }
+
+// ScopeOrganization applies an explicit top-level tenant boundary to a GORM
+// query. Enterprise repositories should compose this scope instead of issuing
+// unscoped resource queries.
+func ScopeOrganization(organizationID uint) func(*gorm.DB) *gorm.DB {
+	return func(db *gorm.DB) *gorm.DB {
+		if organizationID == 0 {
+			return db.Where("1 = 0")
+		}
+		return db.Where("organization_id = ?", organizationID)
+	}
+}
+
+// ScopeWorkspace applies both organization and workspace boundaries. Requiring
+// both identifiers prevents a workspace ID from being accidentally reused
+// outside the already resolved organization context.
+func ScopeWorkspace(organizationID, workspaceID uint) func(*gorm.DB) *gorm.DB {
+	return func(db *gorm.DB) *gorm.DB {
+		if organizationID == 0 || workspaceID == 0 {
+			return db.Where("1 = 0")
+		}
+		return db.Where("organization_id = ? AND workspace_id = ?", organizationID, workspaceID)
+	}
+}

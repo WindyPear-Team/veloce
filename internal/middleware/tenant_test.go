@@ -3,9 +3,11 @@ package middleware
 import (
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/WindyPear-Team/veloce/internal/model"
+	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 )
@@ -67,6 +69,70 @@ func TestResolveTenantContextRejectsInvalidIDs(t *testing.T) {
 	}
 	if _, status, err := ResolveTenantContext(db, user.ID, TenantSelection{WorkspaceID: "0"}); err == nil || status != http.StatusBadRequest {
 		t.Fatalf("invalid workspace id result: status=%d err=%v", status, err)
+	}
+}
+
+func TestResolveTenantContextRejectsSuspendedMembershipAndOrganization(t *testing.T) {
+	db, user := tenantTestDatabase(t, "suspended")
+	if err := model.EnsurePersonalTenantForUser(db, &user); err != nil {
+		t.Fatalf("bootstrap personal tenant: %v", err)
+	}
+	var membership model.OrganizationMember
+	if err := db.Where("user_id = ?", user.ID).First(&membership).Error; err != nil {
+		t.Fatalf("find membership: %v", err)
+	}
+	if err := db.Model(&membership).Update("status", model.OrganizationMemberStatusSuspended).Error; err != nil {
+		t.Fatalf("suspend membership: %v", err)
+	}
+	if _, status, err := ResolveTenantContext(db, user.ID, TenantSelection{}); err == nil || status != http.StatusForbidden {
+		t.Fatalf("suspended membership result: status=%d err=%v", status, err)
+	}
+
+	if err := db.Model(&membership).Update("status", model.OrganizationMemberStatusActive).Error; err != nil {
+		t.Fatalf("reactivate membership: %v", err)
+	}
+	if err := db.Model(&model.Organization{}).Where("id = ?", membership.OrganizationID).Update("status", model.OrganizationStatusSuspended).Error; err != nil {
+		t.Fatalf("suspend organization: %v", err)
+	}
+	if _, status, err := ResolveTenantContext(db, user.ID, TenantSelection{}); err == nil || status != http.StatusForbidden {
+		t.Fatalf("suspended organization result: status=%d err=%v", status, err)
+	}
+}
+
+func TestOrganizationRoleMiddlewareDoesNotGrantPlatformAdminTenantAccess(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Set("user", &model.User{ID: 1, IsAdmin: true})
+	context.Set(tenantContextKey, &TenantContext{
+		Organization:       model.Organization{ID: 1},
+		OrganizationMember: model.OrganizationMember{Role: model.OrganizationMemberRoleMember},
+	})
+
+	OrganizationRoleMiddleware(model.OrganizationMemberRoleOwner, model.OrganizationMemberRoleAdmin)(context)
+	if !context.IsAborted() || recorder.Code != http.StatusForbidden {
+		t.Fatalf("platform admin tenant-role result: aborted=%t status=%d", context.IsAborted(), recorder.Code)
+	}
+}
+
+func TestEnterpriseRoleMiddlewareAllowsMatchingRoles(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Set(tenantContextKey, &TenantContext{
+		Organization:       model.Organization{ID: 1},
+		OrganizationMember: model.OrganizationMember{Role: model.OrganizationMemberRoleOwner},
+		Workspace:          &model.Workspace{ID: 2},
+		WorkspaceMember:    &model.WorkspaceMember{Role: model.WorkspaceMemberRoleAdmin},
+	})
+
+	OrganizationRoleMiddleware(model.OrganizationMemberRoleOwner)(context)
+	if context.IsAborted() {
+		t.Fatalf("matching organization role was rejected: status=%d", recorder.Code)
+	}
+	WorkspaceRoleMiddleware(model.WorkspaceMemberRoleAdmin)(context)
+	if context.IsAborted() {
+		t.Fatalf("matching workspace role was rejected: status=%d", recorder.Code)
 	}
 }
 

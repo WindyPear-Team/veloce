@@ -7,6 +7,13 @@ import (
 	"gorm.io/gorm"
 )
 
+type enterpriseScopedResource struct {
+	ID             uint `gorm:"primaryKey"`
+	OrganizationID uint `gorm:"index"`
+	WorkspaceID    uint `gorm:"index"`
+	Value          string
+}
+
 func TestOrganizationMigrationAndUniqueSlug(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open("file:organization-model-test?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
@@ -148,5 +155,47 @@ func TestNormalizeEnterpriseBootstrapValues(t *testing.T) {
 	}
 	if got := NormalizeWorkspaceMemberRole("viewer"); got != WorkspaceMemberRoleViewer {
 		t.Fatalf("workspace member role = %q, want viewer", got)
+	}
+}
+
+func TestEnterpriseQueryScopesEnforceTenantBoundaries(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:enterprise-scope-test?mode=memory&cache=shared"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	if err := db.AutoMigrate(&enterpriseScopedResource{}); err != nil {
+		t.Fatalf("migrate scoped resource: %v", err)
+	}
+	resources := []enterpriseScopedResource{
+		{OrganizationID: 1, WorkspaceID: 10, Value: "org-1-workspace-10"},
+		{OrganizationID: 1, WorkspaceID: 11, Value: "org-1-workspace-11"},
+		{OrganizationID: 2, WorkspaceID: 10, Value: "org-2-workspace-10"},
+	}
+	if err := db.Create(&resources).Error; err != nil {
+		t.Fatalf("create scoped resources: %v", err)
+	}
+
+	var organizationResources []enterpriseScopedResource
+	if err := db.Scopes(ScopeOrganization(1)).Find(&organizationResources).Error; err != nil {
+		t.Fatalf("query organization scope: %v", err)
+	}
+	if len(organizationResources) != 2 {
+		t.Fatalf("organization scope returned %d rows, want 2", len(organizationResources))
+	}
+
+	var workspaceResources []enterpriseScopedResource
+	if err := db.Scopes(ScopeWorkspace(1, 10)).Find(&workspaceResources).Error; err != nil {
+		t.Fatalf("query workspace scope: %v", err)
+	}
+	if len(workspaceResources) != 1 || workspaceResources[0].Value != "org-1-workspace-10" {
+		t.Fatalf("unexpected workspace scoped rows: %+v", workspaceResources)
+	}
+
+	var zeroScopeCount int64
+	if err := db.Model(&enterpriseScopedResource{}).Scopes(ScopeOrganization(0)).Count(&zeroScopeCount).Error; err != nil {
+		t.Fatalf("query zero organization scope: %v", err)
+	}
+	if zeroScopeCount != 0 {
+		t.Fatalf("zero organization scope returned %d rows, want 0", zeroScopeCount)
 	}
 }
