@@ -53,9 +53,14 @@ func EnsureEnterpriseTenantForExistingUsers(db *gorm.DB) error {
 		return errors.New("database is required")
 	}
 	var users []User
-	err := db.Order("id ASC").FindInBatches(&users, 100, func(batch *gorm.DB, _ int) error {
+	err := db.Order("id ASC").FindInBatches(&users, 100, func(_ *gorm.DB, _ int) error {
 		for index := range users {
-			if err := ensureEnterpriseTenantWithDB(batch, &users[index]); err != nil {
+			// FindInBatches passes a query that retains its cursor conditions.  Do
+			// not reuse it for organization/member lookups: after the first batch
+			// those user-table conditions can make historical employees appear to
+			// have no enterprise membership.  Each user bootstrap needs a clean
+			// database statement instead.
+			if err := ensureEnterpriseTenantWithDB(db.Session(&gorm.Session{NewDB: true}), &users[index]); err != nil {
 				return fmt.Errorf("bootstrap enterprise tenant for user %d: %w", users[index].ID, err)
 			}
 		}

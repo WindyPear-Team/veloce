@@ -67,6 +67,37 @@ func TestExistingUserEnterpriseBackfillIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestExistingUserEnterpriseBackfillIncludesEveryBatch(t *testing.T) {
+	db := openEnterpriseBootstrapTestDB(t, "backfill-batches")
+	users := make([]User, 101)
+	for index := range users {
+		users[index] = User{
+			Username: fmt.Sprintf("existing-%03d", index),
+			Email:    fmt.Sprintf("existing-%03d@example.com", index),
+			APIKey:   fmt.Sprintf("existing-%03d-key", index),
+		}
+		if err := db.Create(&users[index]).Error; err != nil {
+			t.Fatalf("create existing user %d: %v", index, err)
+		}
+	}
+	if err := SetSystemSettingWithDB(db, "system_mode", EnterpriseSystemMode); err != nil {
+		t.Fatalf("enable enterprise mode: %v", err)
+	}
+	if err := EnsureEnterpriseTenantForExistingUsers(db); err != nil {
+		t.Fatalf("backfill enterprise tenant: %v", err)
+	}
+
+	organization := assertSingleEnterprise(t, db, users[0].ID)
+	var members int64
+	if err := db.Model(&OrganizationMember{}).Where("organization_id = ?", organization.ID).Count(&members).Error; err != nil {
+		t.Fatalf("count employee memberships: %v", err)
+	}
+	if members != int64(len(users)) {
+		t.Fatalf("employee membership count = %d, want %d", members, len(users))
+	}
+	assertEnterpriseEmployee(t, db, organization.ID, users[len(users)-1], OrganizationMemberRoleMember, BuiltinRoleMember)
+}
+
 func openEnterpriseBootstrapTestDB(t *testing.T, name string) *gorm.DB {
 	t.Helper()
 	dsn := fmt.Sprintf("file:enterprise-bootstrap-%s?mode=memory&cache=shared", name)
