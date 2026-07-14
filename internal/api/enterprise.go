@@ -52,6 +52,10 @@ type enterpriseTaskInput struct {
 type enterpriseTaskStatusInput struct {
 	Status string `json:"status"`
 }
+type enterpriseMemberInput struct {
+	Role   *string `json:"role"`
+	Status *string `json:"status"`
+}
 
 type enterpriseDeviceInput struct {
 	ExternalDeviceID    string `json:"external_device_id"`
@@ -175,6 +179,45 @@ func (api *EnterpriseAPI) ListMembers(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"members": members})
+}
+
+func (api *EnterpriseAPI) UpdateMember(c *gin.Context) {
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return
+	}
+	userID, err := parseEnterpriseID(c.Param("user_id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	var input enterpriseMemberInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid member"})
+		return
+	}
+	updates := map[string]interface{}{}
+	if input.Role != nil {
+		updates["role"] = model.NormalizeOrganizationMemberRole(*input.Role)
+	}
+	if input.Status != nil {
+		updates["status"] = model.NormalizeOrganizationMemberStatus(*input.Status)
+	}
+	if len(updates) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "No member changes"})
+		return
+	}
+	var member model.OrganizationMember
+	if err := model.DB.Where("organization_id = ? AND user_id = ?", tenant.Organization.ID, userID).First(&member).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Member not found"})
+		return
+	}
+	if err := model.DB.Model(&member).Updates(updates).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update member"})
+		return
+	}
+	model.DB.First(&member, member.ID)
+	c.JSON(http.StatusOK, member)
 }
 
 func (api *EnterpriseAPI) ListRoles(c *gin.Context) {
@@ -327,6 +370,18 @@ func (api *EnterpriseAPI) ListTasks(c *gin.Context) {
 		Where("created_by_user_id = ? OR owner_user_id = ? OR id IN (?)", user.ID, user.ID, model.DB.Model(&model.EnterpriseTaskAssignment{}).Select("task_id").Where("user_id = ?", user.ID)).
 		Order("updated_at DESC")
 	if err := query.Find(&tasks).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list tasks"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"tasks": tasks})
+}
+func (api *EnterpriseAPI) ListManagedTasks(c *gin.Context) {
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return
+	}
+	var tasks []model.EnterpriseTask
+	if err := model.DB.Where("organization_id = ?", tenant.Organization.ID).Order("updated_at DESC").Find(&tasks).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list tasks"})
 		return
 	}
