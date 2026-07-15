@@ -56,10 +56,11 @@ type enterpriseRoleInput struct {
 }
 
 type enterpriseBindingInput struct {
-	UserID    uint   `json:"user_id"`
-	RoleID    uint   `json:"role_id"`
-	ScopeType string `json:"scope_type"`
-	ScopeID   uint   `json:"scope_id"`
+	UserID       uint   `json:"user_id"`
+	DepartmentID uint   `json:"department_id"`
+	RoleID       uint   `json:"role_id"`
+	ScopeType    string `json:"scope_type"`
+	ScopeID      uint   `json:"scope_id"`
 }
 type enterpriseDepartmentInput struct {
 	Slug     string `json:"slug"`
@@ -791,11 +792,18 @@ func (api *EnterpriseAPI) CreateRoleBinding(c *gin.Context) {
 		return
 	}
 	input.ScopeType = model.NormalizeRoleBindingScope(input.ScopeType)
+	if (input.UserID == 0) == (input.DepartmentID == 0) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Select exactly one employee or department"})
+		return
+	}
+	if input.DepartmentID != 0 {
+		input.ScopeType, input.ScopeID = model.RoleBindingScopeOrganization, tenant.Organization.ID
+	}
 	if !model.RoleBindingScopeValid(input.ScopeType, input.ScopeID, tenant.Organization.ID) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid role binding scope"})
 		return
 	}
-	if !enterpriseActiveMember(tenant.Organization.ID, input.UserID) {
+	if input.UserID != 0 && !enterpriseActiveMember(tenant.Organization.ID, input.UserID) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Active organization member not found"})
 		return
 	}
@@ -810,6 +818,20 @@ func (api *EnterpriseAPI) CreateRoleBinding(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Workspace not found"})
 			return
 		}
+	}
+	if input.DepartmentID != 0 {
+		var department model.Department
+		if err := model.DB.Where("id = ? AND organization_id = ?", input.DepartmentID, tenant.Organization.ID).First(&department).Error; err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Department not found"})
+			return
+		}
+		binding := model.DepartmentRoleBinding{OrganizationID: tenant.Organization.ID, DepartmentID: input.DepartmentID, RoleID: input.RoleID, CreatedByUserID: user.ID}
+		if err := model.DB.Where("organization_id = ? AND department_id = ? AND role_id = ?", binding.OrganizationID, binding.DepartmentID, binding.RoleID).FirstOrCreate(&binding).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to grant department role"})
+			return
+		}
+		c.JSON(http.StatusCreated, binding)
+		return
 	}
 	binding := model.RoleBinding{OrganizationID: tenant.Organization.ID, UserID: input.UserID, RoleID: input.RoleID, ScopeType: input.ScopeType, ScopeID: input.ScopeID, CreatedByUserID: user.ID}
 	if err := model.DB.Where("organization_id = ? AND user_id = ? AND role_id = ? AND scope_type = ? AND scope_id = ?", binding.OrganizationID, binding.UserID, binding.RoleID, binding.ScopeType, binding.ScopeID).FirstOrCreate(&binding).Error; err != nil {

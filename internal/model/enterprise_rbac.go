@@ -81,6 +81,21 @@ type RoleBinding struct {
 	DeletedAt       gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
+// DepartmentRoleBinding grants a role to every active member of a department.
+// It deliberately mirrors organization-scoped user role bindings so department
+// authorization takes effect immediately without copying rows to each user.
+type DepartmentRoleBinding struct {
+	ID              uint           `gorm:"primaryKey" json:"id"`
+	OrganizationID  uint           `gorm:"uniqueIndex:idx_department_role_binding;index;not null" json:"organization_id"`
+	DepartmentID    uint           `gorm:"uniqueIndex:idx_department_role_binding;index;not null" json:"department_id"`
+	RoleID          uint           `gorm:"uniqueIndex:idx_department_role_binding;index;not null" json:"role_id"`
+	Role            Role           `gorm:"foreignKey:RoleID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"role,omitempty"`
+	CreatedByUserID uint           `gorm:"index;not null" json:"created_by_user_id"`
+	CreatedAt       time.Time      `json:"created_at"`
+	UpdatedAt       time.Time      `json:"updated_at"`
+	DeletedAt       gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
 func PermissionCode(resource, action string) (string, bool) {
 	resource = strings.ToLower(strings.TrimSpace(resource))
 	action = strings.ToLower(strings.TrimSpace(action))

@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -73,7 +74,11 @@ func HasPermission(db *gorm.DB, userID, organizationID, workspaceID uint, code s
 		query = query.Where("(role_bindings.scope_type = ? AND role_bindings.scope_id = ?) OR (role_bindings.scope_type = ? AND role_bindings.scope_id = ?)", model.RoleBindingScopeOrganization, organizationID, model.RoleBindingScopeWorkspace, workspaceID)
 	}
 	var count int64
-	return query.Count(&count).Error == nil && count > 0
+	if query.Count(&count).Error == nil && count > 0 {
+		return true
+	}
+	departmentQuery := db.Table("department_role_bindings").Joins("JOIN department_members ON department_members.department_id = department_role_bindings.department_id AND department_members.deleted_at IS NULL").Joins("JOIN roles ON roles.id = department_role_bindings.role_id AND roles.deleted_at IS NULL").Joins("JOIN role_permissions ON role_permissions.role_id = roles.id").Joins("JOIN permissions ON permissions.id = role_permissions.permission_id").Where("department_role_bindings.organization_id = ? AND department_members.user_id = ? AND department_role_bindings.deleted_at IS NULL AND permissions.code = ?", organizationID, userID, strings.ToLower(strings.TrimSpace(code)))
+	return departmentQuery.Count(&count).Error == nil && count > 0
 }
 
 func EffectivePermissions(db *gorm.DB, userID, organizationID, workspaceID uint) []string {
@@ -94,5 +99,16 @@ func EffectivePermissions(db *gorm.DB, userID, organizationID, workspaceID uint)
 		query = query.Where("(role_bindings.scope_type = ? AND role_bindings.scope_id = ?) OR (role_bindings.scope_type = ? AND role_bindings.scope_id = ?)", model.RoleBindingScopeOrganization, organizationID, model.RoleBindingScopeWorkspace, workspaceID)
 	}
 	query.Order("permissions.code ASC").Pluck("permissions.code", &codes)
+	var departmentCodes []string
+	db.Table("department_role_bindings").Distinct("permissions.code").Joins("JOIN department_members ON department_members.department_id = department_role_bindings.department_id AND department_members.deleted_at IS NULL").Joins("JOIN roles ON roles.id = department_role_bindings.role_id AND roles.deleted_at IS NULL").Joins("JOIN role_permissions ON role_permissions.role_id = roles.id").Joins("JOIN permissions ON permissions.id = role_permissions.permission_id").Where("department_role_bindings.organization_id = ? AND department_members.user_id = ? AND department_role_bindings.deleted_at IS NULL", organizationID, userID).Pluck("permissions.code", &departmentCodes)
+	seen := map[string]bool{}
+	for _, code := range append(codes, departmentCodes...) {
+		seen[code] = true
+	}
+	codes = codes[:0]
+	for code := range seen {
+		codes = append(codes, code)
+	}
+	sort.Strings(codes)
 	return codes
 }
