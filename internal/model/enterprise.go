@@ -45,6 +45,7 @@ type Organization struct {
 	ID              uint           `gorm:"primaryKey" json:"id"`
 	Slug            string         `gorm:"uniqueIndex;size:80;not null" json:"slug"`
 	Name            string         `gorm:"size:160;not null" json:"name"`
+	Description     string         `gorm:"type:text;not null;default:''" json:"description"`
 	Status          string         `gorm:"size:20;not null;default:'active';index" json:"status"`
 	CreatedByUserID uint           `gorm:"index;not null" json:"created_by_user_id"`
 	CreatedAt       time.Time      `json:"created_at"`

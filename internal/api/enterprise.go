@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -27,6 +28,22 @@ type enterpriseWorkspaceResponse struct {
 type enterpriseContextInput struct {
 	WorkspaceID   *uint  `json:"workspace_id"`
 	WorkspaceSlug string `json:"workspace_slug"`
+}
+type enterpriseOrganizationInput struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+type enterprisePortalInput struct {
+	Enabled bool     `json:"enabled"`
+	Title   string   `json:"title"`
+	Message string   `json:"message"`
+	Widgets []string `json:"widgets"`
+}
+type enterprisePortalConfig struct {
+	Enabled bool     `json:"enabled"`
+	Title   string   `json:"title"`
+	Message string   `json:"message"`
+	Widgets []string `json:"widgets"`
 }
 
 type enterpriseRoleInput struct {
@@ -149,6 +166,72 @@ func (api *EnterpriseAPI) GetOrganization(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"organization": tenant.Organization, "role": tenant.OrganizationMember.Role})
+}
+
+func (api *EnterpriseAPI) UpdateOrganization(c *gin.Context) {
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return
+	}
+	var input enterpriseOrganizationInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid organization settings"})
+		return
+	}
+	name := strings.TrimSpace(input.Name)
+	if name == "" || len([]rune(name)) > 160 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Organization name must be between 1 and 160 characters"})
+		return
+	}
+	description := strings.TrimSpace(input.Description)
+	if len([]rune(description)) > 1000 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Organization description is too long"})
+		return
+	}
+	if err := model.DB.Model(&model.Organization{}).Where("id = ?", tenant.Organization.ID).Updates(map[string]interface{}{"name": name, "description": description}).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update organization settings"})
+		return
+	}
+	tenant.Organization.Name, tenant.Organization.Description = name, description
+	c.JSON(http.StatusOK, gin.H{"organization": tenant.Organization})
+}
+
+func (api *EnterpriseAPI) GetPortal(c *gin.Context) {
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return
+	}
+	config := enterprisePortalConfigFor(tenant.Organization.ID)
+	var runningTasks, assignedTasks, employees, departments, devices int64
+	model.DB.Model(&model.EnterpriseTask{}).Where("organization_id = ? AND status = ?", tenant.Organization.ID, model.EnterpriseTaskStatusRunning).Count(&runningTasks)
+	model.DB.Model(&model.EnterpriseTask{}).Where("organization_id = ? AND status = ?", tenant.Organization.ID, model.EnterpriseTaskStatusAssigned).Count(&assignedTasks)
+	model.DB.Model(&model.OrganizationMember{}).Joins("JOIN users ON users.id = organization_members.user_id").Where("organization_members.organization_id = ? AND users.username NOT LIKE ? AND users.email NOT LIKE ?", tenant.Organization.ID, "enterprise-pool-%", "%@internal.invalid").Count(&employees)
+	model.DB.Model(&model.Department{}).Where("organization_id = ?", tenant.Organization.ID).Count(&departments)
+	model.DB.Model(&model.EnterpriseDevice{}).Where("organization_id = ? AND status = ?", tenant.Organization.ID, model.EnterpriseDeviceStatusActive).Count(&devices)
+	c.JSON(http.StatusOK, gin.H{"organization": tenant.Organization, "portal": config, "summary": gin.H{"running_tasks": runningTasks, "assigned_tasks": assignedTasks, "employees": employees, "departments": departments, "devices": devices}})
+}
+
+func (api *EnterpriseAPI) UpdatePortal(c *gin.Context) {
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return
+	}
+	var input enterprisePortalInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid portal settings"})
+		return
+	}
+	config := enterprisePortalConfig{Enabled: input.Enabled, Title: strings.TrimSpace(input.Title), Message: strings.TrimSpace(input.Message), Widgets: enterprisePortalWidgets(input.Widgets)}
+	if len([]rune(config.Title)) > 160 || len([]rune(config.Message)) > 1000 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Portal content is too long"})
+		return
+	}
+	data, err := json.Marshal(config)
+	if err != nil || model.SetSystemSettingWithDB(model.DB, enterprisePortalSettingKey(tenant.Organization.ID), string(data)) != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save portal settings"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"portal": config})
 }
 
 func (api *EnterpriseAPI) ListWorkspaces(c *gin.Context) {
@@ -2235,6 +2318,35 @@ func enterpriseTenant(c *gin.Context) (*middleware.TenantContext, bool) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "Enterprise tenant context is required"})
 	}
 	return tenant, ok
+}
+
+func enterprisePortalSettingKey(organizationID uint) string {
+	return fmt.Sprintf("enterprise_portal_%d", organizationID)
+}
+
+func enterprisePortalConfigFor(organizationID uint) enterprisePortalConfig {
+	config := enterprisePortalConfig{Title: "企业门户", Widgets: []string{"tasks", "organization", "devices"}}
+	raw := model.GetSystemSettingWithDB(model.DB, enterprisePortalSettingKey(organizationID), "")
+	if raw != "" && json.Unmarshal([]byte(raw), &config) == nil {
+		config.Title = strings.TrimSpace(config.Title)
+		config.Message = strings.TrimSpace(config.Message)
+		config.Widgets = enterprisePortalWidgets(config.Widgets)
+	}
+	return config
+}
+
+func enterprisePortalWidgets(values []string) []string {
+	allowed := map[string]bool{"tasks": true, "organization": true, "devices": true}
+	seen := map[string]bool{}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.ToLower(strings.TrimSpace(value))
+		if allowed[value] && !seen[value] {
+			seen[value] = true
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 func enterpriseCreateOrUpdateRole(organizationID, roleID uint, input enterpriseRoleInput) (model.Role, error) {
