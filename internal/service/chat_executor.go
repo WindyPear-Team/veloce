@@ -127,6 +127,13 @@ func ExecuteServerChatCompletion(c *gin.Context, user *model.User, req ChatExecu
 	if modelName == "" {
 		return nil, newChatExecutorError(http.StatusBadRequest, "Model not specified")
 	}
+	allowedByDepartment, err := DepartmentModelAllowed(user.ID, modelName)
+	if err != nil {
+		return nil, newChatExecutorError(http.StatusInternalServerError, "Failed to evaluate department model policy")
+	}
+	if !allowedByDepartment {
+		return nil, newChatExecutorError(http.StatusForbidden, "Department policy does not allow this model")
+	}
 	if user.Balance.LessThanOrEqual(decimal.Zero) {
 		return nil, newChatExecutorError(http.StatusPaymentRequired, "Insufficient balance")
 	}

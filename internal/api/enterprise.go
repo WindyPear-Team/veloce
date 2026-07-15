@@ -63,9 +63,13 @@ type enterpriseBindingInput struct {
 	ScopeID      uint   `json:"scope_id"`
 }
 type enterpriseDepartmentInput struct {
-	Slug     string `json:"slug"`
-	Name     string `json:"name"`
-	ParentID *uint  `json:"parent_id"`
+	Slug        string                 `json:"slug"`
+	Name        string                 `json:"name"`
+	ParentID    *uint                  `json:"parent_id"`
+	Multiplier  string                 `json:"multiplier"`
+	ModelPolicy string                 `json:"model_policy"`
+	ModelNames  []string               `json:"model_names"`
+	Settings    map[string]interface{} `json:"settings"`
 }
 
 type enterpriseTaskInput struct {
@@ -101,6 +105,9 @@ type enterpriseCreateMemberInput struct {
 }
 type enterpriseMemberDepartmentsInput struct {
 	DepartmentIDs []uint `json:"department_ids"`
+}
+type enterpriseDepartmentRolesInput struct {
+	RoleIDs []uint `json:"role_ids"`
 }
 
 type enterpriseDeviceInput struct {
@@ -159,6 +166,11 @@ type enterprisePoolResourceInput struct {
 type enterpriseSharedSessionMessageInput struct {
 	Content string `json:"content"`
 	Title   string `json:"title"`
+}
+type enterpriseSharedPoolSessionInput struct {
+	AgentID       string `json:"agent_id"`
+	ModelName     string `json:"model_name"`
+	UserChannelID uint   `json:"user_channel_id"`
 }
 
 func (api *EnterpriseAPI) GetOrganization(c *gin.Context) {
@@ -629,6 +641,78 @@ func (api *EnterpriseAPI) ReplaceMemberDepartments(c *gin.Context) {
 	enterpriseAudit(c, user.ID, "member_departments_updated", fmt.Sprintf("更新员工 #%d 的部门归属", userID), fmt.Sprintf(`{"user_id":%d,"department_ids":%v}`, userID, ids))
 }
 
+func (api *EnterpriseAPI) ListDepartmentRoles(c *gin.Context) {
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return
+	}
+	departmentID, err := parseEnterpriseID(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	var bindings []model.DepartmentRoleBinding
+	if err := model.DB.Where("organization_id = ? AND department_id = ?", tenant.Organization.ID, departmentID).Find(&bindings).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list department roles"})
+		return
+	}
+	roleIDs := make([]uint, 0, len(bindings))
+	for _, binding := range bindings {
+		roleIDs = append(roleIDs, binding.RoleID)
+	}
+	c.JSON(http.StatusOK, gin.H{"role_ids": roleIDs})
+}
+
+func (api *EnterpriseAPI) ReplaceDepartmentRoles(c *gin.Context) {
+	user, ok := enterpriseCurrentUser(c)
+	if !ok {
+		return
+	}
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return
+	}
+	departmentID, err := parseEnterpriseID(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	var input enterpriseDepartmentRolesInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid department roles"})
+		return
+	}
+	var department model.Department
+	if err := model.DB.Where("id = ? AND organization_id = ?", departmentID, tenant.Organization.ID).First(&department).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Department not found"})
+		return
+	}
+	roleIDs := uniqueEnterpriseUserIDs(input.RoleIDs)
+	if len(roleIDs) > 0 {
+		var count int64
+		if err := model.DB.Model(&model.Role{}).Where("organization_id = ? AND id IN ?", tenant.Organization.ID, roleIDs).Count(&count).Error; err != nil || count != int64(len(roleIDs)) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Role not found"})
+			return
+		}
+	}
+	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("organization_id = ? AND department_id = ?", tenant.Organization.ID, departmentID).Delete(&model.DepartmentRoleBinding{}).Error; err != nil {
+			return err
+		}
+		for _, roleID := range roleIDs {
+			if err := tx.Create(&model.DepartmentRoleBinding{OrganizationID: tenant.Organization.ID, DepartmentID: departmentID, RoleID: roleID, CreatedByUserID: user.ID}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update department roles"})
+		return
+	}
+	enterpriseAudit(c, user.ID, "department_roles_updated", "", fmt.Sprintf(`{"department_id":%d,"role_ids":%v}`, department.ID, roleIDs))
+	c.JSON(http.StatusOK, gin.H{"role_ids": roleIDs})
+}
+
 func (api *EnterpriseAPI) ListDepartments(c *gin.Context) {
 	tenant, ok := enterpriseTenant(c)
 	if !ok {
@@ -683,7 +767,7 @@ func (api *EnterpriseAPI) UpdateDepartment(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if err := model.DB.Model(&department).Updates(map[string]interface{}{"slug": department.Slug, "name": department.Name, "parent_id": department.ParentID}).Error; err != nil {
+	if err := model.DB.Model(&department).Updates(map[string]interface{}{"slug": department.Slug, "name": department.Name, "parent_id": department.ParentID, "multiplier": department.Multiplier, "model_policy": department.ModelPolicy, "model_names": department.ModelNames, "settings": department.Settings}).Error; err != nil {
 		c.JSON(http.StatusConflict, gin.H{"error": "Failed to update department"})
 		return
 	}
@@ -1068,6 +1152,53 @@ func (api *EnterpriseAPI) ListSharedPoolSessions(c *gin.Context) {
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{"sessions": sessions})
+}
+
+// CreateSharedPoolSession creates a session whose owner is the pool resource
+// principal. It deliberately does not create a personal source session: a
+// "new session here" action must not leave an uncategorized duplicate behind.
+func (api *EnterpriseAPI) CreateSharedPoolSession(c *gin.Context) {
+	user, ok := enterpriseCurrentUser(c)
+	if !ok {
+		return
+	}
+	pool, ok := enterpriseSharedPoolAccess(c)
+	if !ok {
+		return
+	}
+	var input enterpriseSharedPoolSessionInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid shared session"})
+		return
+	}
+	var session service.AdvancedChatSession
+	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := ensureEnterpriseSharedPoolResources(tx, &pool); err != nil {
+			return err
+		}
+		session = service.AdvancedChatSession{
+			ID:                       enterprisePoolResourceID("session"),
+			UserID:                   pool.ResourceUserID,
+			Title:                    "New session",
+			RunMode:                  "chat",
+			AgentID:                  strings.TrimSpace(input.AgentID),
+			SkillIDs:                 "[]",
+			MCPServerIDs:             "[]",
+			ConnectorApprovalMode:    "manual",
+			ConnectorCommandPrefixes: "[]",
+			ModelName:                strings.TrimSpace(input.ModelName),
+			UserChannelID:            input.UserChannelID,
+		}
+		if err := tx.Create(&session).Error; err != nil {
+			return err
+		}
+		return tx.Create(&model.EnterpriseSharedSession{PoolID: pool.ID, SessionID: session.ID, SharedBy: user.ID}).Error
+	}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create shared session"})
+		return
+	}
+	enterpriseAudit(c, user.ID, "pool_session_created", "", fmt.Sprintf(`{"pool_id":%d,"session_id":"%s"}`, pool.ID, session.ID))
+	c.JSON(http.StatusCreated, gin.H{"session": session})
 }
 func (api *EnterpriseAPI) ListSharedPoolDevices(c *gin.Context) {
 	pool, ok := enterpriseSharedPoolAccess(c)
@@ -1842,6 +1973,45 @@ func (api *EnterpriseAPI) UpdateDevice(c *gin.Context) {
 	enterpriseAudit(c, user.ID, "device_updated", fmt.Sprintf("更新企业设备“%s”", device.Name), fmt.Sprintf(`{"device_id":%d}`, device.ID))
 	c.JSON(http.StatusOK, device)
 }
+func (api *EnterpriseAPI) DeleteDevice(c *gin.Context) {
+	user, ok := enterpriseCurrentUser(c)
+	if !ok {
+		return
+	}
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return
+	}
+	id, err := parseEnterpriseID(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	var device model.EnterpriseDevice
+	if err := model.DB.Where("id = ? AND organization_id = ?", id, tenant.Organization.ID).First(&device).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Device not found"})
+		return
+	}
+	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("organization_id = ? AND device_id = ?", tenant.Organization.ID, device.ID).Delete(&model.EnterpriseDeviceAssignment{}).Error; err != nil {
+			return err
+		}
+		if device.Kind == "connector" && device.ExternalDeviceID != "" {
+			if err := tx.Where("device_id = ?", device.ExternalDeviceID).Delete(&service.AdvancedChatConnectorTask{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("id = ?", device.ExternalDeviceID).Delete(&service.AdvancedChatConnectorDevice{}).Error; err != nil {
+				return err
+			}
+		}
+		return tx.Delete(&device).Error
+	}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete device"})
+		return
+	}
+	enterpriseAudit(c, user.ID, "device_deleted", "", fmt.Sprintf(`{"device_id":%d}`, device.ID))
+	c.JSON(http.StatusOK, gin.H{"message": "Device deleted"})
+}
 func (api *EnterpriseAPI) ListDeviceAssignments(c *gin.Context) {
 	tenant, ok := enterpriseTenant(c)
 	if !ok {
@@ -2387,14 +2557,69 @@ func enterpriseDepartmentFromInput(organizationID, id uint, input enterpriseDepa
 			return model.Department{}, errors.New("Parent department not found")
 		}
 	}
-	department := model.Department{ID: id, OrganizationID: organizationID, Name: input.Name, Slug: input.Slug, ParentID: input.ParentID}
+	multiplier := decimal.NewFromInt(1)
+	if value := strings.TrimSpace(input.Multiplier); value != "" {
+		var err error
+		multiplier, err = decimal.NewFromString(value)
+		if err != nil || multiplier.LessThanOrEqual(decimal.Zero) {
+			return model.Department{}, errors.New("Department multiplier must be a positive decimal")
+		}
+	}
+	policy := strings.ToLower(strings.TrimSpace(input.ModelPolicy))
+	if policy == "" {
+		policy = "inherit"
+	}
+	if policy != "inherit" && policy != "allow" && policy != "deny" {
+		return model.Department{}, errors.New("Department model policy must be inherit, allow, or deny")
+	}
+	modelNames := uniqueEnterpriseStrings(input.ModelNames)
+	if policy != "inherit" && len(modelNames) == 0 {
+		return model.Department{}, errors.New("Department model policy requires at least one model")
+	}
+	modelNamesJSON, err := json.Marshal(modelNames)
+	if err != nil {
+		return model.Department{}, errors.New("Invalid department model names")
+	}
+	settingsJSON, err := json.Marshal(input.Settings)
+	if err != nil {
+		return model.Department{}, errors.New("Invalid department settings")
+	}
+	if input.Settings == nil {
+		settingsJSON = []byte("{}")
+	}
+	department := model.Department{ID: id, OrganizationID: organizationID, Name: input.Name, Slug: input.Slug, ParentID: input.ParentID, Multiplier: multiplier, ModelPolicy: policy, ModelNames: string(modelNamesJSON), Settings: string(settingsJSON)}
 	if id != 0 {
 		if err := model.DB.Where("id = ? AND organization_id = ?", id, organizationID).First(&department).Error; err != nil {
 			return model.Department{}, errors.New("Department not found")
 		}
 		department.Name, department.Slug, department.ParentID = input.Name, input.Slug, input.ParentID
+		if strings.TrimSpace(input.Multiplier) != "" {
+			department.Multiplier = multiplier
+		}
+		if strings.TrimSpace(input.ModelPolicy) != "" {
+			department.ModelPolicy, department.ModelNames = policy, string(modelNamesJSON)
+		}
+		if input.Settings != nil {
+			department.Settings = string(settingsJSON)
+		}
 	}
 	return department, nil
+}
+
+func uniqueEnterpriseStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, exists := seen[value]; !exists {
+			seen[value] = struct{}{}
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 func enterpriseActiveMember(organizationID, userID uint) bool {
@@ -2438,11 +2663,23 @@ func enterpriseTenant(c *gin.Context) (*middleware.TenantContext, bool) {
 	return tenant, ok
 }
 
-func enterpriseAudit(c *gin.Context, userID uint, action, message, metadata string) {
+// enterpriseAudit persists a stable event code and structured metadata only.
+// Human-readable copy belongs to the presentation layer, where it can be
+// localized without making audit records dependent on UI wording.
+func enterpriseAudit(c *gin.Context, userID uint, action, _ string, metadata string) {
 	if userID == 0 {
 		return
 	}
-	service.RecordAuditLog(service.AuditLogInput{LogType: service.AuditLogTypeAdmin, Action: action, Resource: "enterprise", UserID: &userID, Method: c.Request.Method, Path: c.Request.URL.Path, IPAddress: c.ClientIP(), UserAgent: c.Request.UserAgent(), StatusCode: http.StatusOK, Message: message, Metadata: metadata})
+	service.RecordAuditLog(service.AuditLogInput{LogType: service.AuditLogTypeAdmin, Action: action, Resource: enterpriseAuditResource(action), UserID: &userID, Method: c.Request.Method, Path: c.Request.URL.Path, IPAddress: c.ClientIP(), UserAgent: c.Request.UserAgent(), StatusCode: http.StatusOK, Metadata: metadata})
+}
+
+func enterpriseAuditResource(action string) string {
+	for _, resource := range []string{"organization", "portal", "member", "department", "role", "task", "device", "connector", "quota", "budget", "shared_pool", "pool"} {
+		if strings.HasPrefix(action, resource+"_") {
+			return "enterprise." + resource
+		}
+	}
+	return "enterprise"
 }
 
 func enterpriseAuditCurrent(c *gin.Context, action, message, metadata string) {

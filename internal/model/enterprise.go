@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 )
 
@@ -75,16 +76,24 @@ type OrganizationMember struct {
 
 // Department models the enterprise department tree.
 type Department struct {
-	ID             uint           `gorm:"primaryKey" json:"id"`
-	OrganizationID uint           `gorm:"uniqueIndex:idx_department_org_slug;index;not null" json:"organization_id"`
-	Organization   Organization   `gorm:"foreignKey:OrganizationID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
-	ParentID       *uint          `gorm:"index" json:"parent_id,omitempty"`
-	Parent         *Department    `gorm:"foreignKey:ParentID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"-"`
-	Slug           string         `gorm:"uniqueIndex:idx_department_org_slug;size:80;not null" json:"slug"`
-	Name           string         `gorm:"size:160;not null" json:"name"`
-	CreatedAt      time.Time      `json:"created_at"`
-	UpdatedAt      time.Time      `json:"updated_at"`
-	DeletedAt      gorm.DeletedAt `gorm:"index" json:"-"`
+	ID             uint         `gorm:"primaryKey" json:"id"`
+	OrganizationID uint         `gorm:"uniqueIndex:idx_department_org_slug;index;not null" json:"organization_id"`
+	Organization   Organization `gorm:"foreignKey:OrganizationID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
+	ParentID       *uint        `gorm:"index" json:"parent_id,omitempty"`
+	Parent         *Department  `gorm:"foreignKey:ParentID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"-"`
+	Slug           string       `gorm:"uniqueIndex:idx_department_org_slug;size:80;not null" json:"slug"`
+	Name           string       `gorm:"size:160;not null" json:"name"`
+	// Multiplier is the department-level billing factor. A department may also
+	// carry an allow-list or block-list of model names; policy evaluation is kept
+	// separate from this persistence model so new department settings do not
+	// require schema changes.
+	Multiplier  decimal.Decimal `gorm:"type:decimal(10,4);not null;default:1.0" json:"multiplier"`
+	ModelPolicy string          `gorm:"size:16;not null;default:'inherit'" json:"model_policy"`
+	ModelNames  string          `gorm:"type:text;not null;default:''" json:"model_names"`
+	Settings    string          `gorm:"type:text;not null;default:'{}'" json:"settings"`
+	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
+	DeletedAt   gorm.DeletedAt  `gorm:"index" json:"-"`
 }
 
 // Workspace is the collaboration and resource-sharing boundary inside an

@@ -1026,6 +1026,15 @@ func (s *ProxyService) resolveTarget(c *gin.Context, modelName string) (*proxyTa
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Model not specified"})
 		return nil, false
 	}
+	allowedByDepartment, err := DepartmentModelAllowed(user.ID, modelName)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to evaluate department model policy"})
+		return nil, false
+	}
+	if !allowedByDepartment {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Department policy does not allow this model"})
+		return nil, false
+	}
 
 	apiKey := currentAPIKey(c)
 	skipAPIKeyModelCheck, _ := c.Get("skip_api_key_model_check")
@@ -1485,7 +1494,11 @@ func effectiveUserGroupMultiplier(user *model.User, channelID uint, modelConfigI
 			selected = multiplier
 		}
 	}
-	return selected, nil
+	departmentMultiplier, err := EffectiveDepartmentMultiplier(user.ID)
+	if err != nil {
+		return decimal.Zero, err
+	}
+	return selected.Mul(departmentMultiplier), nil
 }
 
 func activeGroupMultipliers(user *model.User, channelID uint, modelConfigID uint) ([]decimal.Decimal, error) {
