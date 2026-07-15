@@ -544,6 +544,8 @@ func EnsureDefaultSystemSettings() error {
 		"hcaptcha_site_key":                          "",
 		"hcaptcha_secret":                            "",
 		"email_verification_required":                "false",
+		"registration_email_suffixes":                "",
+		"registration_email_routing":                 "[]",
 		"smtp_host":                                  "",
 		"smtp_port":                                  "587",
 		"smtp_username":                              "",

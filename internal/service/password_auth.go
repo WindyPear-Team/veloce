@@ -146,6 +146,9 @@ func (s *AuthService) SetupInitialAdmin(input InitialSetupInput) (*model.User, s
 	if email == "" || !strings.Contains(email, "@") {
 		return nil, "", initialSetupValidationError("valid email is required")
 	}
+	if !registrationEmailAllowed(email) {
+		return nil, "", errors.New("email domain is not allowed for registration")
+	}
 	if len([]rune(email)) > 100 {
 		return nil, "", initialSetupValidationError("email is too long")
 	}
@@ -153,7 +156,7 @@ func (s *AuthService) SetupInitialAdmin(input InitialSetupInput) (*model.User, s
 		return nil, "", initialSetupValidationError("password must be at least 8 characters")
 	}
 
-	defaultGroup, err := model.EnsureDefaultGroup()
+	defaultGroup, err := registrationGroupForEmail(email)
 	if err != nil {
 		return nil, "", err
 	}
@@ -238,6 +241,44 @@ func (s *AuthService) SetupInitialAdmin(input InitialSetupInput) (*model.User, s
 		return nil, "", err
 	}
 	return &user, token, nil
+}
+
+func registrationEmailAllowed(email string) bool {
+	raw := model.GetSystemSetting("registration_email_suffixes", "")
+	allowed := strings.FieldsFunc(strings.ToLower(raw), func(r rune) bool { return r == ',' || r == '\n' || r == ' ' || r == ';' })
+	if len(allowed) == 0 {
+		return true
+	}
+	for _, suffix := range allowed {
+		suffix = strings.TrimPrefix(strings.TrimSpace(suffix), "@")
+		if suffix != "" && strings.HasSuffix(email, "@"+suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+func registrationGroupForEmail(email string) (model.Group, error) {
+	fallback, err := model.EnsureDefaultGroup()
+	if err != nil {
+		return model.Group{}, err
+	}
+	var rules []struct {
+		Suffix  string `json:"suffix"`
+		GroupID uint   `json:"group_id"`
+	}
+	_ = json.Unmarshal([]byte(model.GetSystemSetting("registration_email_routing", "[]")), &rules)
+	for _, rule := range rules {
+		suffix := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(rule.Suffix)), "@")
+		if suffix == "" || rule.GroupID == 0 || !strings.HasSuffix(email, "@"+suffix) {
+			continue
+		}
+		var group model.Group
+		if model.DB.First(&group, rule.GroupID).Error == nil {
+			return group, nil
+		}
+	}
+	return fallback, nil
 }
 
 func (s *AuthService) RegisterWithPassword(input PasswordRegisterInput) (*model.User, string, error) {

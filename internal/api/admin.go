@@ -151,6 +151,8 @@ type systemSettingsResponse struct {
 	HCaptchaSiteKey                      string `json:"hcaptcha_site_key"`
 	HCaptchaSecret                       string `json:"hcaptcha_secret,omitempty"`
 	EmailVerificationRequired            bool   `json:"email_verification_required"`
+	RegistrationEmailSuffixes            string `json:"registration_email_suffixes"`
+	RegistrationEmailRouting             string `json:"registration_email_routing"`
 	SMTPHost                             string `json:"smtp_host,omitempty"`
 	SMTPPort                             string `json:"smtp_port,omitempty"`
 	SMTPUsername                         string `json:"smtp_username,omitempty"`
@@ -283,6 +285,8 @@ type systemSettingsInput struct {
 	HCaptchaSiteKey                      *string `json:"hcaptcha_site_key"`
 	HCaptchaSecret                       *string `json:"hcaptcha_secret"`
 	EmailVerificationRequired            *bool   `json:"email_verification_required"`
+	RegistrationEmailSuffixes            *string `json:"registration_email_suffixes"`
+	RegistrationEmailRouting             *string `json:"registration_email_routing"`
 	SMTPHost                             *string `json:"smtp_host"`
 	SMTPPort                             *string `json:"smtp_port"`
 	SMTPUsername                         *string `json:"smtp_username"`
@@ -531,6 +535,14 @@ func (api *SystemAPI) UpdateSettings(c *gin.Context) {
 		"password_hcaptcha_enabled":                input.PasswordHCaptchaEnabled,
 		"email_verification_required":              input.EmailVerificationRequired,
 	}
+	for key, value := range map[string]*string{"registration_email_suffixes": input.RegistrationEmailSuffixes, "registration_email_routing": input.RegistrationEmailRouting} {
+		if value != nil {
+			if err := model.SetSystemSetting(key, strings.TrimSpace(*value)); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update registration rules"})
+				return
+			}
+		}
+	}
 	for key, value := range boolSettings {
 		if value == nil {
 			continue
@@ -654,6 +666,8 @@ func currentPublicSystemSettings() systemSettingsResponse {
 		PasswordHCaptchaEnabled:              settingBool("password_hcaptcha_enabled", false),
 		HCaptchaSiteKey:                      settingString("hcaptcha_site_key", ""),
 		EmailVerificationRequired:            settingBool("email_verification_required", false),
+		RegistrationEmailSuffixes:            settingString("registration_email_suffixes", ""),
+		RegistrationEmailRouting:             settingString("registration_email_routing", "[]"),
 	}
 }
 
