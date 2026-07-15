@@ -2058,19 +2058,25 @@ func enterpriseCanAccessSharedPool(user *model.User, organizationID uint, pool m
 	if user == nil || user.ID == 0 {
 		return false
 	}
-	if user.IsAdmin {
-		return true
-	}
 	if pool.ScopeType == model.EnterprisePoolScopeTask && pool.TaskID != nil {
 		var task model.EnterpriseTask
 		if model.DB.Where("id = ? AND organization_id = ?", *pool.TaskID, organizationID).First(&task).Error != nil || task.Status != model.EnterpriseTaskStatusRunning {
 			return false
+		}
+		// A task pool is an active-task workspace, not an archive. This applies
+		// to super administrators too, so finished and not-yet-started tasks do
+		// not appear as folders in sessions or files.
+		if user.IsAdmin {
+			return true
 		}
 		if enterpriseTaskAssignedTo(*pool.TaskID, user.ID) {
 			return true
 		}
 		var count int64
 		return model.DB.Model(&model.EnterpriseTask{}).Where("id = ? AND organization_id = ? AND (created_by_user_id = ? OR owner_user_id = ?)", *pool.TaskID, organizationID, user.ID, user.ID).Count(&count).Error == nil && count > 0
+	}
+	if user.IsAdmin {
+		return true
 	}
 	if pool.ScopeType == model.EnterprisePoolScopeDepartment && pool.DepartmentID != nil {
 		var count int64
