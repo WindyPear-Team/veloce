@@ -68,12 +68,14 @@ type enterpriseDepartmentInput struct {
 }
 
 type enterpriseTaskInput struct {
-	Title              string `json:"title"`
-	Description        string `json:"description"`
-	DepartmentID       *uint  `json:"department_id"`
-	OwnerUserID        *uint  `json:"owner_user_id"`
-	AssigneeUserIDs    []uint `json:"assignee_user_ids"`
-	ParticipantUserIDs []uint `json:"participant_user_ids"`
+	Title              string     `json:"title"`
+	Description        string     `json:"description"`
+	DepartmentID       *uint      `json:"department_id"`
+	OwnerUserID        *uint      `json:"owner_user_id"`
+	AssigneeUserIDs    []uint     `json:"assignee_user_ids"`
+	ParticipantUserIDs []uint     `json:"participant_user_ids"`
+	Priority           int        `json:"priority"`
+	DueAt              *time.Time `json:"due_at"`
 }
 
 type enterpriseTaskStatusInput struct {
@@ -905,7 +907,11 @@ func (api *EnterpriseAPI) CreateTask(c *gin.Context) {
 			return
 		}
 	}
-	task := model.EnterpriseTask{OrganizationID: tenant.Organization.ID, DepartmentID: input.DepartmentID, CreatedByUserID: user.ID, OwnerUserID: ownerID, Title: input.Title, Description: input.Description, Status: model.EnterpriseTaskStatusAssigned}
+	if input.Priority < 0 || input.Priority > 5 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Task priority must be between 0 and 5"})
+		return
+	}
+	task := model.EnterpriseTask{OrganizationID: tenant.Organization.ID, DepartmentID: input.DepartmentID, CreatedByUserID: user.ID, OwnerUserID: ownerID, Title: input.Title, Description: input.Description, Priority: input.Priority, DueAt: input.DueAt, Status: model.EnterpriseTaskStatusAssigned}
 	if tenant.Workspace != nil {
 		task.WorkspaceID = &tenant.Workspace.ID
 	}
