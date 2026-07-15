@@ -61,6 +61,19 @@ func AuthMiddleware(authService *service.AuthService) gin.HandlerFunc {
 	}
 }
 
+// ExternalAPIMiddleware gates token-based OpenAI-compatible API endpoints
+// without affecting dashboard sessions or the browser chat workspace.
+func ExternalAPIMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !strings.EqualFold(strings.TrimSpace(model.GetSystemSetting("token_api_enabled", "true")), "true") {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Token API access is disabled by the administrator"})
+			c.Abort()
+			return
+		}
+		c.Next()
+	}
+}
+
 func tokenFromRequest(c *gin.Context) string {
 	authHeader := c.GetHeader("Authorization")
 	if authHeader != "" {

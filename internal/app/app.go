@@ -495,14 +495,14 @@ func Run() error {
 
 	// AI Gateway routes (Proxy)
 	rootGateway := r.Group("")
-	rootGateway.Use(middleware.AuthMiddleware(authService), rateLimiter.Middleware())
+	rootGateway.Use(middleware.ExternalAPIMiddleware(), middleware.AuthMiddleware(authService), rateLimiter.Middleware())
 	{
 		rootGateway.GET("/balance", proxyService.HandleTokenBalance)
 		rootGateway.GET("/user/balance", proxyService.HandleUserBalance)
 	}
 
 	gateway := r.Group("/v1")
-	gateway.Use(middleware.AuthMiddleware(authService), rateLimiter.Middleware())
+	gateway.Use(middleware.ExternalAPIMiddleware(), middleware.AuthMiddleware(authService), rateLimiter.Middleware())
 	{
 		gateway.GET("/models", proxyService.ListModels)
 		gateway.GET("/balance", proxyService.HandleTokenBalance)
@@ -541,7 +541,7 @@ func Run() error {
 	}
 
 	geminiGateway := r.Group("/v1beta")
-	geminiGateway.Use(middleware.AuthMiddleware(authService), rateLimiter.Middleware())
+	geminiGateway.Use(middleware.ExternalAPIMiddleware(), middleware.AuthMiddleware(authService), rateLimiter.Middleware())
 	{
 		geminiGateway.POST("/models/:modelAction", proxyService.HandleGeminiGenerateContent)
 	}

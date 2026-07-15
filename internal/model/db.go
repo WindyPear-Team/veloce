@@ -540,6 +540,7 @@ func EnsureDefaultSystemSettings() error {
 		"passkey_enabled":                            "false",
 		"password_login_enabled":                     "true",
 		"password_registration_enabled":              "true",
+		"token_api_enabled":                          "true",
 		"password_hcaptcha_enabled":                  "false",
 		"hcaptcha_site_key":                          "",
 		"hcaptcha_secret":                            "",

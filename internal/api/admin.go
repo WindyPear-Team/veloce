@@ -147,6 +147,7 @@ type systemSettingsResponse struct {
 	PasskeyEnabled                       bool   `json:"passkey_enabled"`
 	PasswordLoginEnabled                 bool   `json:"password_login_enabled"`
 	PasswordRegistrationEnabled          bool   `json:"password_registration_enabled"`
+	TokenAPIEnabled                      bool   `json:"token_api_enabled"`
 	PasswordHCaptchaEnabled              bool   `json:"password_hcaptcha_enabled"`
 	HCaptchaSiteKey                      string `json:"hcaptcha_site_key"`
 	HCaptchaSecret                       string `json:"hcaptcha_secret,omitempty"`
@@ -281,6 +282,7 @@ type systemSettingsInput struct {
 	PasskeyEnabled                       *bool   `json:"passkey_enabled"`
 	PasswordLoginEnabled                 *bool   `json:"password_login_enabled"`
 	PasswordRegistrationEnabled          *bool   `json:"password_registration_enabled"`
+	TokenAPIEnabled                      *bool   `json:"token_api_enabled"`
 	PasswordHCaptchaEnabled              *bool   `json:"password_hcaptcha_enabled"`
 	HCaptchaSiteKey                      *string `json:"hcaptcha_site_key"`
 	HCaptchaSecret                       *string `json:"hcaptcha_secret"`
@@ -532,6 +534,7 @@ func (api *SystemAPI) UpdateSettings(c *gin.Context) {
 		"passkey_enabled":                          input.PasskeyEnabled,
 		"password_login_enabled":                   input.PasswordLoginEnabled,
 		"password_registration_enabled":            input.PasswordRegistrationEnabled,
+		"token_api_enabled":                        input.TokenAPIEnabled,
 		"password_hcaptcha_enabled":                input.PasswordHCaptchaEnabled,
 		"email_verification_required":              input.EmailVerificationRequired,
 	}
@@ -663,6 +666,7 @@ func currentPublicSystemSettings() systemSettingsResponse {
 		PasskeyEnabled:                       settingBool("passkey_enabled", false),
 		PasswordLoginEnabled:                 settingBool("password_login_enabled", true),
 		PasswordRegistrationEnabled:          settingBool("password_registration_enabled", true),
+		TokenAPIEnabled:                      settingBool("token_api_enabled", true),
 		PasswordHCaptchaEnabled:              settingBool("password_hcaptcha_enabled", false),
 		HCaptchaSiteKey:                      settingString("hcaptcha_site_key", ""),
 		EmailVerificationRequired:            settingBool("email_verification_required", false),
