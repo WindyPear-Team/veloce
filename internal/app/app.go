@@ -681,6 +681,7 @@ func Run() error {
 		userGroup.PUT("/enterprise/organization", middleware.PermissionMiddleware("organization.manage"), enterpriseAPI.UpdateOrganization)
 		userGroup.GET("/enterprise/portal", enterpriseAPI.GetPortal)
 		userGroup.PUT("/enterprise/portal", middleware.PermissionMiddleware("organization.manage"), enterpriseAPI.UpdatePortal)
+		userGroup.PUT("/enterprise/portal/layout", middleware.PermissionMiddleware("organization.manage"), enterpriseAPI.UpdatePortalLayout)
 		userGroup.GET("/enterprise/workspaces", enterpriseAPI.ListWorkspaces)
 		userGroup.POST("/enterprise/context", enterpriseAPI.SelectContext)
 		userGroup.GET("/enterprise/permissions/preview", enterpriseAPI.PreviewPermissions)

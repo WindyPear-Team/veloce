@@ -34,16 +34,18 @@ type enterpriseOrganizationInput struct {
 	Description string `json:"description"`
 }
 type enterprisePortalInput struct {
-	Enabled bool     `json:"enabled"`
-	Title   string   `json:"title"`
-	Message string   `json:"message"`
-	Widgets []string `json:"widgets"`
+	Enabled     bool     `json:"enabled"`
+	Title       string   `json:"title"`
+	Message     string   `json:"message"`
+	Widgets     []string `json:"widgets"`
+	PageLayouts string   `json:"page_layouts"`
 }
 type enterprisePortalConfig struct {
-	Enabled bool     `json:"enabled"`
-	Title   string   `json:"title"`
-	Message string   `json:"message"`
-	Widgets []string `json:"widgets"`
+	Enabled     bool     `json:"enabled"`
+	Title       string   `json:"title"`
+	Message     string   `json:"message"`
+	Widgets     []string `json:"widgets"`
+	PageLayouts string   `json:"page_layouts"`
 }
 
 type enterpriseRoleInput struct {
@@ -221,7 +223,8 @@ func (api *EnterpriseAPI) UpdatePortal(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid portal settings"})
 		return
 	}
-	config := enterprisePortalConfig{Enabled: input.Enabled, Title: strings.TrimSpace(input.Title), Message: strings.TrimSpace(input.Message), Widgets: enterprisePortalWidgets(input.Widgets)}
+	config := enterprisePortalConfigFor(tenant.Organization.ID)
+	config.Enabled, config.Title, config.Message, config.Widgets = input.Enabled, strings.TrimSpace(input.Title), strings.TrimSpace(input.Message), enterprisePortalWidgets(input.Widgets)
 	if len([]rune(config.Title)) > 160 || len([]rune(config.Message)) > 1000 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Portal content is too long"})
 		return
@@ -229,6 +232,35 @@ func (api *EnterpriseAPI) UpdatePortal(c *gin.Context) {
 	data, err := json.Marshal(config)
 	if err != nil || model.SetSystemSettingWithDB(model.DB, enterprisePortalSettingKey(tenant.Organization.ID), string(data)) != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save portal settings"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"portal": config})
+}
+
+func (api *EnterpriseAPI) UpdatePortalLayout(c *gin.Context) {
+	tenant, ok := enterpriseTenant(c)
+	if !ok {
+		return
+	}
+	var input struct {
+		PageLayouts string `json:"page_layouts"`
+	}
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid portal layout"})
+		return
+	}
+	if input.PageLayouts != "" {
+		var layouts map[string]interface{}
+		if json.Unmarshal([]byte(input.PageLayouts), &layouts) != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid portal page layout"})
+			return
+		}
+	}
+	config := enterprisePortalConfigFor(tenant.Organization.ID)
+	config.PageLayouts = input.PageLayouts
+	data, err := json.Marshal(config)
+	if err != nil || model.SetSystemSettingWithDB(model.DB, enterprisePortalSettingKey(tenant.Organization.ID), string(data)) != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save portal layout"})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"portal": config})
