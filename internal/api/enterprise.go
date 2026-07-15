@@ -198,6 +198,7 @@ func (api *EnterpriseAPI) UpdateOrganization(c *gin.Context) {
 		return
 	}
 	tenant.Organization.Name, tenant.Organization.Description = name, description
+	enterpriseAuditCurrent(c, "organization_updated", fmt.Sprintf("更新企业资料：%s", name), fmt.Sprintf(`{"organization_id":%d}`, tenant.Organization.ID))
 	c.JSON(http.StatusOK, gin.H{"organization": tenant.Organization})
 }
 
@@ -238,6 +239,7 @@ func (api *EnterpriseAPI) UpdatePortal(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"portal": config})
+	enterpriseAuditCurrent(c, "portal_updated", "更新企业门户配置", fmt.Sprintf(`{"organization_id":%d}`, tenant.Organization.ID))
 }
 
 func (api *EnterpriseAPI) UpdatePortalLayout(c *gin.Context) {
@@ -267,6 +269,7 @@ func (api *EnterpriseAPI) UpdatePortalLayout(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"portal": config})
+	enterpriseAuditCurrent(c, "portal_layout_updated", "更新企业门户仪表盘布局", fmt.Sprintf(`{"organization_id":%d}`, tenant.Organization.ID))
 }
 
 func (api *EnterpriseAPI) ListWorkspaces(c *gin.Context) {
@@ -467,10 +470,12 @@ func (api *EnterpriseAPI) CreateMember(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load member"})
 		return
 	}
+	enterpriseAudit(c, user.ID, "member_created", fmt.Sprintf("创建员工账号“%s”", account.Username), fmt.Sprintf(`{"user_id":%d,"member_id":%d}`, account.ID, member.ID))
 	c.JSON(http.StatusCreated, member)
 }
 
 func (api *EnterpriseAPI) DeleteMember(c *gin.Context) {
+	actor, _ := enterpriseCurrentUser(c)
 	tenant, ok := enterpriseTenant(c)
 	if !ok {
 		return
@@ -508,10 +513,12 @@ func (api *EnterpriseAPI) DeleteMember(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to remove member"})
 		return
 	}
+	enterpriseAudit(c, actor.ID, "member_deleted", fmt.Sprintf("移除员工 #%d", userID), fmt.Sprintf(`{"user_id":%d}`, userID))
 	c.JSON(http.StatusOK, gin.H{"message": "Member removed"})
 }
 
 func (api *EnterpriseAPI) UpdateMember(c *gin.Context) {
+	actor, _ := enterpriseCurrentUser(c)
 	tenant, ok := enterpriseTenant(c)
 	if !ok {
 		return
@@ -547,6 +554,7 @@ func (api *EnterpriseAPI) UpdateMember(c *gin.Context) {
 		return
 	}
 	model.DB.First(&member, member.ID)
+	enterpriseAudit(c, actor.ID, "member_updated", fmt.Sprintf("更新员工 #%d", userID), fmt.Sprintf(`{"user_id":%d}`, userID))
 	c.JSON(http.StatusOK, member)
 }
 
@@ -618,6 +626,7 @@ func (api *EnterpriseAPI) ReplaceMemberDepartments(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"department_ids": ids, "updated_by": user.ID})
+	enterpriseAudit(c, user.ID, "member_departments_updated", fmt.Sprintf("更新员工 #%d 的部门归属", userID), fmt.Sprintf(`{"user_id":%d,"department_ids":%v}`, userID, ids))
 }
 
 func (api *EnterpriseAPI) ListDepartments(c *gin.Context) {
@@ -651,6 +660,7 @@ func (api *EnterpriseAPI) CreateDepartment(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"error": "Failed to create department"})
 		return
 	}
+	enterpriseAuditCurrent(c, "department_created", fmt.Sprintf("创建部门“%s”", department.Name), fmt.Sprintf(`{"department_id":%d}`, department.ID))
 	c.JSON(http.StatusCreated, department)
 }
 func (api *EnterpriseAPI) UpdateDepartment(c *gin.Context) {
@@ -677,9 +687,11 @@ func (api *EnterpriseAPI) UpdateDepartment(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"error": "Failed to update department"})
 		return
 	}
+	enterpriseAuditCurrent(c, "department_updated", fmt.Sprintf("更新部门“%s”", department.Name), fmt.Sprintf(`{"department_id":%d}`, department.ID))
 	c.JSON(http.StatusOK, department)
 }
 func (api *EnterpriseAPI) DeleteDepartment(c *gin.Context) {
+	var department model.Department
 	tenant, ok := enterpriseTenant(c)
 	if !ok {
 		return
@@ -689,6 +701,7 @@ func (api *EnterpriseAPI) DeleteDepartment(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	model.DB.Where("id = ? AND organization_id = ?", id, tenant.Organization.ID).First(&department)
 	result := model.DB.Where("id = ? AND organization_id = ?", id, tenant.Organization.ID).Delete(&model.Department{})
 	if result.Error != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete department"})
@@ -698,6 +711,7 @@ func (api *EnterpriseAPI) DeleteDepartment(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Department not found"})
 		return
 	}
+	enterpriseAuditCurrent(c, "department_deleted", fmt.Sprintf("删除部门“%s”", department.Name), fmt.Sprintf(`{"department_id":%d}`, id))
 	c.JSON(http.StatusOK, gin.H{"message": "Department deleted"})
 }
 
@@ -736,6 +750,7 @@ func (api *EnterpriseAPI) CreateRole(c *gin.Context) {
 		enterpriseWriteRoleError(c, err)
 		return
 	}
+	enterpriseAuditCurrent(c, "role_created", fmt.Sprintf("创建权限组“%s”", role.Name), fmt.Sprintf(`{"role_id":%d}`, role.ID))
 	c.JSON(http.StatusCreated, role)
 }
 
@@ -759,6 +774,7 @@ func (api *EnterpriseAPI) UpdateRole(c *gin.Context) {
 		enterpriseWriteRoleError(c, err)
 		return
 	}
+	enterpriseAuditCurrent(c, "role_updated", fmt.Sprintf("更新权限组“%s”", role.Name), fmt.Sprintf(`{"role_id":%d}`, role.ID))
 	c.JSON(http.StatusOK, role)
 }
 
@@ -830,6 +846,7 @@ func (api *EnterpriseAPI) CreateRoleBinding(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to grant department role"})
 			return
 		}
+		enterpriseAudit(c, user.ID, "role_granted", fmt.Sprintf("向部门“%s”授予权限组“%s”", department.Name, role.Name), fmt.Sprintf(`{"department_id":%d,"role_id":%d}`, department.ID, role.ID))
 		c.JSON(http.StatusCreated, binding)
 		return
 	}
@@ -838,10 +855,12 @@ func (api *EnterpriseAPI) CreateRoleBinding(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to grant role"})
 		return
 	}
+	enterpriseAudit(c, user.ID, "role_granted", fmt.Sprintf("向员工 #%d 授予权限组“%s”", binding.UserID, role.Name), fmt.Sprintf(`{"user_id":%d,"role_id":%d}`, binding.UserID, role.ID))
 	c.JSON(http.StatusCreated, binding)
 }
 
 func (api *EnterpriseAPI) DeleteRoleBinding(c *gin.Context) {
+	actor, _ := enterpriseCurrentUser(c)
 	tenant, ok := enterpriseTenant(c)
 	if !ok {
 		return
@@ -860,6 +879,7 @@ func (api *EnterpriseAPI) DeleteRoleBinding(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Role binding not found"})
 		return
 	}
+	enterpriseAudit(c, actor.ID, "role_revoked", fmt.Sprintf("撤销权限授予 #%d", id), fmt.Sprintf(`{"binding_id":%d}`, id))
 	c.JSON(http.StatusOK, gin.H{"message": "Role revoked"})
 }
 
@@ -1023,6 +1043,7 @@ func (api *EnterpriseAPI) CreateSharedPool(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"error": "Failed to create shared pool"})
 		return
 	}
+	enterpriseAudit(c, user.ID, "shared_pool_created", fmt.Sprintf("创建共享资源池“%s”", pool.Name), fmt.Sprintf(`{"pool_id":%d,"scope_type":"%s"}`, pool.ID, pool.ScopeType))
 	c.JSON(http.StatusCreated, pool)
 }
 func (api *EnterpriseAPI) ListSharedPoolSessions(c *gin.Context) {
@@ -1244,6 +1265,7 @@ func (api *EnterpriseAPI) ShareSessionToPool(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to share session"})
 		return
 	}
+	enterpriseAudit(c, user.ID, "pool_session_shared", fmt.Sprintf("将会话“%s”共享到资源池“%s”", session.Title, pool.Name), fmt.Sprintf(`{"pool_id":%d,"session_id":"%s"}`, pool.ID, entry.SessionID))
 	c.JSON(http.StatusCreated, entry)
 }
 func (api *EnterpriseAPI) ListSharedPoolFiles(c *gin.Context) {
@@ -1315,6 +1337,7 @@ func (api *EnterpriseAPI) ShareFileToPool(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to share file"})
 		return
 	}
+	enterpriseAudit(c, user.ID, "pool_file_shared", fmt.Sprintf("将文件“%s”共享到资源池“%s”", file.Name, pool.Name), fmt.Sprintf(`{"pool_id":%d,"file_id":"%s"}`, pool.ID, clone.ID))
 	c.JSON(http.StatusCreated, entry)
 }
 func (api *EnterpriseAPI) DownloadSharedPoolFile(c *gin.Context) {
@@ -1432,6 +1455,7 @@ func (api *EnterpriseAPI) UpdateTaskStatus(c *gin.Context) {
 		return
 	}
 	model.DB.First(&task, task.ID)
+	enterpriseAudit(c, user.ID, "task_status_changed", fmt.Sprintf("将任务“%s”状态更新为 %s", task.Title, status), fmt.Sprintf(`{"task_id":%d,"status":"%s"}`, task.ID, status))
 	c.JSON(http.StatusOK, task)
 }
 
@@ -1532,10 +1556,14 @@ func (api *EnterpriseAPI) AddTaskParticipant(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to add participant"})
 		return
 	}
+	var participant model.User
+	model.DB.First(&participant, input.UserID)
+	enterpriseAudit(c, user.ID, "task_participant_added", fmt.Sprintf("将员工“%s”加入任务“%s”", participant.Username, task.Title), fmt.Sprintf(`{"task_id":%d,"user_id":%d,"role":"%s"}`, task.ID, input.UserID, role))
 	c.JSON(http.StatusCreated, assignment)
 }
 
 func (api *EnterpriseAPI) DeleteTaskParticipant(c *gin.Context) {
+	actor, _ := enterpriseCurrentUser(c)
 	tenant, ok := enterpriseTenant(c)
 	if !ok {
 		return
@@ -1564,6 +1592,9 @@ func (api *EnterpriseAPI) DeleteTaskParticipant(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to remove participant"})
 		return
 	}
+	var participant model.User
+	model.DB.First(&participant, userID)
+	enterpriseAudit(c, actor.ID, "task_participant_removed", fmt.Sprintf("将员工“%s”移出任务“%s”", participant.Username, task.Title), fmt.Sprintf(`{"task_id":%d,"user_id":%d}`, task.ID, userID))
 	c.JSON(http.StatusOK, gin.H{"message": "Participant removed"})
 }
 
@@ -1601,10 +1632,12 @@ func (api *EnterpriseAPI) AddTaskDepartment(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to add department"})
 		return
 	}
+	enterpriseAudit(c, user.ID, "task_department_added", fmt.Sprintf("将部门“%s”加入任务“%s”", department.Name, task.Title), fmt.Sprintf(`{"task_id":%d,"department_id":%d}`, task.ID, department.ID))
 	c.JSON(http.StatusCreated, item)
 }
 
 func (api *EnterpriseAPI) DeleteTaskDepartment(c *gin.Context) {
+	actor, _ := enterpriseCurrentUser(c)
 	tenant, ok := enterpriseTenant(c)
 	if !ok {
 		return
@@ -1624,6 +1657,11 @@ func (api *EnterpriseAPI) DeleteTaskDepartment(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to remove department"})
 		return
 	}
+	var department model.Department
+	var task model.EnterpriseTask
+	model.DB.First(&department, departmentID)
+	model.DB.First(&task, taskID)
+	enterpriseAudit(c, actor.ID, "task_department_removed", fmt.Sprintf("将部门“%s”移出任务“%s”", department.Name, task.Title), fmt.Sprintf(`{"task_id":%d,"department_id":%d}`, taskID, departmentID))
 	c.JSON(http.StatusOK, gin.H{"message": "Department removed"})
 }
 
@@ -1703,9 +1741,11 @@ func (api *EnterpriseAPI) CreateConnectorCommand(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create enterprise connector"})
 		return
 	}
+	enterpriseAudit(c, user.ID, "connector_command_created", fmt.Sprintf("生成设备“%s”的连接命令", device.Name), fmt.Sprintf(`{"device_id":%d,"owner_user_id":%d}`, device.ID, ownerID))
 	c.JSON(http.StatusCreated, gin.H{"token": token, "device": device, "mode": connector.Mode, "listen_port": connector.ListenPort})
 }
 func (api *EnterpriseAPI) RotateConnectorCommand(c *gin.Context) {
+	user, _ := enterpriseCurrentUser(c)
 	tenant, ok := enterpriseTenant(c)
 	if !ok {
 		return
@@ -1725,10 +1765,11 @@ func (api *EnterpriseAPI) RotateConnectorCommand(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to regenerate connector command"})
 		return
 	}
+	enterpriseAudit(c, user.ID, "connector_command_rotated", fmt.Sprintf("重新生成设备“%s”的连接命令", device.Name), fmt.Sprintf(`{"device_id":%d}`, device.ID))
 	c.JSON(http.StatusOK, gin.H{"token": token, "device": device, "mode": connector.Mode, "listen_port": connector.ListenPort})
 }
 func (api *EnterpriseAPI) CreateDevice(c *gin.Context) {
-	_, ok := enterpriseCurrentUser(c)
+	user, ok := enterpriseCurrentUser(c)
 	if !ok {
 		return
 	}
@@ -1754,9 +1795,11 @@ func (api *EnterpriseAPI) CreateDevice(c *gin.Context) {
 		c.JSON(http.StatusConflict, gin.H{"error": "Failed to create device"})
 		return
 	}
+	enterpriseAudit(c, user.ID, "device_created", fmt.Sprintf("登记企业设备“%s”", device.Name), fmt.Sprintf(`{"device_id":%d}`, device.ID))
 	c.JSON(http.StatusCreated, device)
 }
 func (api *EnterpriseAPI) UpdateDevice(c *gin.Context) {
+	user, _ := enterpriseCurrentUser(c)
 	tenant, ok := enterpriseTenant(c)
 	if !ok {
 		return
@@ -1796,6 +1839,7 @@ func (api *EnterpriseAPI) UpdateDevice(c *gin.Context) {
 		return
 	}
 	model.DB.First(&device, id)
+	enterpriseAudit(c, user.ID, "device_updated", fmt.Sprintf("更新企业设备“%s”", device.Name), fmt.Sprintf(`{"device_id":%d}`, device.ID))
 	c.JSON(http.StatusOK, device)
 }
 func (api *EnterpriseAPI) ListDeviceAssignments(c *gin.Context) {
@@ -1829,6 +1873,7 @@ func (api *EnterpriseAPI) AssignDevice(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	enterpriseAudit(c, user.ID, "device_assigned", fmt.Sprintf("分配设备 #%d", assignment.DeviceID), fmt.Sprintf(`{"assignment_id":%d,"device_id":%d,"scope_type":"%s"}`, assignment.ID, assignment.DeviceID, assignment.ScopeType))
 	c.JSON(http.StatusCreated, assignment)
 }
 func (api *EnterpriseAPI) RevokeDeviceAssignment(c *gin.Context) {
@@ -1849,6 +1894,7 @@ func (api *EnterpriseAPI) RevokeDeviceAssignment(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Device assignment not found or already revoked"})
 		return
 	}
+	enterpriseAudit(c, user.ID, "device_assignment_revoked", fmt.Sprintf("撤销设备分配 #%d", id), fmt.Sprintf(`{"assignment_id":%d}`, id))
 	c.JSON(http.StatusOK, gin.H{"message": "Device assignment revoked"})
 }
 func (api *EnterpriseAPI) ListQuotaAccounts(c *gin.Context) {
@@ -1913,6 +1959,7 @@ func (api *EnterpriseAPI) CreateQuotaAccount(c *gin.Context) {
 		}
 		model.DB.First(&account, account.ID)
 	}
+	enterpriseAudit(c, user.ID, "quota_account_created", "登记组织预算账户", fmt.Sprintf(`{"account_id":%d,"scope_type":"%s","initial_limit":"%s"}`, account.ID, account.ScopeType, amount))
 	c.JSON(http.StatusCreated, account)
 }
 func (api *EnterpriseAPI) AllocateQuota(c *gin.Context) {
@@ -1951,6 +1998,7 @@ func (api *EnterpriseAPI) AllocateQuota(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	enterpriseAudit(c, user.ID, "budget_allocated", fmt.Sprintf("分配组织预算 %s 到资源池", amount), fmt.Sprintf(`{"parent_account_id":%d,"child_account_id":%d,"amount":"%s"}`, input.ParentAccountID, input.ChildAccountID, amount))
 	c.JSON(http.StatusOK, gin.H{"message": "Quota allocated"})
 }
 
@@ -2003,6 +2051,7 @@ func (api *EnterpriseAPI) FundPoolFromPersonalBalance(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	enterpriseAudit(c, user.ID, "personal_balance_allocated", fmt.Sprintf("将个人余额 %s 分配到资源池", amount), fmt.Sprintf(`{"pool_id":%d,"amount":"%s"}`, input.PoolID, amount))
 	c.JSON(http.StatusOK, gin.H{"message": "Personal balance allocated to pool"})
 }
 
@@ -2109,6 +2158,9 @@ func (api *EnterpriseAPI) GrantOrganizationBudgetToUser(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	var employee model.User
+	model.DB.First(&employee, input.UserID)
+	enterpriseAudit(c, user.ID, "budget_granted", fmt.Sprintf("向员工“%s”发放组织预算 %s", employee.Username, amount), fmt.Sprintf(`{"user_id":%d,"amount":"%s"}`, employee.ID, amount))
 	c.JSON(http.StatusOK, gin.H{"message": "Organization budget granted"})
 }
 func (api *EnterpriseAPI) ListQuotaLedger(c *gin.Context) {
@@ -2391,6 +2443,13 @@ func enterpriseAudit(c *gin.Context, userID uint, action, message, metadata stri
 		return
 	}
 	service.RecordAuditLog(service.AuditLogInput{LogType: service.AuditLogTypeAdmin, Action: action, Resource: "enterprise", UserID: &userID, Method: c.Request.Method, Path: c.Request.URL.Path, IPAddress: c.ClientIP(), UserAgent: c.Request.UserAgent(), StatusCode: http.StatusOK, Message: message, Metadata: metadata})
+}
+
+func enterpriseAuditCurrent(c *gin.Context, action, message, metadata string) {
+	user, ok := enterpriseCurrentUser(c)
+	if ok {
+		enterpriseAudit(c, user.ID, action, message, metadata)
+	}
 }
 
 func enterprisePortalSettingKey(organizationID uint) string {
