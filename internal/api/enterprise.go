@@ -966,6 +966,7 @@ func (api *EnterpriseAPI) CreateTask(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusCreated, task)
+	enterpriseAudit(c, user.ID, "task_created", fmt.Sprintf("创建任务“%s”（优先级 P%d）", task.Title, task.Priority), fmt.Sprintf(`{"task_id":%d}`, task.ID))
 }
 
 func (api *EnterpriseAPI) ListSharedPools(c *gin.Context) {
@@ -2053,6 +2054,11 @@ func (api *EnterpriseAPI) moveOrganizationBudget(c *gin.Context, reclaim bool) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if reclaim {
+		enterpriseAudit(c, user.ID, "budget_reclaimed", fmt.Sprintf("从任务池“%s”回收组织预算 %s", pool.Name, amount), fmt.Sprintf(`{"pool_id":%d,"amount":"%s"}`, pool.ID, amount))
+	} else {
+		enterpriseAudit(c, user.ID, "budget_allocated", fmt.Sprintf("向任务池“%s”分配组织预算 %s", pool.Name, amount), fmt.Sprintf(`{"pool_id":%d,"amount":"%s"}`, pool.ID, amount))
+	}
 	c.JSON(http.StatusOK, gin.H{"message": "Organization budget transferred"})
 }
 
@@ -2378,6 +2384,13 @@ func enterpriseTenant(c *gin.Context) (*middleware.TenantContext, bool) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "Enterprise tenant context is required"})
 	}
 	return tenant, ok
+}
+
+func enterpriseAudit(c *gin.Context, userID uint, action, message, metadata string) {
+	if userID == 0 {
+		return
+	}
+	service.RecordAuditLog(service.AuditLogInput{LogType: service.AuditLogTypeAdmin, Action: action, Resource: "enterprise", UserID: &userID, Method: c.Request.Method, Path: c.Request.URL.Path, IPAddress: c.ClientIP(), UserAgent: c.Request.UserAgent(), StatusCode: http.StatusOK, Message: message, Metadata: metadata})
 }
 
 func enterprisePortalSettingKey(organizationID uint) string {
