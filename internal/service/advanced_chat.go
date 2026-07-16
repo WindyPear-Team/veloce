@@ -346,6 +346,7 @@ func registerAdvancedChatUserRoutes(group *gin.RouterGroup) {
 	group.PUT("/advanced-chat/mcp-servers", api.updateUserMCPServers)
 	group.GET("/advanced-chat/agents", api.listAgents)
 	group.POST("/advanced-chat/agents", api.createAgent)
+	group.POST("/advanced-chat/agents/generate", api.generateAgent)
 	group.PUT("/advanced-chat/agents/:id", api.updateAgent)
 	group.DELETE("/advanced-chat/agents/:id", api.deleteAgent)
 	group.GET("/advanced-chat/skills", api.listSkills)
