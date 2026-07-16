@@ -14,17 +14,19 @@ const (
 	CompanyObjectiveStatusCompleted = "completed"
 	CompanyObjectiveStatusArchived  = "archived"
 
-	CompanyWorkStatusInbox          = "inbox"
-	CompanyWorkStatusPlanned        = "planned"
-	CompanyWorkStatusOwnerDecision  = "owner_decision"
-	CompanyWorkStatusAuthorized     = "authorized"
-	CompanyWorkStatusQueued         = "queued"
-	CompanyWorkStatusExecuting      = "executing"
-	CompanyWorkStatusAwaitingReview = "awaiting_review"
-	CompanyWorkStatusVerified       = "verified"
-	CompanyWorkStatusDelivered      = "delivered"
-	CompanyWorkStatusBlocked        = "blocked"
-	CompanyWorkStatusCancelled      = "cancelled"
+	CompanyWorkStatusInbox            = "inbox"
+	CompanyWorkStatusPlanned          = "planned"
+	CompanyWorkStatusOwnerDecision    = "owner_decision"
+	CompanyWorkStatusAuthorized       = "authorized"
+	CompanyWorkStatusQueued           = "queued"
+	CompanyWorkStatusExecuting        = "executing"
+	CompanyWorkStatusAwaitingReview   = "awaiting_review"
+	CompanyWorkStatusVerified         = "verified"
+	CompanyWorkStatusDelivered        = "delivered"
+	CompanyWorkStatusBlocked          = "blocked"
+	CompanyWorkStatusRetryableFailure = "retryable_failure"
+	CompanyWorkStatusDeadLetter       = "dead_letter"
+	CompanyWorkStatusCancelled        = "cancelled"
 )
 
 type CompanyObjective struct {
@@ -131,7 +133,7 @@ func NormalizeCompanyWorkStatus(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case CompanyWorkStatusInbox, CompanyWorkStatusPlanned, CompanyWorkStatusOwnerDecision, CompanyWorkStatusAuthorized,
 		CompanyWorkStatusQueued, CompanyWorkStatusExecuting, CompanyWorkStatusAwaitingReview, CompanyWorkStatusVerified,
-		CompanyWorkStatusDelivered, CompanyWorkStatusBlocked, CompanyWorkStatusCancelled:
+		CompanyWorkStatusDelivered, CompanyWorkStatusBlocked, CompanyWorkStatusRetryableFailure, CompanyWorkStatusDeadLetter, CompanyWorkStatusCancelled:
 		return strings.ToLower(strings.TrimSpace(value))
 	default:
 		return CompanyWorkStatusPlanned

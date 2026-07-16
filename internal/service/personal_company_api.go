@@ -32,6 +32,7 @@ func RegisterPersonalCompanyUserRoutes(group *gin.RouterGroup) {
 	group.POST("/personal-company/work-items", api.createWorkItem)
 	group.GET("/personal-company/work-items/:id/timeline", api.getWorkItemTimeline)
 	group.POST("/personal-company/work-items/:id/approve", api.approveWorkItem)
+	group.POST("/personal-company/work-items/:id/queue", api.queueWorkItem)
 	group.POST("/personal-company/work-items/:id/cancel", api.cancelWorkItem)
 	group.GET("/personal-company/approvals", api.listApprovals)
 	group.POST("/personal-company/approvals/:id/decide", api.decideApproval)

@@ -269,6 +269,35 @@ func (api *personalCompanyAPI) cancelWorkItem(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": model.CompanyWorkStatusCancelled})
 }
 
+func (api *personalCompanyAPI) queueWorkItem(c *gin.Context) {
+	ctx, ok := api.personalCompanyContext(c)
+	if !ok {
+		return
+	}
+	company, err := loadPersonalCompany(ctx.userID)
+	if writePersonalCompanyLoadError(c, err) {
+		return
+	}
+	workItem, err := loadPersonalCompanyWorkItem(company.ID, ctx.userID, c.Param("id"))
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Work item not found"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load work item"})
+		return
+	}
+	if err := QueuePersonalCompanyWorkItem(model.DB, company, workItem.ID, ctx.userID); err != nil {
+		if errors.Is(err, ErrPersonalCompanyWorkNotQueueable) {
+			c.JSON(http.StatusConflict, gin.H{"error": "Work item is not authorized for queueing"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to queue work item"})
+		}
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"status": model.CompanyWorkStatusQueued})
+}
+
 func loadPersonalCompanyWorkItem(companyID, userID uint, rawID string) (model.CompanyWorkItem, error) {
 	id, err := strconv.ParseUint(strings.TrimSpace(rawID), 10, 64)
 	if err != nil {
