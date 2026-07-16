@@ -275,6 +275,8 @@ func initAdvancedChatFeatures() error {
 		&AdvancedChatRun{},
 		&AdvancedChatRunEvent{},
 		&AdvancedChatFile{},
+		&AdvancedChatKnowledgeBase{},
+		&AdvancedChatKnowledgeDocument{},
 		&AdvancedChatConnectorDevice{},
 		&AdvancedChatConnectorTask{},
 		&AdvancedChatStaticSite{},
@@ -317,6 +319,13 @@ func registerAdvancedChatUserRoutes(group *gin.RouterGroup) {
 	group.GET("/advanced-chat/files/:id/content", api.getFileContent)
 	group.GET("/advanced-chat/files/:id/download", api.downloadFile)
 	group.DELETE("/advanced-chat/files/:id", api.deleteFile)
+	group.GET("/advanced-chat/knowledge-bases", api.listKnowledgeBases)
+	group.POST("/advanced-chat/knowledge-bases", api.createKnowledgeBase)
+	group.PUT("/advanced-chat/knowledge-bases/:id", api.updateKnowledgeBase)
+	group.DELETE("/advanced-chat/knowledge-bases/:id", api.deleteKnowledgeBase)
+	group.GET("/advanced-chat/knowledge-bases/:id/documents", api.listKnowledgeDocuments)
+	group.POST("/advanced-chat/knowledge-bases/:id/documents", api.uploadKnowledgeDocument)
+	group.DELETE("/advanced-chat/knowledge-bases/:id/documents/:document_id", api.deleteKnowledgeDocument)
 	group.GET("/advanced-chat/runs/:id/connector-tasks/pending", api.listPendingConnectorTasks)
 	group.GET("/advanced-chat/connector-tasks/:id", api.getConnectorTask)
 	group.POST("/advanced-chat/connector-tasks/:id/decision", api.decideConnectorTask)

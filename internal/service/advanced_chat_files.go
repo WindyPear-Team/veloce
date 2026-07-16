@@ -105,7 +105,7 @@ func (api *advancedChatAPI) listFiles(c *gin.Context) {
 	}
 
 	var files []AdvancedChatFile
-	if err := model.DB.Where("user_id = ?", user.ID).Order("created_at DESC").Find(&files).Error; err != nil {
+	if err := model.DB.Where("user_id = ? AND source <> ?", user.ID, advancedChatKnowledgeDocumentSource).Order("created_at DESC").Find(&files).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list files"})
 		return
 	}
@@ -241,6 +241,10 @@ func (api *advancedChatAPI) deleteFile(c *gin.Context) {
 	var file AdvancedChatFile
 	if err := model.DB.Where("id = ? AND user_id = ?", c.Param("id"), user.ID).First(&file).Error; err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "File not found"})
+		return
+	}
+	if file.Source == advancedChatKnowledgeDocumentSource {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Knowledge base documents must be deleted from their knowledge base"})
 		return
 	}
 	if err := model.DB.Where("id = ? AND user_id = ?", file.ID, user.ID).Delete(&AdvancedChatFile{}).Error; err != nil {
