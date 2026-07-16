@@ -44,6 +44,7 @@ type advancedChatCompletionInput struct {
 	AgentGroupID             string                          `json:"agent_group_id"`
 	SkillIDs                 []string                        `json:"skill_ids"`
 	MCPServerIDs             []string                        `json:"mcp_server_ids"`
+	KnowledgeBaseIDs         []string                        `json:"knowledge_base_ids"`
 	ConnectorDeviceID        string                          `json:"connector_device_id"`
 	ConnectorWorkspacePath   string                          `json:"connector_workspace_path"`
 	ConnectorAutoApprove     bool                            `json:"connector_auto_approve"`
@@ -191,6 +192,20 @@ func (api *advancedChatAPI) completeChat(c *gin.Context) {
 		skillIDs = uniqueStringsLocal(append(decodeStringList(agent.SkillIDs), skillIDs...))
 		mcpServerIDs = uniqueStringsLocal(append(decodeStringList(agent.MCPServerIDs), mcpServerIDs...))
 	}
+	sessionKnowledgeBaseIDs, valid := normalizeAdvancedChatKnowledgeBaseIDs(c, user.ID, input.KnowledgeBaseIDs)
+	if !valid {
+		return
+	}
+	input.KnowledgeBaseIDs = sessionKnowledgeBaseIDs
+	knowledgeBaseIDs := sessionKnowledgeBaseIDs
+	if agent != nil {
+		knowledgeBaseIDs = uniqueStringsLocal(append(decodeStringList(agent.KnowledgeBaseIDs), knowledgeBaseIDs...))
+	}
+	knowledgeContext, err := advancedChatKnowledgeContext(c.Request.Context(), c, user, knowledgeBaseIDs, messages)
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		return
+	}
 	skills, err := loadAdvancedChatSkills(user.ID, skillIDs)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load skills"})
@@ -251,6 +266,13 @@ func (api *advancedChatAPI) completeChat(c *gin.Context) {
 	}
 
 	systemPrompt := buildAdvancedChatCompletionSystemPrompt(agent, skills, nil, mode)
+	if strings.TrimSpace(knowledgeContext) != "" {
+		if strings.TrimSpace(systemPrompt) == "" {
+			systemPrompt = knowledgeContext
+		} else {
+			systemPrompt = strings.Join([]string{systemPrompt, knowledgeContext}, "\n\n")
+		}
+	}
 	extension, err := BuildAdvancedChatRuntimeExtension(ctx, AdvancedChatRuntimeContext{
 		UserID:    user.ID,
 		Mode:      mode,

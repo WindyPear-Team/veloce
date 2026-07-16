@@ -15,25 +15,27 @@ import (
 )
 
 type AdvancedChatAgent struct {
-	ID             uint       `gorm:"primaryKey" json:"id"`
-	UserID         uint       `gorm:"uniqueIndex:idx_advanced_chat_agent_user_name;uniqueIndex:idx_advanced_chat_agent_user_stable_id;not null" json:"user_id"`
-	User           model.User `gorm:"foreignKey:UserID" json:"-"`
-	OrganizationID uint       `gorm:"index" json:"organization_id,omitempty"`
-	WorkspaceID    uint       `gorm:"index" json:"workspace_id,omitempty"`
-	OwnerUserID    uint       `gorm:"index" json:"owner_user_id,omitempty"`
-	Visibility     string     `gorm:"size:20;not null;default:'personal';index" json:"visibility"`
-	StableID       *string    `gorm:"uniqueIndex:idx_advanced_chat_agent_user_stable_id;size:80" json:"-"`
-	Name           string     `gorm:"uniqueIndex:idx_advanced_chat_agent_user_name;size:100;not null" json:"name"`
-	Prompt         string     `gorm:"type:text;not null" json:"prompt"`
-	DefaultModel   string     `gorm:"size:100;not null" json:"default_model"`
-	UserChannelID  uint       `gorm:"index" json:"user_channel_id"`
-	Stream         bool       `gorm:"not null;default:false" json:"stream"`
-	SkillIDs       string     `gorm:"type:text;not null;default:'[]'" json:"-"`
-	Skills         []string   `gorm:"-" json:"skill_ids"`
-	MCPServerIDs   string     `gorm:"type:text;not null;default:'[]'" json:"-"`
-	MCPServers     []string   `gorm:"-" json:"mcp_server_ids"`
-	CreatedAt      time.Time  `json:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at"`
+	ID               uint       `gorm:"primaryKey" json:"id"`
+	UserID           uint       `gorm:"uniqueIndex:idx_advanced_chat_agent_user_name;uniqueIndex:idx_advanced_chat_agent_user_stable_id;not null" json:"user_id"`
+	User             model.User `gorm:"foreignKey:UserID" json:"-"`
+	OrganizationID   uint       `gorm:"index" json:"organization_id,omitempty"`
+	WorkspaceID      uint       `gorm:"index" json:"workspace_id,omitempty"`
+	OwnerUserID      uint       `gorm:"index" json:"owner_user_id,omitempty"`
+	Visibility       string     `gorm:"size:20;not null;default:'personal';index" json:"visibility"`
+	StableID         *string    `gorm:"uniqueIndex:idx_advanced_chat_agent_user_stable_id;size:80" json:"-"`
+	Name             string     `gorm:"uniqueIndex:idx_advanced_chat_agent_user_name;size:100;not null" json:"name"`
+	Prompt           string     `gorm:"type:text;not null" json:"prompt"`
+	DefaultModel     string     `gorm:"size:100;not null" json:"default_model"`
+	UserChannelID    uint       `gorm:"index" json:"user_channel_id"`
+	Stream           bool       `gorm:"not null;default:false" json:"stream"`
+	SkillIDs         string     `gorm:"type:text;not null;default:'[]'" json:"-"`
+	Skills           []string   `gorm:"-" json:"skill_ids"`
+	MCPServerIDs     string     `gorm:"type:text;not null;default:'[]'" json:"-"`
+	MCPServers       []string   `gorm:"-" json:"mcp_server_ids"`
+	KnowledgeBaseIDs string     `gorm:"type:text;not null;default:'[]'" json:"-"`
+	KnowledgeBases   []string   `gorm:"-" json:"knowledge_base_ids"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
 }
 
 const (
@@ -42,20 +44,21 @@ const (
 )
 
 type advancedChatAgentResponse struct {
-	ID             string    `json:"id"`
-	Name           string    `json:"name"`
-	OrganizationID uint      `json:"organization_id,omitempty"`
-	WorkspaceID    uint      `json:"workspace_id,omitempty"`
-	OwnerUserID    uint      `json:"owner_user_id,omitempty"`
-	Visibility     string    `json:"visibility"`
-	Prompt         string    `json:"prompt"`
-	DefaultModel   string    `json:"default_model"`
-	UserChannelID  uint      `json:"user_channel_id,omitempty"`
-	Stream         bool      `json:"stream"`
-	SkillIDs       []string  `json:"skill_ids"`
-	MCPServerIDs   []string  `json:"mcp_server_ids"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID               string    `json:"id"`
+	Name             string    `json:"name"`
+	OrganizationID   uint      `json:"organization_id,omitempty"`
+	WorkspaceID      uint      `json:"workspace_id,omitempty"`
+	OwnerUserID      uint      `json:"owner_user_id,omitempty"`
+	Visibility       string    `json:"visibility"`
+	Prompt           string    `json:"prompt"`
+	DefaultModel     string    `json:"default_model"`
+	UserChannelID    uint      `json:"user_channel_id,omitempty"`
+	Stream           bool      `json:"stream"`
+	SkillIDs         []string  `json:"skill_ids"`
+	MCPServerIDs     []string  `json:"mcp_server_ids"`
+	KnowledgeBaseIDs []string  `json:"knowledge_base_ids"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 type AdvancedChatAgentStudio struct {
@@ -75,18 +78,16 @@ type AdvancedChatAgentStudio struct {
 }
 
 type AdvancedChatUserSettings struct {
-	ID                              uint       `gorm:"primaryKey" json:"id"`
-	UserID                          uint       `gorm:"uniqueIndex;not null" json:"user_id"`
-	User                            model.User `gorm:"foreignKey:UserID" json:"-"`
-	CustomMCPServers                string     `gorm:"type:text;not null" json:"custom_mcp_servers"`
-	TitleModelName                  string     `gorm:"size:100;not null;default:''" json:"title_model_name"`
-	TitleUserChannelID              uint       `gorm:"index" json:"title_user_channel_id"`
-	TitleGenerationScope            string     `gorm:"size:20;not null;default:'recent'" json:"title_generation_scope"`
-	ConnectorApprovalAgentID        string     `gorm:"size:80;not null;default:''" json:"connector_approval_agent_id"`
-	KnowledgeEmbeddingModelName     string     `gorm:"size:100;not null;default:''" json:"knowledge_embedding_model_name"`
-	KnowledgeEmbeddingUserChannelID uint       `gorm:"index" json:"knowledge_embedding_user_channel_id"`
-	CreatedAt                       time.Time  `json:"created_at"`
-	UpdatedAt                       time.Time  `json:"updated_at"`
+	ID                       uint       `gorm:"primaryKey" json:"id"`
+	UserID                   uint       `gorm:"uniqueIndex;not null" json:"user_id"`
+	User                     model.User `gorm:"foreignKey:UserID" json:"-"`
+	CustomMCPServers         string     `gorm:"type:text;not null" json:"custom_mcp_servers"`
+	TitleModelName           string     `gorm:"size:100;not null;default:''" json:"title_model_name"`
+	TitleUserChannelID       uint       `gorm:"index" json:"title_user_channel_id"`
+	TitleGenerationScope     string     `gorm:"size:20;not null;default:'recent'" json:"title_generation_scope"`
+	ConnectorApprovalAgentID string     `gorm:"size:80;not null;default:''" json:"connector_approval_agent_id"`
+	CreatedAt                time.Time  `json:"created_at"`
+	UpdatedAt                time.Time  `json:"updated_at"`
 }
 
 type AdvancedChatSkill struct {
@@ -127,14 +128,15 @@ type AdvancedChatMCPServer struct {
 type advancedChatAPI struct{}
 
 type advancedChatAgentInput struct {
-	Name          string   `json:"name"`
-	Prompt        string   `json:"prompt"`
-	DefaultModel  string   `json:"default_model"`
-	UserChannelID uint     `json:"user_channel_id"`
-	Stream        bool     `json:"stream"`
-	SkillIDs      []string `json:"skill_ids"`
-	MCPServerIDs  []string `json:"mcp_server_ids"`
-	Visibility    string   `json:"visibility"`
+	Name             string   `json:"name"`
+	Prompt           string   `json:"prompt"`
+	DefaultModel     string   `json:"default_model"`
+	UserChannelID    uint     `json:"user_channel_id"`
+	Stream           bool     `json:"stream"`
+	SkillIDs         []string `json:"skill_ids"`
+	MCPServerIDs     []string `json:"mcp_server_ids"`
+	KnowledgeBaseIDs []string `json:"knowledge_base_ids"`
+	Visibility       string   `json:"visibility"`
 }
 
 type advancedChatAdminSettingsResponse struct {
@@ -189,8 +191,6 @@ type advancedChatUserSettingsResponse struct {
 	TitleUserChannelID                   uint                    `json:"title_user_channel_id,omitempty"`
 	TitleGenerationScope                 string                  `json:"title_generation_scope"`
 	ConnectorApprovalAgentID             string                  `json:"connector_approval_agent_id"`
-	KnowledgeEmbeddingModelName          string                  `json:"knowledge_embedding_model_name"`
-	KnowledgeEmbeddingUserChannelID      uint                    `json:"knowledge_embedding_user_channel_id"`
 }
 
 type advancedChatAdminSettingsInput struct {
@@ -220,11 +220,6 @@ type advancedChatAdminSettingsInput struct {
 
 type advancedChatUserMCPInput struct {
 	CustomMCPServers []AdvancedChatMCPServer `json:"custom_mcp_servers"`
-}
-
-type advancedChatKnowledgeEmbeddingSettingsInput struct {
-	ModelName     string `json:"model_name"`
-	UserChannelID uint   `json:"user_channel_id"`
 }
 
 type advancedChatUserSettingsInput struct {
@@ -338,9 +333,8 @@ func registerAdvancedChatUserRoutes(group *gin.RouterGroup) {
 	group.GET("/advanced-chat/knowledge-bases/:id/documents", api.listKnowledgeDocuments)
 	group.POST("/advanced-chat/knowledge-bases/:id/documents", api.uploadKnowledgeDocument)
 	group.DELETE("/advanced-chat/knowledge-bases/:id/documents/:document_id", api.deleteKnowledgeDocument)
-	group.POST("/advanced-chat/knowledge-bases/:id/documents/:document_id/reindex", api.reindexKnowledgeDocument)
+	group.POST("/advanced-chat/knowledge-bases/:id/vectorize", api.vectorizeKnowledgeBase)
 	group.POST("/advanced-chat/knowledge-bases/:id/search", api.searchKnowledgeBase)
-	group.PUT("/advanced-chat/knowledge-embedding-settings", api.updateKnowledgeEmbeddingSettings)
 	group.GET("/advanced-chat/runs/:id/connector-tasks/pending", api.listPendingConnectorTasks)
 	group.GET("/advanced-chat/connector-tasks/:id", api.getConnectorTask)
 	group.POST("/advanced-chat/connector-tasks/:id/decision", api.decideConnectorTask)
@@ -687,13 +681,14 @@ func (api *advancedChatAPI) updateAgent(c *gin.Context) {
 		return
 	}
 	if err := model.DB.Model(agent).Updates(map[string]interface{}{
-		"name":            next.Name,
-		"prompt":          next.Prompt,
-		"default_model":   next.DefaultModel,
-		"user_channel_id": next.UserChannelID,
-		"stream":          next.Stream,
-		"skill_ids":       next.SkillIDs,
-		"mcp_server_ids":  next.MCPServerIDs,
+		"name":               next.Name,
+		"prompt":             next.Prompt,
+		"default_model":      next.DefaultModel,
+		"user_channel_id":    next.UserChannelID,
+		"stream":             next.Stream,
+		"skill_ids":          next.SkillIDs,
+		"mcp_server_ids":     next.MCPServerIDs,
+		"knowledge_base_ids": next.KnowledgeBaseIDs,
 	}).Error; err != nil {
 		if isAdvancedChatUniqueConstraintError(err) {
 			c.JSON(http.StatusConflict, gin.H{"error": "Agent name already exists"})
@@ -851,8 +846,13 @@ func advancedChatAgentFromInput(c *gin.Context, userID uint, input advancedChatA
 	if !ok {
 		return AdvancedChatAgent{}, false
 	}
+	knowledgeBaseIDs, ok := normalizeAdvancedChatKnowledgeBaseIDs(c, userID, input.KnowledgeBaseIDs)
+	if !ok {
+		return AdvancedChatAgent{}, false
+	}
 	skillIDsJSON, _ := json.Marshal(skillIDs)
 	mcpServerIDsJSON, _ := json.Marshal(mcpServerIDs)
+	knowledgeBaseIDsJSON, _ := json.Marshal(knowledgeBaseIDs)
 	organizationID, workspaceID := advancedChatEnterpriseScope(c)
 	visibility := model.NormalizeResourceVisibility(input.Visibility)
 	if organizationID == 0 {
@@ -863,18 +863,19 @@ func advancedChatAgentFromInput(c *gin.Context, userID uint, input advancedChatA
 		return AdvancedChatAgent{}, false
 	}
 	return AdvancedChatAgent{
-		UserID:         userID,
-		OwnerUserID:    userID,
-		OrganizationID: organizationID,
-		WorkspaceID:    workspaceID,
-		Visibility:     visibility,
-		Name:           name,
-		Prompt:         prompt,
-		DefaultModel:   defaultModel,
-		UserChannelID:  userChannelID,
-		Stream:         input.Stream,
-		SkillIDs:       string(skillIDsJSON),
-		MCPServerIDs:   string(mcpServerIDsJSON),
+		UserID:           userID,
+		OwnerUserID:      userID,
+		OrganizationID:   organizationID,
+		WorkspaceID:      workspaceID,
+		Visibility:       visibility,
+		Name:             name,
+		Prompt:           prompt,
+		DefaultModel:     defaultModel,
+		UserChannelID:    userChannelID,
+		Stream:           input.Stream,
+		SkillIDs:         string(skillIDsJSON),
+		MCPServerIDs:     string(mcpServerIDsJSON),
+		KnowledgeBaseIDs: string(knowledgeBaseIDsJSON),
 	}, true
 }
 
@@ -884,6 +885,7 @@ func hydrateAdvancedChatAgentLists(agent *AdvancedChatAgent) {
 	}
 	agent.Skills = decodeStringList(agent.SkillIDs)
 	agent.MCPServers = decodeStringList(agent.MCPServerIDs)
+	agent.KnowledgeBases = decodeStringList(agent.KnowledgeBaseIDs)
 }
 
 func advancedChatAgentResponseFromModel(agent *AdvancedChatAgent) advancedChatAgentResponse {
@@ -896,20 +898,21 @@ func advancedChatAgentResponseFromModel(agent *AdvancedChatAgent) advancedChatAg
 		id = strings.TrimSpace(*agent.StableID)
 	}
 	return advancedChatAgentResponse{
-		ID:             id,
-		Name:           agent.Name,
-		OrganizationID: agent.OrganizationID,
-		WorkspaceID:    agent.WorkspaceID,
-		OwnerUserID:    agent.OwnerUserID,
-		Visibility:     agent.Visibility,
-		Prompt:         agent.Prompt,
-		DefaultModel:   agent.DefaultModel,
-		UserChannelID:  agent.UserChannelID,
-		Stream:         agent.Stream,
-		SkillIDs:       agent.Skills,
-		MCPServerIDs:   agent.MCPServers,
-		CreatedAt:      agent.CreatedAt,
-		UpdatedAt:      agent.UpdatedAt,
+		ID:               id,
+		Name:             agent.Name,
+		OrganizationID:   agent.OrganizationID,
+		WorkspaceID:      agent.WorkspaceID,
+		OwnerUserID:      agent.OwnerUserID,
+		Visibility:       agent.Visibility,
+		Prompt:           agent.Prompt,
+		DefaultModel:     agent.DefaultModel,
+		UserChannelID:    agent.UserChannelID,
+		Stream:           agent.Stream,
+		SkillIDs:         agent.Skills,
+		MCPServerIDs:     agent.MCPServers,
+		KnowledgeBaseIDs: agent.KnowledgeBases,
+		CreatedAt:        agent.CreatedAt,
+		UpdatedAt:        agent.UpdatedAt,
 	}
 }
 
@@ -1049,8 +1052,6 @@ func currentAdvancedChatUserSettings(userID uint) advancedChatUserSettingsRespon
 		TitleUserChannelID:                   userSettings.TitleUserChannelID,
 		TitleGenerationScope:                 normalizeAdvancedChatTitleGenerationScope(userSettings.TitleGenerationScope),
 		ConnectorApprovalAgentID:             strings.TrimSpace(userSettings.ConnectorApprovalAgentID),
-		KnowledgeEmbeddingModelName:          strings.TrimSpace(userSettings.KnowledgeEmbeddingModelName),
-		KnowledgeEmbeddingUserChannelID:      userSettings.KnowledgeEmbeddingUserChannelID,
 	}
 	if !advancedChatPremiumFeaturesAvailable() {
 		settings.FileStorageEnabled = false

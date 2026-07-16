@@ -52,6 +52,7 @@ type AdvancedChatSession struct {
 	AgentGroupID             string     `gorm:"size:80" json:"agent_group_id"`
 	SkillIDs                 string     `gorm:"type:text;not null" json:"-"`
 	MCPServerIDs             string     `gorm:"type:text;not null" json:"-"`
+	KnowledgeBaseIDs         string     `gorm:"type:text;not null;default:'[]'" json:"-"`
 	ConnectorDeviceID        string     `gorm:"size:80" json:"connector_device_id"`
 	ConnectorWorkspacePath   string     `gorm:"type:text" json:"connector_workspace_path"`
 	ConnectorAutoApprove     bool       `gorm:"default:false" json:"connector_auto_approve"`
@@ -158,6 +159,7 @@ type advancedChatSessionResponse struct {
 	AgentGroupID             string                        `json:"agent_group_id,omitempty"`
 	SkillIDs                 []string                      `json:"skill_ids"`
 	MCPServerIDs             []string                      `json:"mcp_server_ids"`
+	KnowledgeBaseIDs         []string                      `json:"knowledge_base_ids"`
 	ConnectorDeviceID        string                        `json:"connector_device_id,omitempty"`
 	ConnectorWorkspacePath   string                        `json:"connector_workspace_path,omitempty"`
 	ConnectorAutoApprove     bool                          `json:"connector_auto_approve"`
@@ -256,6 +258,7 @@ type advancedChatSessionInput struct {
 	AgentGroupID             string                            `json:"agent_group_id"`
 	SkillIDs                 []string                          `json:"skill_ids"`
 	MCPServerIDs             []string                          `json:"mcp_server_ids"`
+	KnowledgeBaseIDs         []string                          `json:"knowledge_base_ids"`
 	ConnectorDeviceID        string                            `json:"connector_device_id"`
 	ConnectorWorkspacePath   string                            `json:"connector_workspace_path"`
 	ConnectorAutoApprove     bool                              `json:"connector_auto_approve"`
@@ -288,6 +291,7 @@ type preparedAdvancedChatAssistantRun struct {
 	skills                   []advancedChatRuntimeSkill
 	workspaceSkills          []advancedChatWorkspaceSkill
 	agentGroups              []advancedChatAgentGroup
+	knowledgeContext         string
 	agentGroup               *advancedChatAgentGroup
 	groupAgent               *advancedChatGroupAgent
 	servers                  []AdvancedChatMCPServer
@@ -1237,6 +1241,25 @@ func prepareAdvancedChatAssistantRun(ctx context.Context, userID uint, input adv
 	if mode == advancedChatModeChat {
 		input.ConnectorApprovalMode = advancedChatConnectorApprovalManual
 	}
+	sessionKnowledgeBaseIDs, valid := normalizeAdvancedChatKnowledgeBaseIDs(nil, userID, input.KnowledgeBaseIDs)
+	if !valid {
+		return preparedAdvancedChatAssistantRun{}, http.StatusBadRequest, "Knowledge base is not vectorized", errors.New("knowledge base is not vectorized")
+	}
+	input.KnowledgeBaseIDs = sessionKnowledgeBaseIDs
+	knowledgeBaseIDs := sessionKnowledgeBaseIDs
+	if agent != nil {
+		knowledgeBaseIDs = uniqueStringsLocal(append(decodeStringList(agent.KnowledgeBaseIDs), knowledgeBaseIDs...))
+	}
+	if len(knowledgeBaseIDs) > 0 {
+		knowledgeBaseIDs, valid = normalizeAdvancedChatKnowledgeBaseIDs(nil, userID, knowledgeBaseIDs)
+		if !valid {
+			return preparedAdvancedChatAssistantRun{}, http.StatusBadRequest, "Knowledge base is not vectorized", errors.New("knowledge base is not vectorized")
+		}
+	}
+	knowledgeContext, err := advancedChatKnowledgeContext(ctx, nil, &model.User{ID: userID}, knowledgeBaseIDs, messages)
+	if err != nil {
+		return preparedAdvancedChatAssistantRun{}, http.StatusBadGateway, err.Error(), err
+	}
 	input.ConnectorAutoApprove = input.ConnectorApprovalMode == advancedChatConnectorApprovalFullAccess
 	input.Mode = mode
 	return preparedAdvancedChatAssistantRun{
@@ -1249,6 +1272,7 @@ func prepareAdvancedChatAssistantRun(ctx context.Context, userID uint, input adv
 		skills:                   skills,
 		workspaceSkills:          workspaceSkills,
 		agentGroups:              agentGroups,
+		knowledgeContext:         knowledgeContext,
 		agentGroup:               selectedGroup,
 		groupAgent:               groupAgent,
 		servers:                  servers,
@@ -1394,6 +1418,10 @@ func saveAdvancedChatSessionSnapshot(userID uint, sessionID string, input advanc
 	if agent != nil {
 		mcpServerIDs = uniqueStringsLocal(append(decodeStringList(agent.MCPServerIDs), mcpServerIDs...))
 	}
+	knowledgeBaseIDs, valid := normalizeAdvancedChatKnowledgeBaseIDs(nil, userID, input.KnowledgeBaseIDs)
+	if !valid {
+		return advancedChatSessionResponse{}, http.StatusBadRequest, "Knowledge base is not vectorized", errors.New("knowledge base is not vectorized")
+	}
 	if (runMode == advancedChatModeAssistant || runMode == advancedChatModeAgentGroup) && !advancedChatAssistantMCPToolsEnabled() && (len(mcpServerIDs) > 0 || len(skillMCPIDs(skills)) > 0) {
 		return advancedChatSessionResponse{}, http.StatusBadRequest, "MCP tools are disabled", errors.New("mcp tools disabled")
 	}
@@ -1444,6 +1472,7 @@ func saveAdvancedChatSessionSnapshot(userID uint, sessionID string, input advanc
 	}
 	skillIDsJSON, _ := json.Marshal(skillIDs)
 	mcpServerIDsJSON, _ := json.Marshal(mcpServerIDs)
+	knowledgeBaseIDsJSON, _ := json.Marshal(knowledgeBaseIDs)
 
 	err := model.DB.Transaction(func(tx *gorm.DB) error {
 		var existingByID AdvancedChatSession
@@ -1473,6 +1502,7 @@ func saveAdvancedChatSessionSnapshot(userID uint, sessionID string, input advanc
 			AgentGroupID:             agentGroupID,
 			SkillIDs:                 string(skillIDsJSON),
 			MCPServerIDs:             string(mcpServerIDsJSON),
+			KnowledgeBaseIDs:         string(knowledgeBaseIDsJSON),
 			ConnectorDeviceID:        connectorDeviceID,
 			ConnectorWorkspacePath:   connectorWorkspacePath,
 			ConnectorAutoApprove:     connectorAutoApprove,
@@ -1496,6 +1526,7 @@ func saveAdvancedChatSessionSnapshot(userID uint, sessionID string, input advanc
 				"agent_group_id":             session.AgentGroupID,
 				"skill_ids":                  session.SkillIDs,
 				"mcp_server_ids":             session.MCPServerIDs,
+				"knowledge_base_ids":         session.KnowledgeBaseIDs,
 				"connector_device_id":        session.ConnectorDeviceID,
 				"connector_workspace_path":   session.ConnectorWorkspacePath,
 				"connector_auto_approve":     session.ConnectorAutoApprove,
@@ -1592,6 +1623,7 @@ func createAdvancedChatAssistantRun(userID uint, prepared preparedAdvancedChatAs
 	}
 	skillIDs, _ := json.Marshal(uniqueStringsLocal(prepared.input.SkillIDs))
 	mcpServerIDs, _ := json.Marshal(uniqueStringsLocal(prepared.input.MCPServerIDs))
+	knowledgeBaseIDs, _ := json.Marshal(uniqueStringsLocal(prepared.input.KnowledgeBaseIDs))
 	commandPrefixes, _ := json.Marshal(normalizeConnectorCommandPrefixes(prepared.input.ConnectorCommandPrefixes))
 	emptyToolCalls := "[]"
 	now := time.Now()
@@ -1626,6 +1658,7 @@ func createAdvancedChatAssistantRun(userID uint, prepared preparedAdvancedChatAs
 			AgentGroupID:             strings.TrimSpace(prepared.input.AgentGroupID),
 			SkillIDs:                 string(skillIDs),
 			MCPServerIDs:             string(mcpServerIDs),
+			KnowledgeBaseIDs:         string(knowledgeBaseIDs),
 			ConnectorDeviceID:        strings.TrimSpace(prepared.input.ConnectorDeviceID),
 			ConnectorWorkspacePath:   prepared.connectorWorkspace,
 			ConnectorAutoApprove:     prepared.connectorApprovalMode == advancedChatConnectorApprovalFullAccess,
@@ -1649,6 +1682,7 @@ func createAdvancedChatAssistantRun(userID uint, prepared preparedAdvancedChatAs
 				"agent_group_id":             session.AgentGroupID,
 				"skill_ids":                  session.SkillIDs,
 				"mcp_server_ids":             session.MCPServerIDs,
+				"knowledge_base_ids":         session.KnowledgeBaseIDs,
 				"connector_device_id":        session.ConnectorDeviceID,
 				"connector_workspace_path":   session.ConnectorWorkspacePath,
 				"connector_auto_approve":     session.ConnectorAutoApprove,
@@ -2000,6 +2034,13 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 			systemPrompt = extension.SystemPrompt
 		} else {
 			systemPrompt = strings.Join([]string{systemPrompt, extension.SystemPrompt}, "\n\n")
+		}
+	}
+	if strings.TrimSpace(prepared.knowledgeContext) != "" {
+		if strings.TrimSpace(systemPrompt) == "" {
+			systemPrompt = prepared.knowledgeContext
+		} else {
+			systemPrompt = strings.Join([]string{systemPrompt, prepared.knowledgeContext}, "\n\n")
 		}
 	}
 	executorMessages := make([]ChatExecutorMessage, 0, len(prepared.messages)+prepared.maxToolRounds*2)
@@ -2727,6 +2768,7 @@ func createPersistedAdvancedChatCompletionSession(userID uint, input advancedCha
 		AgentGroupID:             input.AgentGroupID,
 		SkillIDs:                 input.SkillIDs,
 		MCPServerIDs:             input.MCPServerIDs,
+		KnowledgeBaseIDs:         input.KnowledgeBaseIDs,
 		ConnectorDeviceID:        input.ConnectorDeviceID,
 		ConnectorWorkspacePath:   input.ConnectorWorkspacePath,
 		ConnectorAutoApprove:     input.ConnectorAutoApprove,
@@ -3186,6 +3228,7 @@ func advancedChatSessionResponseFromModel(session AdvancedChatSession) (advanced
 		AgentGroupID:             session.AgentGroupID,
 		SkillIDs:                 decodeStringList(session.SkillIDs),
 		MCPServerIDs:             decodeStringList(session.MCPServerIDs),
+		KnowledgeBaseIDs:         decodeStringList(session.KnowledgeBaseIDs),
 		ConnectorDeviceID:        session.ConnectorDeviceID,
 		ConnectorWorkspacePath:   session.ConnectorWorkspacePath,
 		ConnectorAutoApprove:     session.ConnectorAutoApprove,

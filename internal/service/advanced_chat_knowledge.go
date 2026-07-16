@@ -15,13 +15,15 @@ import (
 const advancedChatKnowledgeDocumentSource = "knowledge_base"
 
 type AdvancedChatKnowledgeBase struct {
-	ID          string     `gorm:"primaryKey;size:80" json:"id"`
-	UserID      uint       `gorm:"uniqueIndex:idx_advanced_chat_knowledge_user_name;index;not null" json:"user_id"`
-	User        model.User `gorm:"foreignKey:UserID" json:"-"`
-	Name        string     `gorm:"uniqueIndex:idx_advanced_chat_knowledge_user_name;size:120;not null" json:"name"`
-	Description string     `gorm:"type:text;not null;default:''" json:"description"`
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
+	ID                     string     `gorm:"primaryKey;size:80" json:"id"`
+	UserID                 uint       `gorm:"uniqueIndex:idx_advanced_chat_knowledge_user_name;index;not null" json:"user_id"`
+	User                   model.User `gorm:"foreignKey:UserID" json:"-"`
+	Name                   string     `gorm:"uniqueIndex:idx_advanced_chat_knowledge_user_name;size:120;not null" json:"name"`
+	Description            string     `gorm:"type:text;not null;default:''" json:"description"`
+	EmbeddingModelName     string     `gorm:"size:100;not null;default:''" json:"embedding_model_name"`
+	EmbeddingUserChannelID uint       `gorm:"index" json:"embedding_user_channel_id"`
+	CreatedAt              time.Time  `json:"created_at"`
+	UpdatedAt              time.Time  `json:"updated_at"`
 }
 
 type AdvancedChatKnowledgeDocument struct {
@@ -49,13 +51,16 @@ type advancedChatKnowledgeBaseInput struct {
 }
 
 type advancedChatKnowledgeBaseResponse struct {
-	ID            string    `json:"id"`
-	Name          string    `json:"name"`
-	Description   string    `json:"description"`
-	DocumentCount int       `json:"document_count"`
-	StorageBytes  int64     `json:"storage_bytes"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID                     string    `json:"id"`
+	Name                   string    `json:"name"`
+	Description            string    `json:"description"`
+	DocumentCount          int       `json:"document_count"`
+	StorageBytes           int64     `json:"storage_bytes"`
+	EmbeddingModelName     string    `json:"embedding_model_name,omitempty"`
+	EmbeddingUserChannelID uint      `json:"embedding_user_channel_id,omitempty"`
+	Vectorized             bool      `json:"vectorized"`
+	CreatedAt              time.Time `json:"created_at"`
+	UpdatedAt              time.Time `json:"updated_at"`
 }
 
 type advancedChatKnowledgeDocumentResponse struct {
@@ -96,7 +101,7 @@ func (api *advancedChatAPI) listKnowledgeBases(c *gin.Context) {
 	}
 	result := make([]advancedChatKnowledgeBaseResponse, 0, len(bases))
 	for _, base := range bases {
-		result = append(result, advancedChatKnowledgeBaseResponseFromModel(base, counts[base.ID], sizes[base.ID]))
+		result = append(result, advancedChatKnowledgeBaseResponseFromModel(base, counts[base.ID], sizes[base.ID], advancedChatKnowledgeBaseIsVectorized(base)))
 	}
 	c.JSON(http.StatusOK, gin.H{"knowledge_bases": result})
 }
@@ -124,7 +129,7 @@ func (api *advancedChatAPI) createKnowledgeBase(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create knowledge base"})
 		return
 	}
-	c.JSON(http.StatusOK, advancedChatKnowledgeBaseResponseFromModel(base, 0, 0))
+	c.JSON(http.StatusOK, advancedChatKnowledgeBaseResponseFromModel(base, 0, 0, false))
 }
 
 func (api *advancedChatAPI) updateKnowledgeBase(c *gin.Context) {
@@ -162,7 +167,7 @@ func (api *advancedChatAPI) updateKnowledgeBase(c *gin.Context) {
 	for _, document := range documents {
 		size += document.Size
 	}
-	c.JSON(http.StatusOK, advancedChatKnowledgeBaseResponseFromModel(*base, len(documents), size))
+	c.JSON(http.StatusOK, advancedChatKnowledgeBaseResponseFromModel(*base, len(documents), size, advancedChatKnowledgeBaseIsVectorized(*base)))
 }
 
 func (api *advancedChatAPI) deleteKnowledgeBase(c *gin.Context) {
@@ -289,7 +294,6 @@ func (api *advancedChatAPI) uploadKnowledgeDocument(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save knowledge document"})
 		return
 	}
-	queueAdvancedChatKnowledgeEmbedding(document.ID)
 	c.JSON(http.StatusOK, gin.H{"document": advancedChatKnowledgeDocumentResponseFromModel(document), "used_bytes": advancedChatFileStorageUsedBytes(user.ID), "total_bytes": advancedChatFileStorageTotalBytes(), "remaining_bytes": advancedChatFileStorageRemainingBytes(user.ID)})
 }
 
@@ -348,8 +352,8 @@ func loadAdvancedChatKnowledgeBase(c *gin.Context, userID uint, id string) (*Adv
 	return &base, true
 }
 
-func advancedChatKnowledgeBaseResponseFromModel(base AdvancedChatKnowledgeBase, documentCount int, storageBytes int64) advancedChatKnowledgeBaseResponse {
-	return advancedChatKnowledgeBaseResponse{ID: base.ID, Name: base.Name, Description: base.Description, DocumentCount: documentCount, StorageBytes: storageBytes, CreatedAt: base.CreatedAt, UpdatedAt: base.UpdatedAt}
+func advancedChatKnowledgeBaseResponseFromModel(base AdvancedChatKnowledgeBase, documentCount int, storageBytes int64, vectorized bool) advancedChatKnowledgeBaseResponse {
+	return advancedChatKnowledgeBaseResponse{ID: base.ID, Name: base.Name, Description: base.Description, DocumentCount: documentCount, StorageBytes: storageBytes, EmbeddingModelName: base.EmbeddingModelName, EmbeddingUserChannelID: base.EmbeddingUserChannelID, Vectorized: vectorized, CreatedAt: base.CreatedAt, UpdatedAt: base.UpdatedAt}
 }
 
 func advancedChatKnowledgeDocumentResponseFromModel(document AdvancedChatKnowledgeDocument) advancedChatKnowledgeDocumentResponse {
