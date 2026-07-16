@@ -28,6 +28,61 @@ type personalCompanyRuntimePolicy struct {
 	ConnectorCommandPrefixes []string `json:"connector_command_prefixes,omitempty"`
 }
 
+type personalCompanyStudioBindingInput struct {
+	AgentGroupID             string   `json:"agent_group_id"`
+	ConnectorDeviceID        string   `json:"connector_device_id"`
+	ConnectorWorkspacePath   string   `json:"connector_workspace_path"`
+	ConnectorCommandPrefixes []string `json:"connector_command_prefixes"`
+}
+
+// bindCompanyStudio makes the company a governed operating mode for one
+// existing Agent Studio. It does not copy or alter the Studio's agents.
+func (api *personalCompanyAPI) bindCompanyStudio(c *gin.Context) {
+	ctx, ok := api.personalCompanyContext(c)
+	if !ok {
+		return
+	}
+	company, err := loadPersonalCompany(ctx.userID)
+	if writePersonalCompanyLoadError(c, err) {
+		return
+	}
+	var input personalCompanyStudioBindingInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	input.AgentGroupID = strings.TrimSpace(input.AgentGroupID)
+	if input.AgentGroupID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "An existing Agent Studio is required"})
+		return
+	}
+	if _, err := readAdvancedChatAgentGroup(c.Request.Context(), ctx.userID, nil, input.AgentGroupID); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Selected Agent Studio is unavailable"})
+		return
+	}
+	workspace := strings.TrimSpace(input.ConnectorWorkspacePath)
+	if strings.TrimSpace(input.ConnectorDeviceID) != "" || workspace != "" {
+		_, resolved, err := loadAdvancedChatConnectorForRun(ctx.userID, input.ConnectorDeviceID, workspace)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		workspace = resolved
+	}
+	prefixes, _ := json.Marshal(normalizeConnectorCommandPrefixes(input.ConnectorCommandPrefixes))
+	updates := map[string]interface{}{"agent_group_id": input.AgentGroupID, "connector_device_id": strings.TrimSpace(input.ConnectorDeviceID), "connector_workspace_path": workspace, "connector_command_prefixes": string(prefixes)}
+	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&model.PersonalCompany{}).Where("id = ? AND owner_user_id = ?", company.ID, ctx.userID).Updates(updates).Error; err != nil {
+			return err
+		}
+		return createPersonalCompanyAuditEvent(tx, company.ID, nil, "owner", ctx.userID, "company.studio_bound", fmt.Sprintf(`{"agent_group_id":%q}`, input.AgentGroupID))
+	}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to bind Agent Studio"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"agent_group_id": input.AgentGroupID})
+}
+
 func (api *personalCompanyAPI) bindEmployeeRuntime(c *gin.Context) {
 	ctx, ok := api.personalCompanyContext(c)
 	if !ok {
@@ -108,7 +163,8 @@ func startPersonalCompanyWorkRun(company model.PersonalCompany, userID, workItem
 	if err := model.DB.First(&work, workItemID).Error; err != nil {
 		return model.CompanyWorkAttempt{}, "", err
 	}
-	if work.AssignedEmployeeID == nil {
+	useStudio := strings.TrimSpace(company.AgentGroupID) != ""
+	if !useStudio && work.AssignedEmployeeID == nil {
 		var fallback model.PersonalCompanyEmployee
 		if err := model.DB.Where("personal_company_id = ? AND status IN ? AND advanced_chat_agent_id <> ''", company.ID, []string{model.PersonalCompanyEmployeeProbation, model.PersonalCompanyEmployeeActive}).Order("created_at ASC").First(&fallback).Error; err != nil {
 			return model.CompanyWorkAttempt{}, "", errors.New("work item needs an assigned employee with an Advanced Chat agent")
@@ -118,26 +174,37 @@ func startPersonalCompanyWorkRun(company model.PersonalCompany, userID, workItem
 		}
 		work.AssignedEmployeeID = &fallback.ID
 	}
-	var employee model.PersonalCompanyEmployee
-	if err := model.DB.Where("id = ? AND personal_company_id = ? AND status IN ?", *work.AssignedEmployeeID, company.ID, []string{model.PersonalCompanyEmployeeProbation, model.PersonalCompanyEmployeeActive}).First(&employee).Error; err != nil {
-		return model.CompanyWorkAttempt{}, "", errors.New("assigned employee is unavailable")
-	}
-	if strings.TrimSpace(employee.AdvancedChatAgentID) == "" {
-		return model.CompanyWorkAttempt{}, "", errors.New("assigned employee has no Advanced Chat agent")
-	}
-	var version model.CompanyEmployeeVersion
-	if err := model.DB.Where("employee_id = ? AND personal_company_id = ? AND version = ?", employee.ID, company.ID, employee.Version).First(&version).Error; err != nil {
-		return model.CompanyWorkAttempt{}, "", errors.New("assigned employee version is unavailable")
-	}
 	policy := personalCompanyRuntimePolicy{}
-	_ = json.Unmarshal([]byte(version.ModelPolicy), &policy)
-	agent, err := loadAdvancedChatAgent(userID, employee.AdvancedChatAgentID)
-	if err != nil || agent == nil || strings.TrimSpace(agent.DefaultModel) == "" {
-		return model.CompanyWorkAttempt{}, "", errors.New("assigned Advanced Chat agent has no model")
+	modelName, agentID, mode, agentGroupID := "", "", advancedChatModeAssistant, ""
+	if useStudio {
+		if _, err := readAdvancedChatAgentGroup(context.Background(), userID, nil, company.AgentGroupID); err != nil {
+			return model.CompanyWorkAttempt{}, "", errors.New("bound Agent Studio is unavailable")
+		}
+		_ = json.Unmarshal([]byte(company.ConnectorCommandPrefixes), &policy.ConnectorCommandPrefixes)
+		policy.ConnectorDeviceID, policy.ConnectorWorkspacePath = company.ConnectorDeviceID, company.ConnectorWorkspacePath
+		mode, agentGroupID = advancedChatModeAgentGroup, company.AgentGroupID
+	} else {
+		var employee model.PersonalCompanyEmployee
+		if err := model.DB.Where("id = ? AND personal_company_id = ? AND status IN ?", *work.AssignedEmployeeID, company.ID, []string{model.PersonalCompanyEmployeeProbation, model.PersonalCompanyEmployeeActive}).First(&employee).Error; err != nil {
+			return model.CompanyWorkAttempt{}, "", errors.New("assigned employee is unavailable")
+		}
+		if strings.TrimSpace(employee.AdvancedChatAgentID) == "" {
+			return model.CompanyWorkAttempt{}, "", errors.New("assigned employee has no Advanced Chat agent")
+		}
+		var version model.CompanyEmployeeVersion
+		if err := model.DB.Where("employee_id = ? AND personal_company_id = ? AND version = ?", employee.ID, company.ID, employee.Version).First(&version).Error; err != nil {
+			return model.CompanyWorkAttempt{}, "", errors.New("assigned employee version is unavailable")
+		}
+		_ = json.Unmarshal([]byte(version.ModelPolicy), &policy)
+		agent, err := loadAdvancedChatAgent(userID, employee.AdvancedChatAgentID)
+		if err != nil || agent == nil || strings.TrimSpace(agent.DefaultModel) == "" {
+			return model.CompanyWorkAttempt{}, "", errors.New("assigned Advanced Chat agent has no model")
+		}
+		modelName, agentID = agent.DefaultModel, employee.AdvancedChatAgentID
 	}
 	prompt := fmt.Sprintf("You are completing a governed Personal Company work item.\nTitle: %s\nDescription: %s\nDefinition of done: %s\nInput snapshot: %s\n\nUse only the provided tools. Never perform external side effects without the connector's manual approval. Return a concise result with evidence, unresolved risks, and next steps.", work.Title, work.Description, work.DefinitionOfDone, work.InputSnapshot)
-	input := advancedChatCompletionInput{SessionID: newAdvancedChatID("pcw"), Title: "Personal Company: " + work.Title, ModelName: agent.DefaultModel, Messages: []advancedChatCompletionMessage{{Role: "user", Content: prompt}}, Mode: advancedChatModeAssistant, AgentID: employee.AdvancedChatAgentID, ConnectorDeviceID: policy.ConnectorDeviceID, ConnectorWorkspacePath: policy.ConnectorWorkspacePath, ConnectorApprovalMode: advancedChatConnectorApprovalManual, ConnectorCommandPrefixes: policy.ConnectorCommandPrefixes}
-	prepared, _, message, err := prepareAdvancedChatAssistantRun(context.Background(), userID, input, input.Messages, agent.DefaultModel)
+	input := advancedChatCompletionInput{SessionID: newAdvancedChatID("pcw"), Title: "Personal Company: " + work.Title, ModelName: modelName, Messages: []advancedChatCompletionMessage{{Role: "user", Content: prompt}}, Mode: mode, AgentID: agentID, AgentGroupID: agentGroupID, ConnectorDeviceID: policy.ConnectorDeviceID, ConnectorWorkspacePath: policy.ConnectorWorkspacePath, ConnectorApprovalMode: advancedChatConnectorApprovalManual, ConnectorCommandPrefixes: policy.ConnectorCommandPrefixes}
+	prepared, _, message, err := prepareAdvancedChatAssistantRun(context.Background(), userID, input, input.Messages, modelName)
 	if err != nil {
 		return model.CompanyWorkAttempt{}, "", errors.New(message)
 	}
