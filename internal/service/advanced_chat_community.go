@@ -12,7 +12,7 @@ func InitCommunityAdvancedChatFeatures() error {
 	if CurrentEdition() == "premium" {
 		return nil
 	}
-	return model.DB.AutoMigrate(
+	err := model.DB.AutoMigrate(
 		&AdvancedChatAgent{},
 		&AdvancedChatAgentStudio{},
 		&AdvancedChatUserSettings{},
@@ -28,10 +28,16 @@ func InitCommunityAdvancedChatFeatures() error {
 		&AdvancedChatRunEvent{},
 		&AdvancedChatKnowledgeBase{},
 		&AdvancedChatKnowledgeDocument{},
+		&AdvancedChatKnowledgeChunk{},
 		&AdvancedChatConnectorDevice{},
 		&AdvancedChatConnectorTask{},
 		&AdvancedChatStaticSite{},
 	)
+	if err == nil {
+		ensureAdvancedChatKnowledgePostgresVectorColumn()
+		startAdvancedChatKnowledgeEmbeddingWorker()
+	}
+	return err
 }
 
 func InitAdvancedChatFeatures() error {
@@ -92,6 +98,9 @@ func RegisterCommunityAdvancedChatUserRoutes(group *gin.RouterGroup) {
 	group.GET("/advanced-chat/knowledge-bases/:id/documents", api.listKnowledgeDocuments)
 	group.POST("/advanced-chat/knowledge-bases/:id/documents", api.uploadKnowledgeDocument)
 	group.DELETE("/advanced-chat/knowledge-bases/:id/documents/:document_id", api.deleteKnowledgeDocument)
+	group.POST("/advanced-chat/knowledge-bases/:id/documents/:document_id/reindex", api.reindexKnowledgeDocument)
+	group.POST("/advanced-chat/knowledge-bases/:id/search", api.searchKnowledgeBase)
+	group.PUT("/advanced-chat/knowledge-embedding-settings", api.updateKnowledgeEmbeddingSettings)
 	group.GET("/advanced-chat/runs/:id/connector-tasks/pending", api.listPendingConnectorTasks)
 	group.GET("/advanced-chat/connector-tasks/:id", api.getConnectorTask)
 	group.POST("/advanced-chat/connector-tasks/:id/decision", api.decideConnectorTask)

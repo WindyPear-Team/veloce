@@ -25,16 +25,22 @@ type AdvancedChatKnowledgeBase struct {
 }
 
 type AdvancedChatKnowledgeDocument struct {
-	ID              string    `gorm:"primaryKey;size:80" json:"id"`
-	KnowledgeBaseID string    `gorm:"index;size:80;not null" json:"knowledge_base_id"`
-	UserID          uint      `gorm:"index;not null" json:"user_id"`
-	FileID          string    `gorm:"uniqueIndex;size:80;not null" json:"file_id"`
-	Name            string    `gorm:"size:255;not null" json:"name"`
-	MIMEType        string    `gorm:"size:120;not null" json:"mime_type"`
-	Size            int64     `gorm:"not null" json:"size"`
-	TextAvailable   bool      `gorm:"not null;default:false" json:"text_available"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	ID              string     `gorm:"primaryKey;size:80" json:"id"`
+	KnowledgeBaseID string     `gorm:"index;size:80;not null" json:"knowledge_base_id"`
+	UserID          uint       `gorm:"index;not null" json:"user_id"`
+	FileID          string     `gorm:"uniqueIndex;size:80;not null" json:"file_id"`
+	Name            string     `gorm:"size:255;not null" json:"name"`
+	MIMEType        string     `gorm:"size:120;not null" json:"mime_type"`
+	Size            int64      `gorm:"not null" json:"size"`
+	TextAvailable   bool       `gorm:"not null;default:false" json:"text_available"`
+	EmbeddingStatus string     `gorm:"index;size:20;not null;default:'pending'" json:"embedding_status"`
+	EmbeddingError  string     `gorm:"type:text;not null;default:''" json:"embedding_error,omitempty"`
+	EmbeddingModel  string     `gorm:"size:120;not null;default:''" json:"embedding_model,omitempty"`
+	EmbeddingDim    int        `gorm:"not null;default:0" json:"embedding_dimensions"`
+	ChunkCount      int        `gorm:"not null;default:0" json:"chunk_count"`
+	EmbeddedAt      *time.Time `json:"embedded_at,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
 }
 
 type advancedChatKnowledgeBaseInput struct {
@@ -53,14 +59,17 @@ type advancedChatKnowledgeBaseResponse struct {
 }
 
 type advancedChatKnowledgeDocumentResponse struct {
-	ID            string    `json:"id"`
-	FileID        string    `json:"file_id"`
-	Name          string    `json:"name"`
-	Type          string    `json:"type"`
-	Size          int64     `json:"size"`
-	TextAvailable bool      `json:"text_available"`
-	DownloadURL   string    `json:"download_url"`
-	CreatedAt     time.Time `json:"created_at"`
+	ID              string    `json:"id"`
+	FileID          string    `json:"file_id"`
+	Name            string    `json:"name"`
+	Type            string    `json:"type"`
+	Size            int64     `json:"size"`
+	TextAvailable   bool      `json:"text_available"`
+	EmbeddingStatus string    `json:"embedding_status"`
+	EmbeddingError  string    `json:"embedding_error,omitempty"`
+	ChunkCount      int       `json:"chunk_count"`
+	DownloadURL     string    `json:"download_url"`
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 func (api *advancedChatAPI) listKnowledgeBases(c *gin.Context) {
@@ -172,6 +181,9 @@ func (api *advancedChatAPI) deleteKnowledgeBase(c *gin.Context) {
 		return
 	}
 	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("knowledge_base_id = ? AND user_id = ?", base.ID, user.ID).Delete(&AdvancedChatKnowledgeChunk{}).Error; err != nil {
+			return err
+		}
 		if err := tx.Where("knowledge_base_id = ? AND user_id = ?", base.ID, user.ID).Delete(&AdvancedChatKnowledgeDocument{}).Error; err != nil {
 			return err
 		}
@@ -270,12 +282,14 @@ func (api *advancedChatAPI) uploadKnowledgeDocument(c *gin.Context) {
 		MIMEType:        file.MIMEType,
 		Size:            file.Size,
 		TextAvailable:   strings.TrimSpace(file.TextExtract) != "",
+		EmbeddingStatus: advancedChatKnowledgeEmbeddingPending,
 	}
 	if err := model.DB.Create(&document).Error; err != nil {
 		deleteAdvancedChatKnowledgeFile(user.ID, file.ID)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save knowledge document"})
 		return
 	}
+	queueAdvancedChatKnowledgeEmbedding(document.ID)
 	c.JSON(http.StatusOK, gin.H{"document": advancedChatKnowledgeDocumentResponseFromModel(document), "used_bytes": advancedChatFileStorageUsedBytes(user.ID), "total_bytes": advancedChatFileStorageTotalBytes(), "remaining_bytes": advancedChatFileStorageRemainingBytes(user.ID)})
 }
 
@@ -294,7 +308,12 @@ func (api *advancedChatAPI) deleteKnowledgeDocument(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Knowledge document not found"})
 		return
 	}
-	if err := model.DB.Where("id = ? AND user_id = ?", document.ID, user.ID).Delete(&AdvancedChatKnowledgeDocument{}).Error; err != nil {
+	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("document_id = ? AND user_id = ?", document.ID, user.ID).Delete(&AdvancedChatKnowledgeChunk{}).Error; err != nil {
+			return err
+		}
+		return tx.Where("id = ? AND user_id = ?", document.ID, user.ID).Delete(&AdvancedChatKnowledgeDocument{}).Error
+	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete knowledge document"})
 		return
 	}
@@ -334,7 +353,7 @@ func advancedChatKnowledgeBaseResponseFromModel(base AdvancedChatKnowledgeBase, 
 }
 
 func advancedChatKnowledgeDocumentResponseFromModel(document AdvancedChatKnowledgeDocument) advancedChatKnowledgeDocumentResponse {
-	return advancedChatKnowledgeDocumentResponse{ID: document.ID, FileID: document.FileID, Name: document.Name, Type: document.MIMEType, Size: document.Size, TextAvailable: document.TextAvailable, DownloadURL: "/api/user/advanced-chat/files/" + document.FileID + "/download", CreatedAt: document.CreatedAt}
+	return advancedChatKnowledgeDocumentResponse{ID: document.ID, FileID: document.FileID, Name: document.Name, Type: document.MIMEType, Size: document.Size, TextAvailable: document.TextAvailable, EmbeddingStatus: document.EmbeddingStatus, EmbeddingError: document.EmbeddingError, ChunkCount: document.ChunkCount, DownloadURL: "/api/user/advanced-chat/files/" + document.FileID + "/download", CreatedAt: document.CreatedAt}
 }
 
 func deleteAdvancedChatKnowledgeFile(userID uint, fileID string) {

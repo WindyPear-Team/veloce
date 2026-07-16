@@ -75,16 +75,18 @@ type AdvancedChatAgentStudio struct {
 }
 
 type AdvancedChatUserSettings struct {
-	ID                       uint       `gorm:"primaryKey" json:"id"`
-	UserID                   uint       `gorm:"uniqueIndex;not null" json:"user_id"`
-	User                     model.User `gorm:"foreignKey:UserID" json:"-"`
-	CustomMCPServers         string     `gorm:"type:text;not null" json:"custom_mcp_servers"`
-	TitleModelName           string     `gorm:"size:100;not null;default:''" json:"title_model_name"`
-	TitleUserChannelID       uint       `gorm:"index" json:"title_user_channel_id"`
-	TitleGenerationScope     string     `gorm:"size:20;not null;default:'recent'" json:"title_generation_scope"`
-	ConnectorApprovalAgentID string     `gorm:"size:80;not null;default:''" json:"connector_approval_agent_id"`
-	CreatedAt                time.Time  `json:"created_at"`
-	UpdatedAt                time.Time  `json:"updated_at"`
+	ID                              uint       `gorm:"primaryKey" json:"id"`
+	UserID                          uint       `gorm:"uniqueIndex;not null" json:"user_id"`
+	User                            model.User `gorm:"foreignKey:UserID" json:"-"`
+	CustomMCPServers                string     `gorm:"type:text;not null" json:"custom_mcp_servers"`
+	TitleModelName                  string     `gorm:"size:100;not null;default:''" json:"title_model_name"`
+	TitleUserChannelID              uint       `gorm:"index" json:"title_user_channel_id"`
+	TitleGenerationScope            string     `gorm:"size:20;not null;default:'recent'" json:"title_generation_scope"`
+	ConnectorApprovalAgentID        string     `gorm:"size:80;not null;default:''" json:"connector_approval_agent_id"`
+	KnowledgeEmbeddingModelName     string     `gorm:"size:100;not null;default:''" json:"knowledge_embedding_model_name"`
+	KnowledgeEmbeddingUserChannelID uint       `gorm:"index" json:"knowledge_embedding_user_channel_id"`
+	CreatedAt                       time.Time  `json:"created_at"`
+	UpdatedAt                       time.Time  `json:"updated_at"`
 }
 
 type AdvancedChatSkill struct {
@@ -187,6 +189,8 @@ type advancedChatUserSettingsResponse struct {
 	TitleUserChannelID                   uint                    `json:"title_user_channel_id,omitempty"`
 	TitleGenerationScope                 string                  `json:"title_generation_scope"`
 	ConnectorApprovalAgentID             string                  `json:"connector_approval_agent_id"`
+	KnowledgeEmbeddingModelName          string                  `json:"knowledge_embedding_model_name"`
+	KnowledgeEmbeddingUserChannelID      uint                    `json:"knowledge_embedding_user_channel_id"`
 }
 
 type advancedChatAdminSettingsInput struct {
@@ -216,6 +220,11 @@ type advancedChatAdminSettingsInput struct {
 
 type advancedChatUserMCPInput struct {
 	CustomMCPServers []AdvancedChatMCPServer `json:"custom_mcp_servers"`
+}
+
+type advancedChatKnowledgeEmbeddingSettingsInput struct {
+	ModelName     string `json:"model_name"`
+	UserChannelID uint   `json:"user_channel_id"`
 }
 
 type advancedChatUserSettingsInput struct {
@@ -277,6 +286,7 @@ func initAdvancedChatFeatures() error {
 		&AdvancedChatFile{},
 		&AdvancedChatKnowledgeBase{},
 		&AdvancedChatKnowledgeDocument{},
+		&AdvancedChatKnowledgeChunk{},
 		&AdvancedChatConnectorDevice{},
 		&AdvancedChatConnectorTask{},
 		&AdvancedChatStaticSite{},
@@ -284,7 +294,9 @@ func initAdvancedChatFeatures() error {
 		&AdvancedChatScheduledTask{},
 	)
 	if err == nil {
+		ensureAdvancedChatKnowledgePostgresVectorColumn()
 		startAdvancedChatScheduledTaskScheduler()
+		startAdvancedChatKnowledgeEmbeddingWorker()
 	}
 	return err
 }
@@ -326,6 +338,9 @@ func registerAdvancedChatUserRoutes(group *gin.RouterGroup) {
 	group.GET("/advanced-chat/knowledge-bases/:id/documents", api.listKnowledgeDocuments)
 	group.POST("/advanced-chat/knowledge-bases/:id/documents", api.uploadKnowledgeDocument)
 	group.DELETE("/advanced-chat/knowledge-bases/:id/documents/:document_id", api.deleteKnowledgeDocument)
+	group.POST("/advanced-chat/knowledge-bases/:id/documents/:document_id/reindex", api.reindexKnowledgeDocument)
+	group.POST("/advanced-chat/knowledge-bases/:id/search", api.searchKnowledgeBase)
+	group.PUT("/advanced-chat/knowledge-embedding-settings", api.updateKnowledgeEmbeddingSettings)
 	group.GET("/advanced-chat/runs/:id/connector-tasks/pending", api.listPendingConnectorTasks)
 	group.GET("/advanced-chat/connector-tasks/:id", api.getConnectorTask)
 	group.POST("/advanced-chat/connector-tasks/:id/decision", api.decideConnectorTask)
@@ -1034,6 +1049,8 @@ func currentAdvancedChatUserSettings(userID uint) advancedChatUserSettingsRespon
 		TitleUserChannelID:                   userSettings.TitleUserChannelID,
 		TitleGenerationScope:                 normalizeAdvancedChatTitleGenerationScope(userSettings.TitleGenerationScope),
 		ConnectorApprovalAgentID:             strings.TrimSpace(userSettings.ConnectorApprovalAgentID),
+		KnowledgeEmbeddingModelName:          strings.TrimSpace(userSettings.KnowledgeEmbeddingModelName),
+		KnowledgeEmbeddingUserChannelID:      userSettings.KnowledgeEmbeddingUserChannelID,
 	}
 	if !advancedChatPremiumFeaturesAvailable() {
 		settings.FileStorageEnabled = false
