@@ -31,7 +31,6 @@ type personalCompanyWorkItemInput struct {
 	Description      string          `json:"description"`
 	DefinitionOfDone string          `json:"definition_of_done"`
 	Priority         int             `json:"priority"`
-	RiskLevel        string          `json:"risk_level"`
 	IdempotencyKey   string          `json:"idempotency_key"`
 	InputSnapshot    string          `json:"input_snapshot"`
 	AllowedTools     string          `json:"allowed_tools"`
@@ -75,36 +74,16 @@ func (api *personalCompanyAPI) createObjective(c *gin.Context) {
 		return
 	}
 	objective := model.CompanyObjective{PersonalCompanyID: company.ID, OwnerUserID: ctx.userID, Title: truncatePersonalCompanyText(input.Title, 200), Description: strings.TrimSpace(input.Description), Status: model.CompanyObjectiveStatusActive, Priority: input.Priority, TargetDate: input.TargetDate}
-	var workItem model.CompanyWorkItem
 	if err := model.DB.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&objective).Error; err != nil {
 			return err
 		}
-		workItem = model.CompanyWorkItem{PersonalCompanyID: company.ID, OwnerUserID: ctx.userID, ObjectiveID: &objective.ID, Title: "Advance objective: " + objective.Title, Description: objective.Description, DefinitionOfDone: "A Studio result with evidence, remaining risks, and recommended next steps.", Status: model.CompanyWorkStatusQueued, Priority: objective.Priority, RiskLevel: "r0", IdempotencyKey: fmt.Sprintf("objective:%d:initial", objective.ID)}
-		if err := tx.Create(&workItem).Error; err != nil {
-			return err
-		}
-		payload := fmt.Sprintf(`{"work_item_id":%d,"objective_id":%d}`, workItem.ID, objective.ID)
-		if err := tx.Create(&model.CompanySignal{PersonalCompanyID: company.ID, OwnerUserID: ctx.userID, Source: "objective", DeduplicationKey: fmt.Sprintf("objective:%d:initial", objective.ID), Payload: payload, Status: model.CompanySignalStatusTriaged, WorkItemID: &workItem.ID}).Error; err != nil {
-			return err
-		}
-		if err := tx.Create(&model.CompanyOutboxEvent{PersonalCompanyID: company.ID, EventKey: fmt.Sprintf("objective:%d:initial", objective.ID), EventType: "work_item.queued", Payload: payload, Status: model.CompanyOutboxStatusPending}).Error; err != nil {
-			return err
-		}
-		if err := createPersonalCompanyAuditEvent(tx, company.ID, &workItem.ID, "owner", ctx.userID, "objective.created", fmt.Sprintf(`{"objective_id":%d,"work_item_id":%d}`, objective.ID, workItem.ID)); err != nil {
-			return err
-		}
-		return createPersonalCompanyAuditEvent(tx, company.ID, &workItem.ID, "system", 0, "work_item.queued", `{}`)
+		return createPersonalCompanyAuditEvent(tx, company.ID, nil, "owner", ctx.userID, "objective.created", fmt.Sprintf(`{"objective_id":%d}`, objective.ID))
 	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create objective"})
 		return
 	}
-	go func() {
-		if _, _, err := startPersonalCompanyWorkRun(company, ctx.userID, workItem.ID); err != nil {
-			_ = recordPersonalCompanyWorkStartFailure(company.ID, workItem.ID, err)
-		}
-	}()
-	c.JSON(http.StatusCreated, gin.H{"objective": objective, "work_item": workItem})
+	c.JSON(http.StatusCreated, gin.H{"objective": objective})
 }
 
 func recordPersonalCompanyWorkStartFailure(companyID, workItemID uint, startErr error) error {
@@ -167,27 +146,20 @@ func (api *personalCompanyAPI) createWorkItem(c *gin.Context) {
 			return
 		}
 	}
-	riskLevel := normalizePersonalCompanyRiskLevel(input.RiskLevel)
-	if riskLevel == "r4" {
-		c.JSON(http.StatusForbidden, gin.H{"error": "R4 work is forbidden in Personal Company"})
-		return
-	}
 	idempotencyKey := truncatePersonalCompanyText(input.IdempotencyKey, 100)
 	if idempotencyKey == "" {
 		idempotencyKey = newPersonalCompanyID("work")
 	}
-	status := model.CompanyWorkStatusPlanned
-	if riskLevel == "r3" {
-		status = model.CompanyWorkStatusOwnerDecision
-	}
+	// User-created work always enters the governed Studio queue. Connector
+	// operations remain subject to Checker approval during execution.
+	status := model.CompanyWorkStatusQueued
 	inputSnapshot, validSnapshot := normalizedPersonalCompanyStructuredText(input.InputSnapshot, "{}")
 	allowedTools, validTools := normalizedPersonalCompanyStructuredText(input.AllowedTools, "[]")
 	if !validSnapshot || !validTools {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "input_snapshot and allowed_tools must be valid JSON"})
 		return
 	}
-	workItem := model.CompanyWorkItem{PersonalCompanyID: company.ID, OwnerUserID: ctx.userID, ObjectiveID: input.ObjectiveID, Title: truncatePersonalCompanyText(input.Title, 200), Description: strings.TrimSpace(input.Description), DefinitionOfDone: strings.TrimSpace(input.DefinitionOfDone), Status: status, Priority: input.Priority, RiskLevel: riskLevel, IdempotencyKey: idempotencyKey, InputSnapshot: inputSnapshot, AllowedTools: allowedTools, EstimatedCost: input.EstimatedCost, ReservedCost: input.EstimatedCost, DueAt: input.DueAt}
-	var approval *model.CompanyApprovalRequest
+	workItem := model.CompanyWorkItem{PersonalCompanyID: company.ID, OwnerUserID: ctx.userID, ObjectiveID: input.ObjectiveID, Title: truncatePersonalCompanyText(input.Title, 200), Description: strings.TrimSpace(input.Description), DefinitionOfDone: strings.TrimSpace(input.DefinitionOfDone), Status: status, Priority: input.Priority, RiskLevel: "r0", IdempotencyKey: idempotencyKey, InputSnapshot: inputSnapshot, AllowedTools: allowedTools, EstimatedCost: input.EstimatedCost, ReservedCost: input.EstimatedCost, DueAt: input.DueAt}
 	err = model.DB.Transaction(func(tx *gorm.DB) error {
 		if err := ensurePersonalCompanyBudgetAvailable(tx, company, input.EstimatedCost); err != nil {
 			return err
@@ -200,15 +172,7 @@ func (api *personalCompanyAPI) createWorkItem(c *gin.Context) {
 				return err
 			}
 		}
-		if riskLevel == "r3" {
-			expiresAt := time.Now().Add(24 * time.Hour)
-			approvalRequest := model.CompanyApprovalRequest{PersonalCompanyID: company.ID, WorkItemID: workItem.ID, RiskLevel: riskLevel, Status: model.CompanyApprovalPending, RequestedAction: workItem.Title, ParametersHash: personalCompanyParametersHash(workItem), ExpiresAt: &expiresAt}
-			if err := tx.Create(&approvalRequest).Error; err != nil {
-				return err
-			}
-			approval = &approvalRequest
-		}
-		return createPersonalCompanyAuditEvent(tx, company.ID, &workItem.ID, "owner", ctx.userID, "work_item.created", fmt.Sprintf(`{"risk_level":%q,"status":%q}`, riskLevel, status))
+		return createPersonalCompanyAuditEvent(tx, company.ID, &workItem.ID, "owner", ctx.userID, "work_item.created", fmt.Sprintf(`{"status":%q}`, status))
 	})
 	if err != nil {
 		switch {
@@ -221,7 +185,12 @@ func (api *personalCompanyAPI) createWorkItem(c *gin.Context) {
 		}
 		return
 	}
-	c.JSON(http.StatusCreated, gin.H{"work_item": workItem, "approval": approval})
+	go func() {
+		if _, _, err := startPersonalCompanyWorkRun(company, ctx.userID, workItem.ID); err != nil {
+			_ = recordPersonalCompanyWorkStartFailure(company.ID, workItem.ID, err)
+		}
+	}()
+	c.JSON(http.StatusCreated, gin.H{"work_item": workItem})
 }
 
 func (api *personalCompanyAPI) getWorkItemTimeline(c *gin.Context) {
