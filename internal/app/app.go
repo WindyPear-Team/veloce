@@ -743,6 +743,7 @@ func Run() error {
 		userGroup.POST("/enterprise/pools/organization-budget/reclaim", middleware.PermissionMiddleware("cost.pool_reclaim"), enterpriseAPI.ReclaimPoolToOrganizationBudget)
 		userGroup.POST("/enterprise/user-budgets", middleware.PermissionMiddleware("cost.user_grant"), enterpriseAPI.GrantOrganizationBudgetToUser)
 		userGroup.GET("/enterprise/quota-ledger", middleware.PermissionMiddleware("cost.read"), enterpriseAPI.ListQuotaLedger)
+		service.RegisterPersonalCompanyUserRoutes(userGroup)
 		service.RegisterCommunityAdvancedChatUserRoutes(userGroup)
 		messagechannel.RegisterUserRoutes(userGroup)
 		service.ApplyUserRouteHooks(userGroup)

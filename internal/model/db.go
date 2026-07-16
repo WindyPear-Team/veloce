@@ -77,6 +77,21 @@ func InitDB() {
 		&UserPluginConfig{},
 		&PluginKV{},
 		&PluginLog{},
+		&PersonalCompany{},
+		&CompanyCharterRevision{},
+		&PersonalCompanyEmployee{},
+		&CompanyRoleTemplate{},
+		&CompanyEmployeeVersion{},
+		&CompanyCapabilityEvidence{},
+		&CompanyRecruitmentPlan{},
+		&CompanyObjective{},
+		&CompanyWorkItem{},
+		&CompanyWorkAttempt{},
+		&CompanyArtifact{},
+		&CompanyHandoffPackage{},
+		&CompanyApprovalRequest{},
+		&CompanyBudgetLedger{},
+		&CompanyAuditEvent{},
 	)
 	if err != nil {
 		log.Fatalf("failed to migrate database: %v", err)
