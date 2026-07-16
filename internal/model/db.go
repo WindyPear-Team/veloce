@@ -105,9 +105,6 @@ func InitDB() {
 			log.Printf("failed to replace legacy personal company owner index: %v", err)
 		}
 	}
-	if err := DB.Migrator().CreateIndex(&PersonalCompany{}, "idx_personal_company_studio"); err != nil {
-		log.Printf("failed to create personal company studio index: %v", err)
-	}
 	if err := DB.AutoMigrate(
 		&Organization{},
 		&Department{},
