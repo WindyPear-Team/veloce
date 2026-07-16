@@ -2045,6 +2045,7 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 				streamedText = true
 				return observer.OnText(delta, round+1)
 			},
+			ChargeBalance: prepared.input.ChargeBalance,
 		}
 		result, err := executeAdvancedChatModelRequestWithRetry(ctx, user, request, observer, func() bool {
 			return !streamedText
@@ -2274,6 +2275,7 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 						Observer:           observer,
 						Arguments:          arguments,
 						DisplayRound:       round + 1,
+						ChargeBalance:      prepared.input.ChargeBalance,
 					})
 					if err != nil {
 						detail.Status = "error"
@@ -2307,6 +2309,7 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 						Arguments:         arguments,
 						ApprovalChecker:   approvalChecker,
 						DisplayRound:      round + 1,
+						ChargeBalance:     prepared.input.ChargeBalance,
 					})
 					if err != nil {
 						detail.Status = "error"

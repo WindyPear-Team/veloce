@@ -24,6 +24,7 @@ type personalCompanyBootstrapInput struct {
 	Timezone          string          `json:"timezone"`
 	DailyBudget       decimal.Decimal `json:"daily_budget"`
 	MonthlyBudget     decimal.Decimal `json:"monthly_budget"`
+	BalanceFloor      decimal.Decimal `json:"balance_floor"`
 	AutonomyLevel     string          `json:"autonomy_level"`
 	Goals             json.RawMessage `json:"goals"`
 	DataBoundaries    json.RawMessage `json:"data_boundaries"`
@@ -74,7 +75,7 @@ func (api *personalCompanyAPI) bootstrapCompany(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Company name and mission are required"})
 		return
 	}
-	if input.DailyBudget.IsNegative() || input.MonthlyBudget.IsNegative() {
+	if input.DailyBudget.IsNegative() || input.MonthlyBudget.IsNegative() || input.BalanceFloor.IsNegative() {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Budgets cannot be negative"})
 		return
 	}
@@ -86,6 +87,7 @@ func (api *personalCompanyAPI) bootstrapCompany(c *gin.Context) {
 		AutonomyLevel: model.NormalizePersonalCompanyAutonomy(input.AutonomyLevel),
 		DailyBudget:   input.DailyBudget,
 		MonthlyBudget: input.MonthlyBudget,
+		BalanceFloor:  input.BalanceFloor,
 	}
 	goals, valid := normalizedPersonalCompanyJSON(input.Goals, "[]")
 	if !valid {
@@ -129,23 +131,6 @@ func (api *personalCompanyAPI) bootstrapCompany(c *gin.Context) {
 		}
 		company.CharterRevisionID = &charter.ID
 		company.State = model.PersonalCompanyStateOperating
-		roleTemplateIDs := map[string]uint{}
-		for _, template := range bootstrapPersonalCompanyRoleTemplates(company.ID, ctx.userID) {
-			if err := tx.Create(&template).Error; err != nil {
-				return err
-			}
-			roleTemplateIDs[template.TemplateKey] = template.ID
-		}
-		for _, employee := range bootstrapPersonalCompanyEmployees(company.ID) {
-			if err := tx.Create(&employee).Error; err != nil {
-				return err
-			}
-			templateID := roleTemplateIDs[employee.EmployeeKey]
-			version := model.CompanyEmployeeVersion{PersonalCompanyID: company.ID, EmployeeID: employee.ID, Version: 1, RoleTemplateID: &templateID, ToolGrants: "[]", DataScope: "[]", SkillScope: "[]", ModelPolicy: `{}`, CreatedByUserID: ctx.userID}
-			if err := tx.Create(&version).Error; err != nil {
-				return err
-			}
-		}
 		return createPersonalCompanyAuditEvent(tx, company.ID, nil, "owner", ctx.userID, "company.bootstrapped", `{"charter_revision":1}`)
 	}); err != nil {
 		if errors.Is(err, errPersonalCompanyAlreadyBootstrapped) {

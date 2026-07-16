@@ -15,6 +15,12 @@ type personalCompanyDashboardResponse struct {
 	Approvals  []model.CompanyApprovalRequest `json:"approvals"`
 	Budget     personalCompanyBudgetSummary   `json:"budget"`
 	Health     personalCompanyHealthSummary   `json:"health"`
+	Balance    personalCompanyBalanceSummary  `json:"balance_guard"`
+}
+
+type personalCompanyBalanceSummary struct {
+	Current decimal.Decimal `json:"current"`
+	Floor   decimal.Decimal `json:"floor"`
 }
 
 type personalCompanyBudgetSummary struct {
@@ -37,6 +43,11 @@ func personalCompanyDashboard(company model.PersonalCompany) (personalCompanyDas
 		Company: company, Objectives: []model.CompanyObjective{}, WorkItems: []model.CompanyWorkItem{}, Approvals: []model.CompanyApprovalRequest{},
 		Budget: personalCompanyBudgetSummary{DailyLimit: company.DailyBudget, MonthlyLimit: company.MonthlyBudget},
 	}
+	var owner model.User
+	if err := model.DB.Select("balance").Where("id = ?", company.OwnerUserID).First(&owner).Error; err != nil {
+		return response, err
+	}
+	response.Balance = personalCompanyBalanceSummary{Current: owner.Balance, Floor: company.BalanceFloor}
 	if company.CharterRevisionID != nil {
 		var charter model.CompanyCharterRevision
 		if err := model.DB.Where("id = ? AND personal_company_id = ?", *company.CharterRevisionID, company.ID).First(&charter).Error; err == nil {

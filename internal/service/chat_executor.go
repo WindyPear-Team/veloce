@@ -15,6 +15,7 @@ import (
 	"github.com/WindyPear-Team/veloce/internal/model"
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
+	"gorm.io/gorm"
 )
 
 // ChatExecutorMessage is a single message in a server-side chat completion call.
@@ -61,6 +62,8 @@ type ChatExecutorRequest struct {
 	ReasoningEffort string
 	Stream          bool
 	OnTextDelta     func(delta string) error
+	// ChargeBalance keeps governed Studio operations billable in personal mode.
+	ChargeBalance bool
 }
 
 // ChatExecutorToolCall is a tool invocation requested by the model.
@@ -203,7 +206,7 @@ func ExecuteServerChatCompletion(c *gin.Context, user *model.User, req ChatExecu
 		}
 
 		apiKey := currentAPIKey(c)
-		cost, status, message, err := executor.billServerUsage(c, user, apiKey, &channel, &modelConfig, modelName, usage)
+		cost, status, message, err := executor.billServerUsage(c, user, apiKey, &channel, &modelConfig, modelName, usage, req.ChargeBalance)
 		if err != nil {
 			return nil, newChatExecutorError(status, message)
 		}
@@ -229,7 +232,7 @@ func ExecuteServerChatCompletion(c *gin.Context, user *model.User, req ChatExecu
 	}
 
 	apiKey := currentAPIKey(c)
-	cost, status, message, err := executor.billServerUsage(c, user, apiKey, &channel, &modelConfig, modelName, usage)
+	cost, status, message, err := executor.billServerUsage(c, user, apiKey, &channel, &modelConfig, modelName, usage, req.ChargeBalance)
 	if err != nil {
 		return nil, newChatExecutorError(status, message)
 	}
@@ -266,7 +269,7 @@ func serverChatCandidates(modelName string, userChannelID uint) ([]model.ModelCo
 // billServerUsage mirrors ProxyService.billUsage but returns the computed cost so
 // the caller can accumulate it across an agent loop. It reuses the same group and
 // channel multipliers, balance deduction, token log, and referral commission.
-func (s *ProxyService) billServerUsage(c *gin.Context, user *model.User, apiKey *model.APIKey, channel *model.Channel, modelConfig *model.ModelConfig, modelName string, usage usageTokenCounts) (decimal.Decimal, int, string, error) {
+func (s *ProxyService) billServerUsage(c *gin.Context, user *model.User, apiKey *model.APIKey, channel *model.Channel, modelConfig *model.ModelConfig, modelName string, usage usageTokenCounts, chargeBalance bool) (decimal.Decimal, int, string, error) {
 	groupMultiplier, err := effectiveUserGroupMultiplier(user, channel.ID, modelConfig.ID)
 	if err != nil {
 		return decimal.Zero, http.StatusInternalServerError, "User group not found", err
@@ -289,7 +292,7 @@ func (s *ProxyService) billServerUsage(c *gin.Context, user *model.User, apiKey 
 		tx.Rollback()
 		return decimal.Zero, http.StatusPaymentRequired, "API key quota exceeded", ErrAPIKeyQuotaExceeded
 	}
-	if err := ApplyUsageCharge(tx, user.ID, cost); err != nil {
+	if err := applyChatExecutorUsageCharge(tx, user.ID, cost, chargeBalance); err != nil {
 		tx.Rollback()
 		if errors.Is(err, ErrInsufficientBalance) {
 			return decimal.Zero, http.StatusPaymentRequired, "Insufficient balance", err
@@ -328,6 +331,26 @@ func (s *ProxyService) billServerUsage(c *gin.Context, user *model.User, apiKey 
 		return decimal.Zero, http.StatusInternalServerError, "Failed to commit usage", err
 	}
 	return cost, 0, "", nil
+}
+
+func applyChatExecutorUsageCharge(tx *gorm.DB, userID uint, cost decimal.Decimal, chargeBalance bool) error {
+	if !chargeBalance {
+		return ApplyUsageCharge(tx, userID, cost)
+	}
+	if cost.LessThanOrEqual(decimal.Zero) {
+		return nil
+	}
+	if usageChargeHook != nil {
+		return usageChargeHook(tx, userID, cost)
+	}
+	result := tx.Exec("UPDATE users SET balance = balance - ? WHERE id = ? AND balance >= ?", cost, userID, cost)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return ErrInsufficientBalance
+	}
+	return nil
 }
 
 func clientIPForLog(c *gin.Context) string {

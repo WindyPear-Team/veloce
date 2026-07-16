@@ -75,16 +75,46 @@ func (api *personalCompanyAPI) createObjective(c *gin.Context) {
 		return
 	}
 	objective := model.CompanyObjective{PersonalCompanyID: company.ID, OwnerUserID: ctx.userID, Title: truncatePersonalCompanyText(input.Title, 200), Description: strings.TrimSpace(input.Description), Status: model.CompanyObjectiveStatusActive, Priority: input.Priority, TargetDate: input.TargetDate}
+	var workItem model.CompanyWorkItem
 	if err := model.DB.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&objective).Error; err != nil {
 			return err
 		}
-		return createPersonalCompanyAuditEvent(tx, company.ID, nil, "owner", ctx.userID, "objective.created", fmt.Sprintf(`{"objective_id":%d}`, objective.ID))
+		workItem = model.CompanyWorkItem{PersonalCompanyID: company.ID, OwnerUserID: ctx.userID, ObjectiveID: &objective.ID, Title: "Advance objective: " + objective.Title, Description: objective.Description, DefinitionOfDone: "A Studio result with evidence, remaining risks, and recommended next steps.", Status: model.CompanyWorkStatusQueued, Priority: objective.Priority, RiskLevel: "r0", IdempotencyKey: fmt.Sprintf("objective:%d:initial", objective.ID)}
+		if err := tx.Create(&workItem).Error; err != nil {
+			return err
+		}
+		payload := fmt.Sprintf(`{"work_item_id":%d,"objective_id":%d}`, workItem.ID, objective.ID)
+		if err := tx.Create(&model.CompanySignal{PersonalCompanyID: company.ID, OwnerUserID: ctx.userID, Source: "objective", DeduplicationKey: fmt.Sprintf("objective:%d:initial", objective.ID), Payload: payload, Status: model.CompanySignalStatusTriaged, WorkItemID: &workItem.ID}).Error; err != nil {
+			return err
+		}
+		if err := tx.Create(&model.CompanyOutboxEvent{PersonalCompanyID: company.ID, EventKey: fmt.Sprintf("objective:%d:initial", objective.ID), EventType: "work_item.queued", Payload: payload, Status: model.CompanyOutboxStatusPending}).Error; err != nil {
+			return err
+		}
+		if err := createPersonalCompanyAuditEvent(tx, company.ID, &workItem.ID, "owner", ctx.userID, "objective.created", fmt.Sprintf(`{"objective_id":%d,"work_item_id":%d}`, objective.ID, workItem.ID)); err != nil {
+			return err
+		}
+		return createPersonalCompanyAuditEvent(tx, company.ID, &workItem.ID, "system", 0, "work_item.queued", `{}`)
 	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create objective"})
 		return
 	}
-	c.JSON(http.StatusCreated, gin.H{"objective": objective})
+	go func() {
+		if _, _, err := startPersonalCompanyWorkRun(company, ctx.userID, workItem.ID); err != nil {
+			_ = recordPersonalCompanyWorkStartFailure(company.ID, workItem.ID, err)
+		}
+	}()
+	c.JSON(http.StatusCreated, gin.H{"objective": objective, "work_item": workItem})
+}
+
+func recordPersonalCompanyWorkStartFailure(companyID, workItemID uint, startErr error) error {
+	payload, err := json.Marshal(map[string]string{"error": truncatePersonalCompanyText(startErr.Error(), 1000)})
+	if err != nil {
+		return err
+	}
+	return model.DB.Transaction(func(tx *gorm.DB) error {
+		return createPersonalCompanyAuditEvent(tx, companyID, &workItemID, "system", 0, "work_attempt.start_failed", string(payload))
+	})
 }
 
 func (api *personalCompanyAPI) listWorkItems(c *gin.Context) {

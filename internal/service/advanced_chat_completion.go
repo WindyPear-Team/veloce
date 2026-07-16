@@ -53,6 +53,7 @@ type advancedChatCompletionInput struct {
 	Temperature              *float64                        `json:"temperature"`
 	ReasoningEffort          string                          `json:"reasoning_effort"`
 	Stream                   bool                            `json:"stream"`
+	ChargeBalance            bool                            `json:"-"`
 }
 
 type advancedChatCompletionMessage struct {

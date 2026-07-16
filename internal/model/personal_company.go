@@ -33,6 +33,7 @@ type PersonalCompany struct {
 	AutonomyLevel            string          `gorm:"size:8;not null;default:'r0'" json:"autonomy_level"`
 	DailyBudget              decimal.Decimal `gorm:"type:decimal(20,6);not null;default:0" json:"daily_budget"`
 	MonthlyBudget            decimal.Decimal `gorm:"type:decimal(20,6);not null;default:0" json:"monthly_budget"`
+	BalanceFloor             decimal.Decimal `gorm:"type:decimal(20,6);not null;default:0" json:"balance_floor"`
 	CharterRevisionID        *uint           `gorm:"index" json:"charter_revision_id,omitempty"`
 	AgentGroupID             string          `gorm:"uniqueIndex:idx_personal_company_studio;size:80;index;not null;default:''" json:"agent_group_id,omitempty"`
 	ConnectorDeviceID        string          `gorm:"size:80;not null;default:''" json:"connector_device_id,omitempty"`

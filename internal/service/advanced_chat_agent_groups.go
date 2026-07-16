@@ -526,6 +526,7 @@ type advancedChatAgentDelegateInput struct {
 	OnApprovalRequired func(context.Context, MessageChannelConnectorApproval) error
 	Arguments          map[string]interface{}
 	DisplayRound       int
+	ChargeBalance      bool
 }
 
 func executeAdvancedChatAgentDelegate(ctx context.Context, user *model.User, input advancedChatAgentDelegateInput) (string, error) {
@@ -714,6 +715,7 @@ func executeAdvancedChatAgentDelegate(ctx context.Context, user *model.User, inp
 			Stream:             chatAgent != nil && chatAgent.Stream,
 			ApprovalChecker:    advancedChatAgentStudioApprovalCheckerForGroupValue(group),
 			DisplayRound:       input.DisplayRound,
+			ChargeBalance:      input.ChargeBalance,
 		})
 	})
 	if err != nil {
@@ -906,6 +908,7 @@ func runAdvancedChatDelegatedAgentLoop(ctx context.Context, user *model.User, mo
 			MaxTokens:     0,
 			Stream:        options.Stream,
 			OnTextDelta:   onTextDelta,
+			ChargeBalance: options.ChargeBalance,
 		}, observer, func() bool { return true })
 		if err != nil {
 			return strings.TrimSpace(lastContent), err
@@ -1074,6 +1077,7 @@ func runAdvancedChatDelegatedAgentLoop(ctx context.Context, user *model.User, mo
 					Arguments:          arguments,
 					ApprovalChecker:    options.ApprovalChecker,
 					DisplayRound:       advancedChatDelegatedDisplayRound(options, round+1),
+					ChargeBalance:      options.ChargeBalance,
 				})
 				if err != nil {
 					detail.Status = "error"
@@ -1244,6 +1248,7 @@ type advancedChatAgentSplitInput struct {
 	Arguments          map[string]interface{}
 	ApprovalChecker    *advancedChatAgentStudioApprovalChecker
 	DisplayRound       int
+	ChargeBalance      bool
 }
 
 func executeAdvancedChatAgentSplit(ctx context.Context, user *model.User, input advancedChatAgentSplitInput) (string, error) {
@@ -1302,6 +1307,7 @@ func executeAdvancedChatAgentSplit(ctx context.Context, user *model.User, input 
 				Stream:             input.Stream,
 				ApprovalChecker:    input.ApprovalChecker,
 				DisplayRound:       input.DisplayRound,
+				ChargeBalance:      input.ChargeBalance,
 			})
 			mutations := delta.snapshot()
 			appendAdvancedChatAgentStudioDeltaMutations(input.DeltaLog, mutations)

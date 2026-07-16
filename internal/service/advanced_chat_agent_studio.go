@@ -57,6 +57,7 @@ type advancedChatDelegatedAgentLoopOptions struct {
 	SandboxID          string
 	Stream             bool
 	ApprovalChecker    *advancedChatAgentStudioApprovalChecker
+	ChargeBalance      bool
 }
 
 var advancedChatAgentStudioLocks sync.Map

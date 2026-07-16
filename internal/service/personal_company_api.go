@@ -19,6 +19,7 @@ func RegisterPersonalCompanyUserRoutes(group *gin.RouterGroup) {
 	group.PUT("/personal-company/charter", api.updateCharter)
 	group.POST("/personal-company/pause", api.pauseCompany)
 	group.POST("/personal-company/resume", api.resumeCompany)
+	group.PUT("/personal-company/runtime", api.updateStudioRuntime)
 	group.GET("/personal-company/objectives", api.listObjectives)
 	group.POST("/personal-company/objectives", api.createObjective)
 	group.GET("/personal-company/org-chart", api.getOrgChart)

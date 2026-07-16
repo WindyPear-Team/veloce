@@ -28,6 +28,57 @@ type personalCompanyRuntimePolicy struct {
 	ConnectorCommandPrefixes []string `json:"connector_command_prefixes,omitempty"`
 }
 
+type personalCompanyStudioRuntimeInput struct {
+	ConnectorDeviceID        string   `json:"connector_device_id"`
+	ConnectorWorkspacePath   string   `json:"connector_workspace_path"`
+	ConnectorCommandPrefixes []string `json:"connector_command_prefixes"`
+}
+
+// updateStudioRuntime binds a connector to the Studio itself. Studio members
+// keep their own agents, models, skills, and MCP configuration.
+func (api *personalCompanyAPI) updateStudioRuntime(c *gin.Context) {
+	ctx, ok := api.personalCompanyContext(c)
+	if !ok {
+		return
+	}
+	company, err := loadPersonalCompany(ctx.userID, ctx.agentGroupID)
+	if writePersonalCompanyLoadError(c, err) {
+		return
+	}
+	var input personalCompanyStudioRuntimeInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	deviceID := strings.TrimSpace(input.ConnectorDeviceID)
+	workspacePath := strings.TrimSpace(input.ConnectorWorkspacePath)
+	if deviceID != "" || workspacePath != "" {
+		if _, _, err := loadAdvancedChatConnectorForRun(ctx.userID, deviceID, workspacePath); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	}
+	prefixes, err := json.Marshal(normalizeConnectorCommandPrefixes(input.ConnectorCommandPrefixes))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid connector command prefixes"})
+		return
+	}
+	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&model.PersonalCompany{}).Where("id = ? AND owner_user_id = ?", company.ID, ctx.userID).Updates(map[string]interface{}{
+			"connector_device_id":        deviceID,
+			"connector_workspace_path":   workspacePath,
+			"connector_command_prefixes": string(prefixes),
+		}).Error; err != nil {
+			return err
+		}
+		return createPersonalCompanyAuditEvent(tx, company.ID, nil, "owner", ctx.userID, "studio.runtime_configured", fmt.Sprintf(`{"connector_device_id":%q,"workspace_path":%q}`, deviceID, workspacePath))
+	}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to configure Studio runtime"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"connector_device_id": deviceID, "connector_workspace_path": workspacePath})
+}
+
 func (api *personalCompanyAPI) bindEmployeeRuntime(c *gin.Context) {
 	ctx, ok := api.personalCompanyContext(c)
 	if !ok {
@@ -104,6 +155,22 @@ func (api *personalCompanyAPI) runWorkItem(c *gin.Context) {
 }
 
 func startPersonalCompanyWorkRun(company model.PersonalCompany, userID, workItemID uint) (model.CompanyWorkAttempt, string, error) {
+	var currentCompany model.PersonalCompany
+	if err := model.DB.Select("state", "balance_floor").Where("id = ? AND owner_user_id = ?", company.ID, userID).First(&currentCompany).Error; err != nil {
+		return model.CompanyWorkAttempt{}, "", err
+	}
+	if currentCompany.State != model.PersonalCompanyStateOperating {
+		return model.CompanyWorkAttempt{}, "", errors.New("studio operations are paused")
+	}
+	company.BalanceFloor = currentCompany.BalanceFloor
+	var owner model.User
+	if err := model.DB.Select("id", "balance").Where("id = ?", userID).First(&owner).Error; err != nil {
+		return model.CompanyWorkAttempt{}, "", err
+	}
+	if owner.Balance.LessThanOrEqual(company.BalanceFloor) {
+		_ = pausePersonalCompanyForBalance(company, workItemID, owner.Balance)
+		return model.CompanyWorkAttempt{}, "", errors.New("studio balance is below its operating floor")
+	}
 	var work model.CompanyWorkItem
 	if err := model.DB.First(&work, workItemID).Error; err != nil {
 		return model.CompanyWorkAttempt{}, "", err
@@ -148,7 +215,7 @@ func startPersonalCompanyWorkRun(company model.PersonalCompany, userID, workItem
 		modelName, agentID = agent.DefaultModel, employee.AdvancedChatAgentID
 	}
 	prompt := fmt.Sprintf("You are completing a governed Personal Company work item.\nTitle: %s\nDescription: %s\nDefinition of done: %s\nInput snapshot: %s\n\nUse only the provided tools. Never perform external side effects without the connector's manual approval. Return a concise result with evidence, unresolved risks, and next steps.", work.Title, work.Description, work.DefinitionOfDone, work.InputSnapshot)
-	input := advancedChatCompletionInput{SessionID: newAdvancedChatID("pcw"), Title: "Personal Company: " + work.Title, ModelName: modelName, Messages: []advancedChatCompletionMessage{{Role: "user", Content: prompt}}, Mode: mode, AgentID: agentID, AgentGroupID: agentGroupID, ConnectorDeviceID: policy.ConnectorDeviceID, ConnectorWorkspacePath: policy.ConnectorWorkspacePath, ConnectorApprovalMode: advancedChatConnectorApprovalManual, ConnectorCommandPrefixes: policy.ConnectorCommandPrefixes}
+	input := advancedChatCompletionInput{SessionID: newAdvancedChatID("pcw"), Title: "Personal Company: " + work.Title, ModelName: modelName, Messages: []advancedChatCompletionMessage{{Role: "user", Content: prompt}}, Mode: mode, AgentID: agentID, AgentGroupID: agentGroupID, ConnectorDeviceID: policy.ConnectorDeviceID, ConnectorWorkspacePath: policy.ConnectorWorkspacePath, ConnectorApprovalMode: advancedChatConnectorApprovalManual, ConnectorCommandPrefixes: policy.ConnectorCommandPrefixes, ChargeBalance: true}
 	prepared, _, message, err := prepareAdvancedChatAssistantRun(context.Background(), userID, input, input.Messages, modelName)
 	if err != nil {
 		return model.CompanyWorkAttempt{}, "", errors.New(message)
@@ -169,6 +236,21 @@ func startPersonalCompanyWorkRun(company model.PersonalCompany, userID, workItem
 	attempt.AdvancedChatRunID = run.ID
 	go runPersonalCompanyAdvancedChatWork(company.ID, work.ID, attempt.ID, userID, run.ID, prepared)
 	return attempt, run.ID, nil
+}
+
+func pausePersonalCompanyForBalance(company model.PersonalCompany, workItemID uint, balance decimal.Decimal) error {
+	return model.DB.Transaction(func(tx *gorm.DB) error {
+		now := time.Now().UTC()
+		if err := tx.Model(&model.PersonalCompany{}).Where("id = ?", company.ID).Updates(map[string]interface{}{"state": model.PersonalCompanyStateAttentionRequired, "paused_at": now}).Error; err != nil {
+			return err
+		}
+		payload := fmt.Sprintf(`{"balance":%q,"floor":%q}`, balance.String(), company.BalanceFloor.String())
+		outbox := model.CompanyOutboxEvent{PersonalCompanyID: company.ID, EventKey: "balance:floor_reached", EventType: "balance.floor_reached", Payload: payload, Status: model.CompanyOutboxStatusPending}
+		if err := tx.Where("personal_company_id = ? AND event_key = ?", company.ID, outbox.EventKey).FirstOrCreate(&outbox).Error; err != nil {
+			return err
+		}
+		return createPersonalCompanyAuditEvent(tx, company.ID, &workItemID, "system", 0, "balance.floor_reached", payload)
+	})
 }
 
 func releasePersonalCompanyWorkLease(db *gorm.DB, companyID, workItemID, attemptID uint, reason string) error {
@@ -254,6 +336,27 @@ func runPersonalCompanyAdvancedChatWork(companyID, workItemID, attemptID, userID
 		}
 		if run.Cost.GreaterThan(decimal.Zero) {
 			if err := tx.Create(&model.CompanyBudgetLedger{PersonalCompanyID: companyID, WorkItemID: &workItemID, WorkAttemptID: &attemptID, EntryType: "consumption", Amount: run.Cost, ReferenceType: "advanced_chat_run", ReferenceID: runID, CreatedByUserID: userID}).Error; err != nil {
+				return err
+			}
+		}
+		var owner model.User
+		if err := tx.Select("balance").Where("id = ?", userID).First(&owner).Error; err != nil {
+			return err
+		}
+		var company model.PersonalCompany
+		if err := tx.Select("balance_floor").Where("id = ?", companyID).First(&company).Error; err != nil {
+			return err
+		}
+		if owner.Balance.LessThanOrEqual(company.BalanceFloor) {
+			if err := tx.Model(&model.PersonalCompany{}).Where("id = ?", companyID).Updates(map[string]interface{}{"state": model.PersonalCompanyStateAttentionRequired, "paused_at": time.Now().UTC()}).Error; err != nil {
+				return err
+			}
+			payload := fmt.Sprintf(`{"balance":%q,"floor":%q}`, owner.Balance.String(), company.BalanceFloor.String())
+			outbox := model.CompanyOutboxEvent{PersonalCompanyID: companyID, EventKey: "balance:floor_reached", EventType: "balance.floor_reached", Payload: payload, Status: model.CompanyOutboxStatusPending}
+			if err := tx.Where("personal_company_id = ? AND event_key = ?", companyID, outbox.EventKey).FirstOrCreate(&outbox).Error; err != nil {
+				return err
+			}
+			if err := createPersonalCompanyAuditEvent(tx, companyID, &workItemID, "system", 0, "balance.floor_reached", payload); err != nil {
 				return err
 			}
 		}
