@@ -1,0 +1,263 @@
+package service
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/WindyPear-Team/veloce/internal/model"
+	"github.com/gin-gonic/gin"
+	"github.com/shopspring/decimal"
+	"gorm.io/gorm"
+)
+
+type personalCompanyRuntimeBindingInput struct {
+	AdvancedChatAgentID      string   `json:"advanced_chat_agent_id"`
+	ConnectorDeviceID        string   `json:"connector_device_id"`
+	ConnectorWorkspacePath   string   `json:"connector_workspace_path"`
+	ConnectorCommandPrefixes []string `json:"connector_command_prefixes"`
+}
+
+type personalCompanyRuntimePolicy struct {
+	ConnectorDeviceID        string   `json:"connector_device_id,omitempty"`
+	ConnectorWorkspacePath   string   `json:"connector_workspace_path,omitempty"`
+	ConnectorCommandPrefixes []string `json:"connector_command_prefixes,omitempty"`
+}
+
+func (api *personalCompanyAPI) bindEmployeeRuntime(c *gin.Context) {
+	ctx, ok := api.personalCompanyContext(c)
+	if !ok {
+		return
+	}
+	company, err := loadPersonalCompany(ctx.userID)
+	if writePersonalCompanyLoadError(c, err) {
+		return
+	}
+	employee, err := loadPersonalCompanyEmployee(company.ID, c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Employee not found"})
+		return
+	}
+	var input personalCompanyRuntimeBindingInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if _, err := loadAdvancedChatAgent(ctx.userID, input.AdvancedChatAgentID); err != nil || strings.TrimSpace(input.AdvancedChatAgentID) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "An existing Advanced Chat agent is required"})
+		return
+	}
+	if strings.TrimSpace(input.ConnectorDeviceID) != "" || strings.TrimSpace(input.ConnectorWorkspacePath) != "" {
+		if _, _, err := loadAdvancedChatConnectorForRun(ctx.userID, input.ConnectorDeviceID, input.ConnectorWorkspacePath); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	}
+	policy, _ := json.Marshal(personalCompanyRuntimePolicy{ConnectorDeviceID: strings.TrimSpace(input.ConnectorDeviceID), ConnectorWorkspacePath: strings.TrimSpace(input.ConnectorWorkspacePath), ConnectorCommandPrefixes: normalizeConnectorCommandPrefixes(input.ConnectorCommandPrefixes)})
+	version := employee.Version + 1
+	err = model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&model.CompanyEmployeeVersion{PersonalCompanyID: company.ID, EmployeeID: employee.ID, Version: version, PromptProfile: "advanced_chat_agent:" + strings.TrimSpace(input.AdvancedChatAgentID), ModelPolicy: string(policy), ToolGrants: employee.AllowedTools, DataScope: employee.DataScope, SkillScope: "[]", CreatedByUserID: ctx.userID}).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&model.PersonalCompanyEmployee{}).Where("id = ? AND version = ?", employee.ID, employee.Version).Updates(map[string]interface{}{"advanced_chat_agent_id": strings.TrimSpace(input.AdvancedChatAgentID), "version": version}).Error; err != nil {
+			return err
+		}
+		return createPersonalCompanyAuditEvent(tx, company.ID, nil, "owner", ctx.userID, "employee.runtime_bound", fmt.Sprintf(`{"employee_id":%d,"version":%d}`, employee.ID, version))
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to bind employee runtime"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"employee_id": employee.ID, "version": version})
+}
+
+func (api *personalCompanyAPI) runWorkItem(c *gin.Context) {
+	ctx, ok := api.personalCompanyContext(c)
+	if !ok {
+		return
+	}
+	company, err := loadPersonalCompany(ctx.userID)
+	if writePersonalCompanyLoadError(c, err) {
+		return
+	}
+	work, err := loadPersonalCompanyWorkItem(company.ID, ctx.userID, c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Work item not found"})
+		return
+	}
+	if work.Status == model.CompanyWorkStatusPlanned || work.Status == model.CompanyWorkStatusAuthorized {
+		if err := QueuePersonalCompanyWorkItem(model.DB, company, work.ID, ctx.userID); err != nil {
+			c.JSON(http.StatusConflict, gin.H{"error": "Work item is not ready to run"})
+			return
+		}
+	}
+	attempt, runID, err := startPersonalCompanyWorkRun(company, ctx.userID, work.ID)
+	if err != nil {
+		writePersonalCompanyRuntimeError(c, err)
+		return
+	}
+	c.JSON(http.StatusAccepted, gin.H{"work_attempt": attempt, "advanced_chat_run_id": runID})
+}
+
+func startPersonalCompanyWorkRun(company model.PersonalCompany, userID, workItemID uint) (model.CompanyWorkAttempt, string, error) {
+	var work model.CompanyWorkItem
+	if err := model.DB.First(&work, workItemID).Error; err != nil {
+		return model.CompanyWorkAttempt{}, "", err
+	}
+	if work.AssignedEmployeeID == nil {
+		var fallback model.PersonalCompanyEmployee
+		if err := model.DB.Where("personal_company_id = ? AND status IN ? AND advanced_chat_agent_id <> ''", company.ID, []string{model.PersonalCompanyEmployeeProbation, model.PersonalCompanyEmployeeActive}).Order("created_at ASC").First(&fallback).Error; err != nil {
+			return model.CompanyWorkAttempt{}, "", errors.New("work item needs an assigned employee with an Advanced Chat agent")
+		}
+		if err := model.DB.Model(&model.CompanyWorkItem{}).Where("id = ? AND assigned_employee_id IS NULL", work.ID).Update("assigned_employee_id", fallback.ID).Error; err != nil {
+			return model.CompanyWorkAttempt{}, "", err
+		}
+		work.AssignedEmployeeID = &fallback.ID
+	}
+	var employee model.PersonalCompanyEmployee
+	if err := model.DB.Where("id = ? AND personal_company_id = ? AND status IN ?", *work.AssignedEmployeeID, company.ID, []string{model.PersonalCompanyEmployeeProbation, model.PersonalCompanyEmployeeActive}).First(&employee).Error; err != nil {
+		return model.CompanyWorkAttempt{}, "", errors.New("assigned employee is unavailable")
+	}
+	if strings.TrimSpace(employee.AdvancedChatAgentID) == "" {
+		return model.CompanyWorkAttempt{}, "", errors.New("assigned employee has no Advanced Chat agent")
+	}
+	var version model.CompanyEmployeeVersion
+	if err := model.DB.Where("employee_id = ? AND personal_company_id = ? AND version = ?", employee.ID, company.ID, employee.Version).First(&version).Error; err != nil {
+		return model.CompanyWorkAttempt{}, "", errors.New("assigned employee version is unavailable")
+	}
+	policy := personalCompanyRuntimePolicy{}
+	_ = json.Unmarshal([]byte(version.ModelPolicy), &policy)
+	agent, err := loadAdvancedChatAgent(userID, employee.AdvancedChatAgentID)
+	if err != nil || agent == nil || strings.TrimSpace(agent.DefaultModel) == "" {
+		return model.CompanyWorkAttempt{}, "", errors.New("assigned Advanced Chat agent has no model")
+	}
+	prompt := fmt.Sprintf("You are completing a governed Personal Company work item.\nTitle: %s\nDescription: %s\nDefinition of done: %s\nInput snapshot: %s\n\nUse only the provided tools. Never perform external side effects without the connector's manual approval. Return a concise result with evidence, unresolved risks, and next steps.", work.Title, work.Description, work.DefinitionOfDone, work.InputSnapshot)
+	input := advancedChatCompletionInput{SessionID: newAdvancedChatID("pcw"), Title: "Personal Company: " + work.Title, ModelName: agent.DefaultModel, Messages: []advancedChatCompletionMessage{{Role: "user", Content: prompt}}, Mode: advancedChatModeAssistant, AgentID: employee.AdvancedChatAgentID, ConnectorDeviceID: policy.ConnectorDeviceID, ConnectorWorkspacePath: policy.ConnectorWorkspacePath, ConnectorApprovalMode: advancedChatConnectorApprovalManual, ConnectorCommandPrefixes: policy.ConnectorCommandPrefixes}
+	prepared, _, message, err := prepareAdvancedChatAssistantRun(context.Background(), userID, input, input.Messages, agent.DefaultModel)
+	if err != nil {
+		return model.CompanyWorkAttempt{}, "", errors.New(message)
+	}
+	attempt, err := leasePersonalCompanyWorkItem(model.DB, company.ID, workItemID, time.Now().UTC(), 10*time.Minute)
+	if err != nil {
+		return model.CompanyWorkAttempt{}, "", err
+	}
+	_, run, _, message, err := createAdvancedChatAssistantRun(userID, prepared)
+	if err != nil {
+		_ = releasePersonalCompanyWorkLease(model.DB, company.ID, workItemID, attempt.ID, "Advanced Chat run could not be created")
+		return attempt, "", errors.New(message)
+	}
+	if err := model.DB.Model(&model.CompanyWorkAttempt{}).Where("id = ?", attempt.ID).Update("advanced_chat_run_id", run.ID).Error; err != nil {
+		_ = releasePersonalCompanyWorkLease(model.DB, company.ID, workItemID, attempt.ID, "Advanced Chat run link could not be saved")
+		return attempt, "", err
+	}
+	attempt.AdvancedChatRunID = run.ID
+	go runPersonalCompanyAdvancedChatWork(company.ID, work.ID, attempt.ID, userID, run.ID, prepared)
+	return attempt, run.ID, nil
+}
+
+func releasePersonalCompanyWorkLease(db *gorm.DB, companyID, workItemID, attemptID uint, reason string) error {
+	return db.Transaction(func(tx *gorm.DB) error {
+		now := time.Now().UTC()
+		if err := tx.Model(&model.CompanyWorkAttempt{}).Where("id = ? AND status = ?", attemptID, model.CompanyWorkStatusExecuting).Updates(map[string]interface{}{"status": model.CompanyWorkStatusRetryableFailure, "finished_at": now, "result_summary": truncatePersonalCompanyText(reason, 1000)}).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&model.CompanyWorkItem{}).Where("id = ? AND status = ?", workItemID, model.CompanyWorkStatusExecuting).Update("status", model.CompanyWorkStatusQueued).Error; err != nil {
+			return err
+		}
+		return createPersonalCompanyAuditEvent(tx, companyID, &workItemID, "worker", 0, "work_attempt.start_failed", fmt.Sprintf(`{"attempt_id":%d}`, attemptID))
+	})
+}
+
+func leasePersonalCompanyWorkItem(db *gorm.DB, companyID, workItemID uint, now time.Time, leaseDuration time.Duration) (model.CompanyWorkAttempt, error) {
+	var attempt model.CompanyWorkAttempt
+	err := db.Transaction(func(tx *gorm.DB) error {
+		var work model.CompanyWorkItem
+		if err := tx.Where("id = ? AND personal_company_id = ? AND status = ?", workItemID, companyID, model.CompanyWorkStatusQueued).First(&work).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrPersonalCompanyNoQueuedWork
+			}
+			return err
+		}
+		if result := tx.Model(&model.CompanyWorkItem{}).Where("id = ? AND status = ?", work.ID, model.CompanyWorkStatusQueued).Update("status", model.CompanyWorkStatusExecuting); result.Error != nil || result.RowsAffected != 1 {
+			if result.Error != nil {
+				return result.Error
+			}
+			return ErrPersonalCompanyNoQueuedWork
+		}
+		var count int64
+		if err := tx.Model(&model.CompanyWorkAttempt{}).Where("work_item_id = ?", work.ID).Count(&count).Error; err != nil {
+			return err
+		}
+		expiresAt := now.Add(leaseDuration)
+		attempt = model.CompanyWorkAttempt{WorkItemID: work.ID, AttemptNumber: int(count) + 1, Status: model.CompanyWorkStatusExecuting, LeaseToken: newPersonalCompanyID("lease"), LeaseExpiresAt: &expiresAt, StartedAt: &now, InputSnapshot: work.InputSnapshot}
+		if err := tx.Create(&attempt).Error; err != nil {
+			return err
+		}
+		return createPersonalCompanyAuditEvent(tx, companyID, &work.ID, "worker", 0, "work_attempt.leased", fmt.Sprintf(`{"attempt_id":%d}`, attempt.ID))
+	})
+	return attempt, err
+}
+
+func runPersonalCompanyAdvancedChatWork(companyID, workItemID, attemptID, userID uint, runID string, prepared preparedAdvancedChatAssistantRun) {
+	runAdvancedChatAssistantCompletion(runID, userID, prepared)
+	var run AdvancedChatRun
+	if err := model.DB.Where("id = ? AND user_id = ?", runID, userID).First(&run).Error; err != nil {
+		return
+	}
+	status := model.CompanyWorkStatusAwaitingReview
+	if run.Status != advancedChatRunStatusCompleted {
+		status = model.CompanyWorkStatusBlocked
+	}
+	_ = model.DB.Transaction(func(tx *gorm.DB) error {
+		updates := map[string]interface{}{"status": status, "finished_at": time.Now().UTC(), "result_summary": run.ErrorMessage, "cost": run.Cost}
+		var result AdvancedChatMessage
+		if run.Status == advancedChatRunStatusCompleted {
+			if err := tx.Where("id = ? AND user_id = ?", run.AssistantMessageID, userID).First(&result).Error; err != nil {
+				return err
+			}
+			updates["result_summary"] = truncatePersonalCompanyText(result.Content, 4000)
+		}
+		if err := tx.Model(&model.CompanyWorkAttempt{}).Where("id = ?", attemptID).Updates(updates).Error; err != nil {
+			return err
+		}
+		var workItem model.CompanyWorkItem
+		if err := tx.Where("id = ?", workItemID).First(&workItem).Error; err != nil {
+			return err
+		}
+		workUpdates := map[string]interface{}{"status": status, "consumed_cost": run.Cost}
+		if workItem.ReservedCost.GreaterThan(decimal.Zero) {
+			workUpdates["reserved_cost"] = decimal.Zero
+		}
+		if err := tx.Model(&model.CompanyWorkItem{}).Where("id = ? AND status = ?", workItemID, model.CompanyWorkStatusExecuting).Updates(workUpdates).Error; err != nil {
+			return err
+		}
+		if run.Status == advancedChatRunStatusCompleted && strings.TrimSpace(result.Content) != "" {
+			if err := tx.Create(&model.CompanyArtifact{WorkItemID: workItemID, WorkAttemptID: &attemptID, Kind: "advanced_chat_result", URI: "advanced-chat://runs/" + runID, ContentHash: personalCompanyParametersHash(model.CompanyWorkItem{InputSnapshot: result.Content}), Source: "Advanced Chat run output", AcceptanceState: "pending"}).Error; err != nil {
+				return err
+			}
+		}
+		if run.Cost.GreaterThan(decimal.Zero) {
+			if err := tx.Create(&model.CompanyBudgetLedger{PersonalCompanyID: companyID, WorkItemID: &workItemID, WorkAttemptID: &attemptID, EntryType: "consumption", Amount: run.Cost, ReferenceType: "advanced_chat_run", ReferenceID: runID, CreatedByUserID: userID}).Error; err != nil {
+				return err
+			}
+		}
+		if workItem.ReservedCost.GreaterThan(decimal.Zero) {
+			if err := tx.Create(&model.CompanyBudgetLedger{PersonalCompanyID: companyID, WorkItemID: &workItemID, WorkAttemptID: &attemptID, EntryType: "release", Amount: workItem.ReservedCost.Neg(), ReferenceType: "work_completion", ReferenceID: runID, CreatedByUserID: userID}).Error; err != nil {
+				return err
+			}
+		}
+		return createPersonalCompanyAuditEvent(tx, companyID, &workItemID, "worker", 0, "work_attempt.completed", fmt.Sprintf(`{"attempt_id":%d,"run_id":%q,"status":%q}`, attemptID, runID, status))
+	})
+}
+
+func writePersonalCompanyRuntimeError(c *gin.Context, err error) {
+	if errors.Is(err, ErrPersonalCompanyNoQueuedWork) {
+		c.JSON(http.StatusConflict, gin.H{"error": "No queued work is available"})
+		return
+	}
+	c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+}
