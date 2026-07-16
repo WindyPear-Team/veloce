@@ -28,67 +28,12 @@ type personalCompanyRuntimePolicy struct {
 	ConnectorCommandPrefixes []string `json:"connector_command_prefixes,omitempty"`
 }
 
-type personalCompanyStudioBindingInput struct {
-	AgentGroupID             string   `json:"agent_group_id"`
-	ConnectorDeviceID        string   `json:"connector_device_id"`
-	ConnectorWorkspacePath   string   `json:"connector_workspace_path"`
-	ConnectorCommandPrefixes []string `json:"connector_command_prefixes"`
-}
-
-// bindCompanyStudio makes the company a governed operating mode for one
-// existing Agent Studio. It does not copy or alter the Studio's agents.
-func (api *personalCompanyAPI) bindCompanyStudio(c *gin.Context) {
-	ctx, ok := api.personalCompanyContext(c)
-	if !ok {
-		return
-	}
-	company, err := loadPersonalCompany(ctx.userID)
-	if writePersonalCompanyLoadError(c, err) {
-		return
-	}
-	var input personalCompanyStudioBindingInput
-	if err := c.ShouldBindJSON(&input); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
-	input.AgentGroupID = strings.TrimSpace(input.AgentGroupID)
-	if input.AgentGroupID == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "An existing Agent Studio is required"})
-		return
-	}
-	if _, err := readAdvancedChatAgentGroup(c.Request.Context(), ctx.userID, nil, input.AgentGroupID); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Selected Agent Studio is unavailable"})
-		return
-	}
-	workspace := strings.TrimSpace(input.ConnectorWorkspacePath)
-	if strings.TrimSpace(input.ConnectorDeviceID) != "" || workspace != "" {
-		_, resolved, err := loadAdvancedChatConnectorForRun(ctx.userID, input.ConnectorDeviceID, workspace)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-			return
-		}
-		workspace = resolved
-	}
-	prefixes, _ := json.Marshal(normalizeConnectorCommandPrefixes(input.ConnectorCommandPrefixes))
-	updates := map[string]interface{}{"agent_group_id": input.AgentGroupID, "connector_device_id": strings.TrimSpace(input.ConnectorDeviceID), "connector_workspace_path": workspace, "connector_command_prefixes": string(prefixes)}
-	if err := model.DB.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&model.PersonalCompany{}).Where("id = ? AND owner_user_id = ?", company.ID, ctx.userID).Updates(updates).Error; err != nil {
-			return err
-		}
-		return createPersonalCompanyAuditEvent(tx, company.ID, nil, "owner", ctx.userID, "company.studio_bound", fmt.Sprintf(`{"agent_group_id":%q}`, input.AgentGroupID))
-	}); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to bind Agent Studio"})
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"agent_group_id": input.AgentGroupID})
-}
-
 func (api *personalCompanyAPI) bindEmployeeRuntime(c *gin.Context) {
 	ctx, ok := api.personalCompanyContext(c)
 	if !ok {
 		return
 	}
-	company, err := loadPersonalCompany(ctx.userID)
+	company, err := loadPersonalCompany(ctx.userID, ctx.agentGroupID)
 	if writePersonalCompanyLoadError(c, err) {
 		return
 	}
@@ -135,7 +80,7 @@ func (api *personalCompanyAPI) runWorkItem(c *gin.Context) {
 	if !ok {
 		return
 	}
-	company, err := loadPersonalCompany(ctx.userID)
+	company, err := loadPersonalCompany(ctx.userID, ctx.agentGroupID)
 	if writePersonalCompanyLoadError(c, err) {
 		return
 	}

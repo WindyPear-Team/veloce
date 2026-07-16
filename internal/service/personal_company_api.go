@@ -2,6 +2,7 @@ package service
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
@@ -18,7 +19,6 @@ func RegisterPersonalCompanyUserRoutes(group *gin.RouterGroup) {
 	group.PUT("/personal-company/charter", api.updateCharter)
 	group.POST("/personal-company/pause", api.pauseCompany)
 	group.POST("/personal-company/resume", api.resumeCompany)
-	group.POST("/personal-company/studio-binding", api.bindCompanyStudio)
 	group.GET("/personal-company/objectives", api.listObjectives)
 	group.POST("/personal-company/objectives", api.createObjective)
 	group.GET("/personal-company/org-chart", api.getOrgChart)
@@ -53,5 +53,14 @@ func (api *personalCompanyAPI) personalCompanyContext(c *gin.Context) (*personal
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
 		return nil, false
 	}
-	return &personalCompanyRequestContext{userID: user.ID}, true
+	agentGroupID := strings.TrimSpace(c.Query("studio_id"))
+	if agentGroupID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "studio_id is required"})
+		return nil, false
+	}
+	if _, err := readAdvancedChatAgentGroup(c.Request.Context(), user.ID, nil, agentGroupID); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Agent Studio not found"})
+		return nil, false
+	}
+	return &personalCompanyRequestContext{userID: user.ID, agentGroupID: agentGroupID}, true
 }

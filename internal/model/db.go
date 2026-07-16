@@ -98,6 +98,16 @@ func InitDB() {
 	if err != nil {
 		log.Fatalf("failed to migrate database: %v", err)
 	}
+	// Studio operations are independently scoped by owner and Studio. Older
+	// PersonalCompany schemas used a single-column owner uniqueness constraint.
+	if DB.Migrator().HasIndex(&PersonalCompany{}, "idx_personal_companies_owner_user_id") {
+		if err := DB.Migrator().DropIndex(&PersonalCompany{}, "idx_personal_companies_owner_user_id"); err != nil {
+			log.Printf("failed to replace legacy personal company owner index: %v", err)
+		}
+	}
+	if err := DB.Migrator().CreateIndex(&PersonalCompany{}, "idx_personal_company_studio"); err != nil {
+		log.Printf("failed to create personal company studio index: %v", err)
+	}
 	if err := DB.AutoMigrate(
 		&Organization{},
 		&Department{},

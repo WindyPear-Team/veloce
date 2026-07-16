@@ -20,12 +20,15 @@ func TestPersonalCompanyModelsMigrateAndKeepWorkScoped(t *testing.T) {
 	); err != nil {
 		t.Fatalf("migrate personal company models: %v", err)
 	}
-	company := PersonalCompany{OwnerUserID: 42, Name: "Studio", State: PersonalCompanyStateOperating, DailyBudget: decimal.NewFromInt(10)}
+	company := PersonalCompany{OwnerUserID: 42, AgentGroupID: "product", Name: "Studio", State: PersonalCompanyStateOperating, DailyBudget: decimal.NewFromInt(10)}
 	if err := db.Create(&company).Error; err != nil {
 		t.Fatalf("create company: %v", err)
 	}
-	if err := db.Create(&PersonalCompany{OwnerUserID: 42, Name: "Duplicate"}).Error; err == nil {
-		t.Fatal("accepted a second company for the same owner")
+	if err := db.Create(&PersonalCompany{OwnerUserID: 42, AgentGroupID: "research", Name: "Research Studio"}).Error; err != nil {
+		t.Fatalf("create a second studio operation: %v", err)
+	}
+	if err := db.Create(&PersonalCompany{OwnerUserID: 42, AgentGroupID: "product", Name: "Duplicate"}).Error; err == nil {
+		t.Fatal("accepted a duplicate operation for the same studio")
 	}
 	work := CompanyWorkItem{PersonalCompanyID: company.ID, OwnerUserID: 42, Title: "Research", DefinitionOfDone: "Evidence recorded", IdempotencyKey: "research-1"}
 	if err := db.Create(&work).Error; err != nil {

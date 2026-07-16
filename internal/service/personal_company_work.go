@@ -44,7 +44,7 @@ func (api *personalCompanyAPI) listObjectives(c *gin.Context) {
 	if !ok {
 		return
 	}
-	company, err := loadPersonalCompany(ctx.userID)
+	company, err := loadPersonalCompany(ctx.userID, ctx.agentGroupID)
 	if writePersonalCompanyLoadError(c, err) {
 		return
 	}
@@ -61,7 +61,7 @@ func (api *personalCompanyAPI) createObjective(c *gin.Context) {
 	if !ok {
 		return
 	}
-	company, err := loadPersonalCompany(ctx.userID)
+	company, err := loadPersonalCompany(ctx.userID, ctx.agentGroupID)
 	if writePersonalCompanyLoadError(c, err) {
 		return
 	}
@@ -92,7 +92,7 @@ func (api *personalCompanyAPI) listWorkItems(c *gin.Context) {
 	if !ok {
 		return
 	}
-	company, err := loadPersonalCompany(ctx.userID)
+	company, err := loadPersonalCompany(ctx.userID, ctx.agentGroupID)
 	if writePersonalCompanyLoadError(c, err) {
 		return
 	}
@@ -109,7 +109,7 @@ func (api *personalCompanyAPI) createWorkItem(c *gin.Context) {
 	if !ok {
 		return
 	}
-	company, err := loadPersonalCompany(ctx.userID)
+	company, err := loadPersonalCompany(ctx.userID, ctx.agentGroupID)
 	if writePersonalCompanyLoadError(c, err) {
 		return
 	}
@@ -199,7 +199,7 @@ func (api *personalCompanyAPI) getWorkItemTimeline(c *gin.Context) {
 	if !ok {
 		return
 	}
-	company, err := loadPersonalCompany(ctx.userID)
+	company, err := loadPersonalCompany(ctx.userID, ctx.agentGroupID)
 	if writePersonalCompanyLoadError(c, err) {
 		return
 	}
@@ -240,7 +240,7 @@ func (api *personalCompanyAPI) cancelWorkItem(c *gin.Context) {
 	if !ok {
 		return
 	}
-	company, err := loadPersonalCompany(ctx.userID)
+	company, err := loadPersonalCompany(ctx.userID, ctx.agentGroupID)
 	if writePersonalCompanyLoadError(c, err) {
 		return
 	}
@@ -279,7 +279,7 @@ func (api *personalCompanyAPI) queueWorkItem(c *gin.Context) {
 	if !ok {
 		return
 	}
-	company, err := loadPersonalCompany(ctx.userID)
+	company, err := loadPersonalCompany(ctx.userID, ctx.agentGroupID)
 	if writePersonalCompanyLoadError(c, err) {
 		return
 	}

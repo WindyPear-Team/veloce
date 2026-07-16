@@ -25,7 +25,7 @@ func (api *personalCompanyAPI) listApprovals(c *gin.Context) {
 	if !ok {
 		return
 	}
-	company, err := loadPersonalCompany(ctx.userID)
+	company, err := loadPersonalCompany(ctx.userID, ctx.agentGroupID)
 	if writePersonalCompanyLoadError(c, err) {
 		return
 	}
@@ -61,7 +61,7 @@ func (api *personalCompanyAPI) decideApprovalForWorkItem(c *gin.Context, input p
 	if !ok {
 		return
 	}
-	company, err := loadPersonalCompany(ctx.userID)
+	company, err := loadPersonalCompany(ctx.userID, ctx.agentGroupID)
 	if writePersonalCompanyLoadError(c, err) {
 		return
 	}
@@ -90,7 +90,7 @@ func (api *personalCompanyAPI) decideApprovalRequest(c *gin.Context, rawID strin
 	if !ok {
 		return
 	}
-	company, err := loadPersonalCompany(ctx.userID)
+	company, err := loadPersonalCompany(ctx.userID, ctx.agentGroupID)
 	if writePersonalCompanyLoadError(c, err) {
 		return
 	}
@@ -164,7 +164,7 @@ func (api *personalCompanyAPI) getOrgChart(c *gin.Context) {
 	if !ok {
 		return
 	}
-	company, err := loadPersonalCompany(ctx.userID)
+	company, err := loadPersonalCompany(ctx.userID, ctx.agentGroupID)
 	if writePersonalCompanyLoadError(c, err) {
 		return
 	}

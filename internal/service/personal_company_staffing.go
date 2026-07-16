@@ -50,7 +50,7 @@ func (api *personalCompanyAPI) listRoleTemplates(c *gin.Context) {
 	if !ok {
 		return
 	}
-	company, err := loadPersonalCompany(ctx.userID)
+	company, err := loadPersonalCompany(ctx.userID, ctx.agentGroupID)
 	if writePersonalCompanyLoadError(c, err) {
 		return
 	}
@@ -67,7 +67,7 @@ func (api *personalCompanyAPI) createRoleTemplate(c *gin.Context) {
 	if !ok {
 		return
 	}
-	company, err := loadPersonalCompany(ctx.userID)
+	company, err := loadPersonalCompany(ctx.userID, ctx.agentGroupID)
 	if writePersonalCompanyLoadError(c, err) {
 		return
 	}
@@ -109,7 +109,7 @@ func (api *personalCompanyAPI) listRecruitmentPlans(c *gin.Context) {
 	if !ok {
 		return
 	}
-	company, err := loadPersonalCompany(ctx.userID)
+	company, err := loadPersonalCompany(ctx.userID, ctx.agentGroupID)
 	if writePersonalCompanyLoadError(c, err) {
 		return
 	}
@@ -126,7 +126,7 @@ func (api *personalCompanyAPI) createRecruitmentPlan(c *gin.Context) {
 	if !ok {
 		return
 	}
-	company, err := loadPersonalCompany(ctx.userID)
+	company, err := loadPersonalCompany(ctx.userID, ctx.agentGroupID)
 	if writePersonalCompanyLoadError(c, err) {
 		return
 	}
@@ -169,7 +169,7 @@ func (api *personalCompanyAPI) approveRecruitmentPlan(c *gin.Context) {
 	if !ok {
 		return
 	}
-	company, err := loadPersonalCompany(ctx.userID)
+	company, err := loadPersonalCompany(ctx.userID, ctx.agentGroupID)
 	if writePersonalCompanyLoadError(c, err) {
 		return
 	}
@@ -232,7 +232,7 @@ func (api *personalCompanyAPI) recordCapabilityEvidence(c *gin.Context) {
 	if !ok {
 		return
 	}
-	company, err := loadPersonalCompany(ctx.userID)
+	company, err := loadPersonalCompany(ctx.userID, ctx.agentGroupID)
 	if writePersonalCompanyLoadError(c, err) {
 		return
 	}
@@ -276,7 +276,7 @@ func (api *personalCompanyAPI) promoteEmployee(c *gin.Context) {
 	if !ok {
 		return
 	}
-	company, err := loadPersonalCompany(ctx.userID)
+	company, err := loadPersonalCompany(ctx.userID, ctx.agentGroupID)
 	if writePersonalCompanyLoadError(c, err) {
 		return
 	}

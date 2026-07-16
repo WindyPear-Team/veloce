@@ -13,7 +13,10 @@ import (
 	"gorm.io/gorm"
 )
 
-type personalCompanyRequestContext struct{ userID uint }
+type personalCompanyRequestContext struct {
+	userID       uint
+	agentGroupID string
+}
 
 type personalCompanyBootstrapInput struct {
 	Name              string          `json:"name"`
@@ -40,7 +43,7 @@ func (api *personalCompanyAPI) getCompany(c *gin.Context) {
 	if !ok {
 		return
 	}
-	company, err := loadPersonalCompany(ctx.userID)
+	company, err := loadPersonalCompany(ctx.userID, ctx.agentGroupID)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		c.JSON(http.StatusOK, gin.H{"company": nil, "bootstrap_required": true})
 		return
@@ -101,11 +104,12 @@ func (api *personalCompanyAPI) bootstrapCompany(c *gin.Context) {
 	}
 	if err := model.DB.Transaction(func(tx *gorm.DB) error {
 		var existing model.PersonalCompany
-		if err := tx.Where("owner_user_id = ?", ctx.userID).First(&existing).Error; err == nil {
+		if err := tx.Where("owner_user_id = ? AND agent_group_id = ?", ctx.userID, ctx.agentGroupID).First(&existing).Error; err == nil {
 			return errPersonalCompanyAlreadyBootstrapped
 		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return err
 		}
+		company.AgentGroupID = ctx.agentGroupID
 		if err := tx.Create(&company).Error; err != nil {
 			return err
 		}
@@ -159,7 +163,7 @@ func (api *personalCompanyAPI) updateCharter(c *gin.Context) {
 	if !ok {
 		return
 	}
-	company, err := loadPersonalCompany(ctx.userID)
+	company, err := loadPersonalCompany(ctx.userID, ctx.agentGroupID)
 	if writePersonalCompanyLoadError(c, err) {
 		return
 	}
@@ -213,7 +217,7 @@ func (api *personalCompanyAPI) setCompanyState(c *gin.Context, state string) {
 	if !ok {
 		return
 	}
-	company, err := loadPersonalCompany(ctx.userID)
+	company, err := loadPersonalCompany(ctx.userID, ctx.agentGroupID)
 	if writePersonalCompanyLoadError(c, err) {
 		return
 	}
@@ -238,9 +242,9 @@ func (api *personalCompanyAPI) setCompanyState(c *gin.Context, state string) {
 
 var errPersonalCompanyAlreadyBootstrapped = errors.New("personal company already bootstrapped")
 
-func loadPersonalCompany(userID uint) (model.PersonalCompany, error) {
+func loadPersonalCompany(userID uint, agentGroupID string) (model.PersonalCompany, error) {
 	var company model.PersonalCompany
-	err := model.DB.Where("owner_user_id = ?", userID).First(&company).Error
+	err := model.DB.Where("owner_user_id = ? AND agent_group_id = ?", userID, strings.TrimSpace(agentGroupID)).First(&company).Error
 	return company, err
 }
 
