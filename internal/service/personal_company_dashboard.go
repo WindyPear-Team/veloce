@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/WindyPear-Team/veloce/internal/model"
@@ -8,14 +9,26 @@ import (
 )
 
 type personalCompanyDashboardResponse struct {
-	Company    model.PersonalCompany          `json:"company"`
-	Charter    *model.CompanyCharterRevision  `json:"charter,omitempty"`
-	Objectives []model.CompanyObjective       `json:"objectives"`
-	WorkItems  []model.CompanyWorkItem        `json:"work_items"`
-	Approvals  []model.CompanyApprovalRequest `json:"approvals"`
-	Budget     personalCompanyBudgetSummary   `json:"budget"`
-	Health     personalCompanyHealthSummary   `json:"health"`
-	Balance    personalCompanyBalanceSummary  `json:"balance_guard"`
+	Company            model.PersonalCompany              `json:"company"`
+	Charter            *model.CompanyCharterRevision      `json:"charter,omitempty"`
+	Objectives         []model.CompanyObjective           `json:"objectives"`
+	WorkItems          []model.CompanyWorkItem            `json:"work_items"`
+	Approvals          []model.CompanyApprovalRequest     `json:"approvals"`
+	Budget             personalCompanyBudgetSummary       `json:"budget"`
+	Health             personalCompanyHealthSummary       `json:"health"`
+	Balance            personalCompanyBalanceSummary      `json:"balance_guard"`
+	ConnectorApprovals []personalCompanyConnectorApproval `json:"connector_approvals"`
+}
+
+type personalCompanyConnectorApproval struct {
+	ID            string                 `json:"id"`
+	WorkItemID    uint                   `json:"work_item_id"`
+	WorkItemTitle string                 `json:"work_item_title"`
+	RunID         string                 `json:"run_id"`
+	Action        string                 `json:"action"`
+	WorkspacePath string                 `json:"workspace_path"`
+	Payload       map[string]interface{} `json:"payload"`
+	CreatedAt     time.Time              `json:"created_at"`
 }
 
 type personalCompanyBalanceSummary struct {
@@ -40,7 +53,7 @@ type personalCompanyHealthSummary struct {
 
 func personalCompanyDashboard(company model.PersonalCompany) (personalCompanyDashboardResponse, error) {
 	response := personalCompanyDashboardResponse{
-		Company: company, Objectives: []model.CompanyObjective{}, WorkItems: []model.CompanyWorkItem{}, Approvals: []model.CompanyApprovalRequest{},
+		Company: company, Objectives: []model.CompanyObjective{}, WorkItems: []model.CompanyWorkItem{}, Approvals: []model.CompanyApprovalRequest{}, ConnectorApprovals: []personalCompanyConnectorApproval{},
 		Budget: personalCompanyBudgetSummary{DailyLimit: company.DailyBudget, MonthlyLimit: company.MonthlyBudget},
 	}
 	var owner model.User
@@ -64,6 +77,25 @@ func personalCompanyDashboard(company model.PersonalCompany) (personalCompanyDas
 	}
 	if err := model.DB.Where("personal_company_id = ? AND status = ?", company.ID, model.CompanyApprovalPending).Order("created_at ASC").Find(&response.Approvals).Error; err != nil {
 		return response, err
+	}
+	var connectorRows []struct {
+		AdvancedChatConnectorTask
+		WorkItemID uint
+		Title      string
+	}
+	if err := model.DB.Table("advanced_chat_connector_tasks AS tasks").
+		Select("tasks.*, work.id AS work_item_id, work.title").
+		Joins("JOIN company_work_attempts AS attempts ON attempts.advanced_chat_run_id = tasks.run_id").
+		Joins("JOIN company_work_items AS work ON work.id = attempts.work_item_id").
+		Where("work.personal_company_id = ? AND tasks.status = ?", company.ID, advancedChatConnectorTaskStatusPendingApproval).
+		Order("tasks.created_at ASC").
+		Scan(&connectorRows).Error; err != nil {
+		return response, err
+	}
+	for _, row := range connectorRows {
+		payload := map[string]interface{}{}
+		_ = json.Unmarshal([]byte(row.Payload), &payload)
+		response.ConnectorApprovals = append(response.ConnectorApprovals, personalCompanyConnectorApproval{ID: row.ID, WorkItemID: row.WorkItemID, WorkItemTitle: row.Title, RunID: row.RunID, Action: row.Action, WorkspacePath: row.WorkspacePath, Payload: payload, CreatedAt: row.CreatedAt})
 	}
 	if err := model.DB.Model(&model.CompanyWorkItem{}).Select("COALESCE(SUM(reserved_cost), 0)").Where("personal_company_id = ? AND status NOT IN ?", company.ID, []string{model.CompanyWorkStatusCancelled, model.CompanyWorkStatusDelivered}).Scan(&response.Budget.Reserved).Error; err != nil {
 		return response, err
@@ -91,6 +123,6 @@ func personalCompanyDashboard(company model.PersonalCompany) (personalCompanyDas
 	if err := model.DB.Model(&model.CompanyApprovalRequest{}).Where("personal_company_id = ? AND status = ?", company.ID, model.CompanyApprovalPending).Count(&count).Error; err != nil {
 		return response, err
 	}
-	response.Health.PendingApprovals = int(count)
+	response.Health.PendingApprovals = int(count) + len(response.ConnectorApprovals)
 	return response, nil
 }

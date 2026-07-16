@@ -153,15 +153,22 @@ func TestAgentStudioCheckerDecisionRequiresApprovalTool(t *testing.T) {
 		Name:      advancedChatAgentStudioApprovalToolName,
 		Arguments: `{"decision":"yes","opinion":"scoped change"}`,
 	}}})
-	if err != nil || !yes || opinion != "scoped change" {
+	if err != nil || yes != "yes" || opinion != "scoped change" {
 		t.Fatalf("expected yes decision with opinion, got yes=%v opinion=%q err=%v", yes, opinion, err)
 	}
 	no, _, err := advancedChatAgentStudioCheckerDecision(&ChatExecutorResult{ToolCalls: []ChatExecutorToolCall{{
 		Name:      advancedChatAgentStudioApprovalToolName,
 		Arguments: `{"decision":"no"}`,
 	}}})
-	if err != nil || no {
+	if err != nil || no != "no" {
 		t.Fatalf("expected no decision, got no=%v err=%v", no, err)
+	}
+	escalation, _, err := advancedChatAgentStudioCheckerDecision(&ChatExecutorResult{ToolCalls: []ChatExecutorToolCall{{
+		Name:      advancedChatAgentStudioApprovalToolName,
+		Arguments: `{"decision":"escalate"}`,
+	}}})
+	if err != nil || escalation != "escalate" {
+		t.Fatalf("expected escalation decision, got decision=%q err=%v", escalation, err)
 	}
 	if _, _, err := advancedChatAgentStudioCheckerDecision(&ChatExecutorResult{Content: "yes"}); err == nil {
 		t.Fatal("checker must call approval decision tool")

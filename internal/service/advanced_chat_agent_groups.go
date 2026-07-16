@@ -504,7 +504,7 @@ func advancedChatAgentGroupChatSystemPrompt(group *advancedChatAgentGroup, agent
 		advancedChatAgentTypeSystemPrompt(agent.Type) + "\n" +
 		"Messages are annotated as coming from the user or from another named agent. Use those annotations to understand who is speaking.\n" +
 		"Reply as this agent only. Start every visible reply with [" + agent.Name + "].\n" +
-		"If the user mentions another agent with @, only respond when you are that addressed agent or when you are the chief routing the work.")
+		"All user-facing Studio messages are received by the Chief. Coordinate members through delegation rather than asking the user to address members directly.")
 }
 
 type advancedChatAgentDelegateInput struct {
@@ -768,7 +768,7 @@ func commitDelegatedAdvancedChatAgentDelta(ctx context.Context, user *model.User
 		"source_agent_id": agent.ID,
 		"mutation_count":  len(mutations),
 	})
-	result, err := commitAdvancedChatAgentStudioDelta(ctx, user, input.RunID, input.SessionID, binding, map[string]interface{}{"mutations": mutations}, advancedChatAgentStudioApprovalCheckerForGroupValue(group), input.Observer, userChannelID, displayRound)
+	result, err := commitAdvancedChatAgentStudioDelta(ctx, user, input.RunID, input.SessionID, binding, map[string]interface{}{"mutations": mutations}, advancedChatAgentStudioApprovalCheckerForGroupValue(group), input.Observer, userChannelID, displayRound, input.ChargeBalance)
 	if err != nil {
 		appendAdvancedChatAgentTaskEvent(input.RunID, input.SessionID, user.ID, gin.H{
 			"task_id":         taskID,
@@ -990,7 +990,7 @@ func runAdvancedChatDelegatedAgentLoop(ctx context.Context, user *model.User, mo
 						}
 					}
 					if options.ApprovalChecker != nil {
-						if value, err := approveAdvancedChatConnectorTaskWithChecker(ctx, user, options.RunID, options.SessionID, options.ApprovalChecker, task, connectorBinding, arguments, options.Observer, userChannelID, advancedChatDelegatedDisplayRound(options, round+1)); err != nil {
+						if value, err := approveAdvancedChatConnectorTaskWithChecker(ctx, user, options.RunID, options.SessionID, options.ApprovalChecker, task, connectorBinding, arguments, options.Observer, userChannelID, advancedChatDelegatedDisplayRound(options, round+1), options.ChargeBalance); err != nil {
 							precreateConnectorTaskErr = err
 							toolResult = "Checker approval failed: " + err.Error()
 						} else if strings.TrimSpace(value) != "" {
@@ -1096,7 +1096,7 @@ func runAdvancedChatDelegatedAgentLoop(ctx context.Context, user *model.User, mo
 						commitBinding = binding
 						break
 					}
-					value, err := commitAdvancedChatAgentStudioDelta(ctx, user, options.RunID, options.SessionID, commitBinding, arguments, options.ApprovalChecker, options.Observer, userChannelID, advancedChatDelegatedDisplayRound(options, round+1))
+					value, err := commitAdvancedChatAgentStudioDelta(ctx, user, options.RunID, options.SessionID, commitBinding, arguments, options.ApprovalChecker, options.Observer, userChannelID, advancedChatDelegatedDisplayRound(options, round+1), options.ChargeBalance)
 					if err != nil {
 						detail.Status = "error"
 						toolResult = "Delta commit failed: " + err.Error()

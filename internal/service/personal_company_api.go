@@ -22,6 +22,8 @@ func RegisterPersonalCompanyUserRoutes(group *gin.RouterGroup) {
 	group.PUT("/personal-company/runtime", api.updateStudioRuntime)
 	group.GET("/personal-company/objectives", api.listObjectives)
 	group.POST("/personal-company/objectives", api.createObjective)
+	group.GET("/personal-company/work-items/:id/internal-session", api.getWorkItemInternalSession)
+	group.POST("/personal-company/connector-approvals/:id/decide", api.decideStudioConnectorApproval)
 	group.GET("/personal-company/org-chart", api.getOrgChart)
 	group.GET("/personal-company/role-templates", api.listRoleTemplates)
 	group.POST("/personal-company/role-templates", api.createRoleTemplate)

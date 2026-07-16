@@ -249,12 +249,12 @@ func advancedChatAgentStudioCommitDeltaTool() ChatExecutorTool {
 func advancedChatAgentStudioApprovalTool() ChatExecutorTool {
 	return ChatExecutorTool{
 		Name:        advancedChatAgentStudioApprovalToolName,
-		Description: "Checker-only approval tool. Return yes to approve a connector task, no to reject it, and include a concise approval opinion when useful.",
+		Description: "Checker-only approval tool. Return yes to approve, no to reject, or escalate when the owner must decide.",
 		Schema: map[string]interface{}{
 			"type":     "object",
 			"required": []string{"decision"},
 			"properties": map[string]interface{}{
-				"decision": map[string]interface{}{"type": "string", "enum": []string{"yes", "no"}, "description": "yes approves the connector task; no rejects it."},
+				"decision": map[string]interface{}{"type": "string", "enum": []string{"yes", "no", "escalate"}, "description": "yes approves; no rejects; escalate leaves the task for the owner."},
 				"opinion":  map[string]interface{}{"type": "string", "description": "Optional concise approval opinion or rejection reason."},
 			},
 		},
@@ -347,7 +347,7 @@ func advancedChatApprovalCheckerForUserAgent(userID uint, agentID string) (*adva
 	}, nil
 }
 
-func approveAdvancedChatConnectorTaskWithChecker(ctx context.Context, user *model.User, runID string, sessionID string, checker *advancedChatAgentStudioApprovalChecker, task AdvancedChatConnectorTask, binding advancedChatConnectorToolBinding, arguments map[string]interface{}, observer advancedChatCompletionObserver, fallbackUserChannelID uint, displayRound int) (string, error) {
+func approveAdvancedChatConnectorTaskWithChecker(ctx context.Context, user *model.User, runID string, sessionID string, checker *advancedChatAgentStudioApprovalChecker, task AdvancedChatConnectorTask, binding advancedChatConnectorToolBinding, arguments map[string]interface{}, observer advancedChatCompletionObserver, fallbackUserChannelID uint, displayRound int, chargeBalance bool) (string, error) {
 	if user == nil {
 		return "", errors.New("user is required")
 	}
@@ -408,7 +408,7 @@ func approveAdvancedChatConnectorTaskWithChecker(ctx context.Context, user *mode
 		advancedChatAgentTypeSystemPrompt("checker"),
 		strings.TrimSpace(checker.Agent.Prompt),
 		advancedChatAgentStudioPrompt("checker", false),
-		"Use the connector_approval_decision tool exactly once. Approve only when the requested local operation is necessary, scoped, and consistent with the user's task. Reject destructive, unrelated, ambiguous, or unsafe operations.",
+		"Use the connector_approval_decision tool exactly once. Approve only when the requested local operation is necessary, scoped, and consistent with the user's task. Reject destructive, unrelated, or unsafe operations. Use escalate when the request may be legitimate but you lack enough context to safely decide.",
 	}), "\n\n")
 	checkCtx, cancel := context.WithTimeout(ctx, advancedChatDelegatedToolWait)
 	defer cancel()
@@ -420,21 +420,27 @@ func approveAdvancedChatConnectorTaskWithChecker(ctx context.Context, user *mode
 			Role:    "user",
 			Content: "Review this connector approval request and decide yes or no:\n\n" + truncateToolResult(string(payloadJSON)),
 		}},
-		System: system,
-		Tools:  []ChatExecutorTool{advancedChatAgentStudioApprovalTool()},
-		Stream: false,
+		System:        system,
+		Tools:         []ChatExecutorTool{advancedChatAgentStudioApprovalTool()},
+		Stream:        false,
+		ChargeBalance: chargeBalance,
 	}, observer, func() bool { return true })
 	if err != nil {
 		_, _ = decideAdvancedChatConnectorTask(user.ID, taskID, false, "checker", "checker approval failed: "+err.Error())
 		appendAdvancedChatAgentTaskEvent(runID, sessionID, user.ID, gin.H{"task_id": eventPayload["task_id"], "status": "error", "error": err.Error()})
 		return "", err
 	}
-	approved, opinion, err := advancedChatAgentStudioCheckerDecision(result)
+	decision, opinion, err := advancedChatAgentStudioCheckerDecision(result)
 	if err != nil {
 		_, _ = decideAdvancedChatConnectorTask(user.ID, taskID, false, "checker", err.Error())
 		appendAdvancedChatAgentTaskEvent(runID, sessionID, user.ID, gin.H{"task_id": eventPayload["task_id"], "status": "error", "error": err.Error(), "result": truncateToolResult(result.Content)})
 		return "", err
 	}
+	if decision == "escalate" {
+		appendAdvancedChatAgentTaskEvent(runID, sessionID, user.ID, gin.H{"task_id": eventPayload["task_id"], "status": "approval_required", "decision": "escalate", "opinion": truncateToolResult(opinion)})
+		return fmt.Sprintf("Checker needs owner approval. %s", strings.TrimSpace(opinion)), nil
+	}
+	approved := decision == "yes"
 	status, err := decideAdvancedChatConnectorTask(user.ID, taskID, approved, "checker", opinion)
 	if err != nil {
 		if status, ok := acceptedAdvancedChatConnectorApprovalConflict(err, approved); ok {
@@ -450,17 +456,17 @@ func approveAdvancedChatConnectorTaskWithChecker(ctx context.Context, user *mode
 		appendAdvancedChatAgentTaskEvent(runID, sessionID, user.ID, gin.H{"task_id": eventPayload["task_id"], "status": "error", "error": err.Error()})
 		return "", err
 	}
-	decision := "no"
+	resolvedDecision := "no"
 	if approved {
-		decision = "yes"
+		resolvedDecision = "yes"
 	}
 	appendAdvancedChatAgentTaskEvent(runID, sessionID, user.ID, gin.H{
 		"task_id":  eventPayload["task_id"],
 		"status":   "completed",
-		"decision": decision,
+		"decision": resolvedDecision,
 		"opinion":  truncateToolResult(opinion),
 	})
-	return fmt.Sprintf("Checker decision: %s. Connector task status: %s. %s", decision, status, strings.TrimSpace(opinion)), nil
+	return fmt.Sprintf("Checker decision: %s. Connector task status: %s. %s", resolvedDecision, status, strings.TrimSpace(opinion)), nil
 }
 
 func acceptedAdvancedChatConnectorApprovalConflict(err error, approved bool) (string, bool) {
@@ -480,9 +486,9 @@ func acceptedAdvancedChatConnectorApprovalConflict(err error, approved bool) (st
 	}
 }
 
-func advancedChatAgentStudioCheckerDecision(result *ChatExecutorResult) (bool, string, error) {
+func advancedChatAgentStudioCheckerDecision(result *ChatExecutorResult) (string, string, error) {
 	if result == nil {
-		return false, "", errors.New("checker returned no result")
+		return "", "", errors.New("checker returned no result")
 	}
 	for _, call := range result.ToolCalls {
 		if call.Name != advancedChatAgentStudioApprovalToolName {
@@ -490,20 +496,22 @@ func advancedChatAgentStudioCheckerDecision(result *ChatExecutorResult) (bool, s
 		}
 		arguments, err := parseToolArguments(call.Arguments)
 		if err != nil {
-			return false, "", err
+			return "", "", err
 		}
 		decision := strings.ToLower(strings.TrimSpace(stringFromMap(arguments, "decision")))
 		opinion := strings.TrimSpace(stringFromMap(arguments, "opinion"))
 		switch decision {
 		case "yes":
-			return true, opinion, nil
+			return decision, opinion, nil
 		case "no":
-			return false, opinion, nil
+			return decision, opinion, nil
+		case "escalate":
+			return decision, opinion, nil
 		default:
-			return false, opinion, errors.New("checker decision must be yes or no")
+			return "", opinion, errors.New("checker decision must be yes, no, or escalate")
 		}
 	}
-	return false, strings.TrimSpace(result.Content), errors.New("checker did not call the approval decision tool")
+	return "", strings.TrimSpace(result.Content), errors.New("checker did not call the approval decision tool")
 }
 
 func advancedChatAgentStudioLockKey(userID uint, groupID string, agentID string) string {
@@ -646,7 +654,7 @@ func baseSHA256ForPath(ctx context.Context, userID uint, runID string, binding a
 	return result
 }
 
-func commitAdvancedChatAgentStudioDelta(ctx context.Context, user *model.User, runID string, sessionID string, binding advancedChatConnectorToolBinding, arguments map[string]interface{}, checker *advancedChatAgentStudioApprovalChecker, observer advancedChatCompletionObserver, fallbackUserChannelID uint, displayRound int) (string, error) {
+func commitAdvancedChatAgentStudioDelta(ctx context.Context, user *model.User, runID string, sessionID string, binding advancedChatConnectorToolBinding, arguments map[string]interface{}, checker *advancedChatAgentStudioApprovalChecker, observer advancedChatCompletionObserver, fallbackUserChannelID uint, displayRound int, chargeBalance bool) (string, error) {
 	if user == nil {
 		return "", errors.New("user is required")
 	}
@@ -669,7 +677,7 @@ func commitAdvancedChatAgentStudioDelta(ctx context.Context, user *model.User, r
 		if err != nil {
 			return "", err
 		}
-		checkerResult, err := approveAdvancedChatConnectorTaskWithChecker(ctx, user, runID, sessionID, checker, task, callBinding, callArguments, observer, fallbackUserChannelID, displayRound)
+		checkerResult, err := approveAdvancedChatConnectorTaskWithChecker(ctx, user, runID, sessionID, checker, task, callBinding, callArguments, observer, fallbackUserChannelID, displayRound, chargeBalance)
 		if err != nil {
 			return checkerResult, err
 		}

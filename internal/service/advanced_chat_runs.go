@@ -1170,7 +1170,7 @@ func prepareAdvancedChatAssistantRun(ctx context.Context, userID uint, input adv
 		if loaded, loadErr := loadAdvancedChatAgentGroupsForRun(ctx, userID, connectorDevice); loadErr == nil {
 			agentGroups = loaded
 		}
-		group, target, status, message, groupErr := prepareAdvancedChatAgentGroupTarget(input.AgentGroupID, agentGroups, messages)
+		group, target, status, message, groupErr := prepareAdvancedChatAgentGroupTarget(input.AgentGroupID, agentGroups)
 		if groupErr != nil {
 			return preparedAdvancedChatAssistantRun{}, status, message, groupErr
 		}
@@ -1261,7 +1261,7 @@ func prepareAdvancedChatAssistantRun(ctx context.Context, userID uint, input adv
 	}, http.StatusOK, "", nil
 }
 
-func prepareAdvancedChatAgentGroupTarget(groupID string, groups []advancedChatAgentGroup, messages []advancedChatCompletionMessage) (advancedChatAgentGroup, advancedChatGroupAgent, int, string, error) {
+func prepareAdvancedChatAgentGroupTarget(groupID string, groups []advancedChatAgentGroup) (advancedChatAgentGroup, advancedChatGroupAgent, int, string, error) {
 	groupID = strings.TrimSpace(groupID)
 	var group advancedChatAgentGroup
 	found := false
@@ -1285,11 +1285,6 @@ func prepareAdvancedChatAgentGroupTarget(groupID string, groups []advancedChatAg
 		return group, advancedChatGroupAgent{}, http.StatusBadRequest, "Studio must contain exactly one chief", errors.New("studio chief count invalid")
 	}
 	target := chiefs[0]
-	if agent, ok := findAdvancedChatMentionedGroupAgentInMessages(group, messages); ok {
-		target = agent
-	} else if advancedChatLatestUserMessageHasMention(messages) {
-		return group, advancedChatGroupAgent{}, http.StatusBadRequest, "Mentioned agent was not found in the selected group", errors.New("mentioned agent not found")
-	}
 	if strings.TrimSpace(target.ChatAgentID) == "" {
 		return group, target, http.StatusBadRequest, "Studio member must select an agent", errors.New("studio member agent required")
 	}
@@ -2149,7 +2144,7 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 					detail.Arguments = arguments
 					detail.Status = "approval_required"
 					if approvalChecker != nil {
-						if value, err := approveAdvancedChatConnectorTaskWithChecker(ctx, user, prepared.runID, prepared.input.SessionID, approvalChecker, task, connectorBinding, arguments, observer, prepared.input.UserChannelID, round+1); err != nil {
+						if value, err := approveAdvancedChatConnectorTaskWithChecker(ctx, user, prepared.runID, prepared.input.SessionID, approvalChecker, task, connectorBinding, arguments, observer, prepared.input.UserChannelID, round+1, prepared.input.ChargeBalance); err != nil {
 							precreateConnectorTaskErr = err
 							toolResultText = "Checker approval failed: " + err.Error()
 						} else if strings.TrimSpace(value) != "" {
@@ -2220,13 +2215,14 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 					toolResultText = "Invalid tool arguments: " + argumentsErr.Error()
 				} else {
 					toolResultText, err = HandleAdvancedChatToolCall(ctx, AdvancedChatToolCallInput{
-						UserID:    user.ID,
-						Mode:      prepared.mode,
-						AgentID:   prepared.input.AgentID,
-						SessionID: prepared.input.SessionID,
-						RunID:     prepared.runID,
-						Name:      toolCall.Name,
-						Arguments: arguments,
+						UserID:       user.ID,
+						Mode:         prepared.mode,
+						AgentID:      prepared.input.AgentID,
+						AgentGroupID: prepared.input.AgentGroupID,
+						SessionID:    prepared.input.SessionID,
+						RunID:        prepared.runID,
+						Name:         toolCall.Name,
+						Arguments:    arguments,
 					})
 					if err != nil {
 						detail.Status = "error"
@@ -2333,7 +2329,7 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 						commitBinding = binding
 						break
 					}
-					toolResultText, err = commitAdvancedChatAgentStudioDelta(ctx, user, prepared.runID, prepared.input.SessionID, commitBinding, arguments, approvalChecker, observer, prepared.input.UserChannelID, round+1)
+					toolResultText, err = commitAdvancedChatAgentStudioDelta(ctx, user, prepared.runID, prepared.input.SessionID, commitBinding, arguments, approvalChecker, observer, prepared.input.UserChannelID, round+1, prepared.input.ChargeBalance)
 					if err != nil {
 						detail.Status = "error"
 						if strings.TrimSpace(toolResultText) != "" {

@@ -410,12 +410,13 @@ func (api *advancedChatAPI) completeChat(c *gin.Context) {
 					toolResultText = "Invalid tool arguments: " + argumentsErr.Error()
 				} else {
 					toolResult, err := HandleAdvancedChatToolCall(ctx, AdvancedChatToolCallInput{
-						UserID:    user.ID,
-						Mode:      mode,
-						AgentID:   input.AgentID,
-						SessionID: persistedSessionID,
-						Name:      toolCall.Name,
-						Arguments: arguments,
+						UserID:       user.ID,
+						Mode:         mode,
+						AgentID:      input.AgentID,
+						AgentGroupID: input.AgentGroupID,
+						SessionID:    persistedSessionID,
+						Name:         toolCall.Name,
+						Arguments:    arguments,
 					})
 					if err != nil {
 						detail.Status = "error"

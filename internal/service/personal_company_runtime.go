@@ -34,6 +34,10 @@ type personalCompanyStudioRuntimeInput struct {
 	ConnectorCommandPrefixes []string `json:"connector_command_prefixes"`
 }
 
+type personalCompanyConnectorApprovalDecisionInput struct {
+	Approved bool `json:"approved"`
+}
+
 // updateStudioRuntime binds a connector to the Studio itself. Studio members
 // keep their own agents, models, skills, and MCP configuration.
 func (api *personalCompanyAPI) updateStudioRuntime(c *gin.Context) {
@@ -152,6 +156,95 @@ func (api *personalCompanyAPI) runWorkItem(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusAccepted, gin.H{"work_attempt": attempt, "advanced_chat_run_id": runID})
+}
+
+// getWorkItemInternalSession exposes the immutable Studio conversation that
+// performed a work attempt. Owners can inspect it without editing the run.
+func (api *personalCompanyAPI) getWorkItemInternalSession(c *gin.Context) {
+	ctx, ok := api.personalCompanyContext(c)
+	if !ok {
+		return
+	}
+	company, err := loadPersonalCompany(ctx.userID, ctx.agentGroupID)
+	if writePersonalCompanyLoadError(c, err) {
+		return
+	}
+	workItem, err := loadPersonalCompanyWorkItem(company.ID, ctx.userID, c.Param("id"))
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Work item not found"})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load work item"})
+		return
+	}
+	var attempt model.CompanyWorkAttempt
+	if err := model.DB.Where("work_item_id = ? AND advanced_chat_run_id <> ''", workItem.ID).Order("attempt_number DESC").First(&attempt).Error; errors.Is(err, gorm.ErrRecordNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "No internal Studio session exists for this work item"})
+		return
+	} else if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load work attempt"})
+		return
+	}
+	var run AdvancedChatRun
+	if err := model.DB.Where("id = ? AND user_id = ?", attempt.AdvancedChatRunID, ctx.userID).First(&run).Error; errors.Is(err, gorm.ErrRecordNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Internal Studio run not found"})
+		return
+	} else if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load internal Studio run"})
+		return
+	}
+	session, err := advancedChatSessionResponseFor(ctx.userID, run.SessionID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load internal Studio session"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"work_item_id": workItem.ID, "attempt": attempt, "run": advancedChatRunResponseFromModel(run), "session": session, "readonly": true})
+}
+
+func (api *personalCompanyAPI) decideStudioConnectorApproval(c *gin.Context) {
+	ctx, ok := api.personalCompanyContext(c)
+	if !ok {
+		return
+	}
+	company, err := loadPersonalCompany(ctx.userID, ctx.agentGroupID)
+	if writePersonalCompanyLoadError(c, err) {
+		return
+	}
+	var input personalCompanyConnectorApprovalDecisionInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	taskID := strings.TrimSpace(c.Param("id"))
+	var task AdvancedChatConnectorTask
+	if err := model.DB.Where("id = ? AND user_id = ?", taskID, ctx.userID).First(&task).Error; errors.Is(err, gorm.ErrRecordNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Connector approval not found"})
+		return
+	} else if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load connector approval"})
+		return
+	}
+	var attempt model.CompanyWorkAttempt
+	if err := model.DB.Joins("JOIN company_work_items ON company_work_items.id = company_work_attempts.work_item_id").Where("company_work_attempts.advanced_chat_run_id = ? AND company_work_items.personal_company_id = ?", task.RunID, company.ID).First(&attempt).Error; errors.Is(err, gorm.ErrRecordNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Connector approval is not owned by this Studio"})
+		return
+	} else if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to verify connector approval"})
+		return
+	}
+	status, err := decideAdvancedChatConnectorTask(ctx.userID, task.ID, input.Approved, "owner", "Studio owner decision")
+	if err != nil {
+		var conflict advancedChatConnectorTaskDecisionConflict
+		if errors.As(err, &conflict) {
+			c.JSON(http.StatusConflict, gin.H{"error": "Connector approval has already been decided", "status": conflict.Status})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to decide connector approval"})
+		return
+	}
+	_ = createPersonalCompanyAuditEvent(model.DB, company.ID, &attempt.WorkItemID, "owner", ctx.userID, "connector_approval."+status, fmt.Sprintf(`{"connector_task_id":%q}`, task.ID))
+	c.JSON(http.StatusOK, gin.H{"status": status})
 }
 
 func startPersonalCompanyWorkRun(company model.PersonalCompany, userID, workItemID uint) (model.CompanyWorkAttempt, string, error) {

@@ -80,13 +80,14 @@ type AdvancedChatRuntimeExtension struct {
 }
 
 type AdvancedChatToolCallInput struct {
-	UserID    uint
-	Mode      string
-	AgentID   string
-	SessionID string
-	RunID     string
-	Name      string
-	Arguments map[string]interface{}
+	UserID       uint
+	Mode         string
+	AgentID      string
+	AgentGroupID string
+	SessionID    string
+	RunID        string
+	Name         string
+	Arguments    map[string]interface{}
 }
 
 var startupHooks []StartupHook

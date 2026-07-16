@@ -911,7 +911,7 @@ func (api *advancedChatAPI) runWorkspaceGitAction(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Approval assistant is not configured"})
 			return
 		}
-		if _, checkerErr = approveAdvancedChatConnectorTaskWithChecker(c.Request.Context(), user, "", "", checker, task, binding, map[string]interface{}{"command": command}, advancedChatCompletionObserver{}, 0, 0); checkerErr != nil {
+		if _, checkerErr = approveAdvancedChatConnectorTaskWithChecker(c.Request.Context(), user, "", "", checker, task, binding, map[string]interface{}{"command": command}, advancedChatCompletionObserver{}, 0, 0, false); checkerErr != nil {
 			c.JSON(http.StatusBadGateway, gin.H{"error": "Approval assistant failed: " + checkerErr.Error()})
 			return
 		}
