@@ -214,6 +214,7 @@ func (api *personalCompanyAPI) getWorkItemTimeline(c *gin.Context) {
 	}
 	var attempts []model.CompanyWorkAttempt
 	var artifacts []model.CompanyArtifact
+	var handoffs []model.CompanyHandoffPackage
 	var events []model.CompanyAuditEvent
 	if err := model.DB.Where("work_item_id = ?", workItem.ID).Order("attempt_number ASC").Find(&attempts).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load work timeline"})
@@ -223,11 +224,15 @@ func (api *personalCompanyAPI) getWorkItemTimeline(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load work timeline"})
 		return
 	}
+	if err := model.DB.Where("work_item_id = ?", workItem.ID).Order("created_at ASC").Find(&handoffs).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load work timeline"})
+		return
+	}
 	if err := model.DB.Where("personal_company_id = ? AND work_item_id = ?", company.ID, workItem.ID).Order("created_at ASC").Find(&events).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load work timeline"})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"work_item": workItem, "attempts": attempts, "artifacts": artifacts, "events": events})
+	c.JSON(http.StatusOK, gin.H{"work_item": workItem, "attempts": attempts, "artifacts": artifacts, "handoffs": handoffs, "events": events})
 }
 
 func (api *personalCompanyAPI) cancelWorkItem(c *gin.Context) {

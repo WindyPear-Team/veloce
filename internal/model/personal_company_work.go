@@ -27,6 +27,11 @@ const (
 	CompanyWorkStatusRetryableFailure = "retryable_failure"
 	CompanyWorkStatusDeadLetter       = "dead_letter"
 	CompanyWorkStatusCancelled        = "cancelled"
+
+	CompanyHandoffStatusPending       = "pending"
+	CompanyHandoffStatusAccepted      = "accepted"
+	CompanyHandoffStatusRejected      = "rejected"
+	CompanyHandoffStatusNeedsRevision = "needs_revision"
 )
 
 type CompanyObjective struct {
@@ -118,6 +123,15 @@ type CompanyHandoffPackage struct {
 	CreatedAt         time.Time      `json:"created_at"`
 	UpdatedAt         time.Time      `json:"updated_at"`
 	DeletedAt         gorm.DeletedAt `gorm:"index" json:"-"`
+}
+
+func NormalizeCompanyHandoffStatus(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case CompanyHandoffStatusAccepted, CompanyHandoffStatusRejected, CompanyHandoffStatusNeedsRevision:
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return CompanyHandoffStatusPending
+	}
 }
 
 func NormalizeCompanyObjectiveStatus(value string) string {
