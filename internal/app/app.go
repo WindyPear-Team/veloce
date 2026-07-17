@@ -33,9 +33,6 @@ func Run() error {
 	if err := service.RunStartupHooks(); err != nil {
 		return err
 	}
-	if err := service.InitBuiltinEmbeddingEngine(); err != nil {
-		return err
-	}
 	if err := service.InitCommunityAdvancedChatFeatures(); err != nil {
 		return err
 	}
