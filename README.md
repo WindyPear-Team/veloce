@@ -89,6 +89,19 @@ DB_DRIVER=mysql
 DB_DSN=flai:change-me@tcp(127.0.0.1:3306)/flai?charset=utf8mb4&parseTime=True&loc=Local
 ```
 
+### Migrate SQLite to PostgreSQL or MySQL
+
+Keep `DB_DRIVER=sqlite` and point `DB_PATH` at the source file. Set `DB_DSN`
+to an empty PostgreSQL or MySQL database, then run the one-way migration:
+
+```bash
+go run . --migrate
+```
+
+The source SQLite file is read only. The command refuses a target that already
+contains application tables, copies data in batches, and exits when complete.
+Afterward, switch `DB_DRIVER` to `postgres` or `mysql` for normal startup.
+
 ## License
 
 We use AGPL. See the LICENSE file for licensing information.

@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"io/fs"
+	"log"
 	"mime"
 	"net/http"
 	"net/url"
@@ -777,6 +778,21 @@ func Run() error {
 	}
 
 	return server.ListenAndServe()
+}
+
+// MigrateSQLiteDatabase runs the explicit one-way --migrate command. Normal
+// startup continues to use DB_DRIVER and never invokes this operation.
+func MigrateSQLiteDatabase() error {
+	config.Init()
+	if config.DBDriver != "" && config.DBDriver != "sqlite" {
+		return errors.New("--migrate requires DB_DRIVER=sqlite so DB_PATH is the source database")
+	}
+	report, err := model.MigrateSQLiteToDSN(config.DBPath, config.DBDSN)
+	if err != nil {
+		return err
+	}
+	log.Printf("SQLite migration completed: %d rows across %d tables copied to %s", report.Rows, report.Tables, report.TargetDriver)
+	return nil
 }
 
 const oidcStateCookie = "flai_oidc_state"
