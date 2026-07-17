@@ -7,17 +7,12 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func (api *advancedChatAPI) listPluginEmbeddingModels(c *gin.Context) {
-	user, ok := currentAdvancedChatUser(c)
-	if !ok {
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"models": ListPluginEmbeddingModels(user.ID)})
+func (api *advancedChatAPI) listBuiltinEmbeddingModels(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"models": ListBuiltinEmbeddingModels()})
 }
 
-func (api *advancedChatAPI) createPluginEmbeddings(c *gin.Context) {
-	user, ok := currentAdvancedChatUser(c)
-	if !ok {
+func (api *advancedChatAPI) createBuiltinEmbeddings(c *gin.Context) {
+	if _, ok := currentAdvancedChatUser(c); !ok {
 		return
 	}
 	var input struct {
@@ -28,12 +23,12 @@ func (api *advancedChatAPI) createPluginEmbeddings(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	texts, ok := pluginEmbeddingInputStrings(input.Input)
+	texts, ok := builtinEmbeddingInputStrings(input.Input)
 	if !ok {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Embedding input must be a string or string array"})
 		return
 	}
-	vectors, model, err := CreatePluginEmbeddings(c.Request.Context(), user.ID, input.Model, texts)
+	vectors, model, err := CreateBuiltinEmbeddings(c.Request.Context(), input.Model, texts)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
@@ -42,10 +37,10 @@ func (api *advancedChatAPI) createPluginEmbeddings(c *gin.Context) {
 	for index, vector := range vectors {
 		data[index] = gin.H{"object": "embedding", "index": index, "embedding": vector}
 	}
-	c.JSON(http.StatusOK, gin.H{"object": "list", "model": model.Model, "data": data, "usage": gin.H{"prompt_tokens": 0, "total_tokens": 0}})
+	c.JSON(http.StatusOK, gin.H{"object": "list", "model": BuiltinEmbeddingModelName(model.ID), "data": data, "usage": gin.H{"prompt_tokens": 0, "total_tokens": 0}})
 }
 
-func pluginEmbeddingInputStrings(value interface{}) ([]string, bool) {
+func builtinEmbeddingInputStrings(value interface{}) ([]string, bool) {
 	switch input := value.(type) {
 	case string:
 		return []string{input}, strings.TrimSpace(input) != ""

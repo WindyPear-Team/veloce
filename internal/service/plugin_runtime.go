@@ -75,10 +75,6 @@ func InvokePluginAction(ctx context.Context, plugin model.Plugin, userID uint, a
 }
 
 func runPluginWASM(ctx context.Context, plugin model.Plugin, functionName string, stdin []byte) (string, error) {
-	return runPluginWASMWithTimeout(ctx, plugin, functionName, stdin, pluginWASMTimeout)
-}
-
-func runPluginWASMWithTimeout(ctx context.Context, plugin model.Plugin, functionName string, stdin []byte, timeout time.Duration) (string, error) {
 	wasmPath := strings.TrimSpace(plugin.WASMPath)
 	if wasmPath == "" {
 		return "", nil
@@ -88,10 +84,7 @@ func runPluginWASMWithTimeout(ctx context.Context, plugin model.Plugin, function
 		return "", fmt.Errorf("failed to read plugin WASM: %w", err)
 	}
 
-	if timeout <= 0 {
-		timeout = pluginWASMTimeout
-	}
-	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	runCtx, cancel := context.WithTimeout(ctx, pluginWASMTimeout)
 	defer cancel()
 
 	runtime := wazero.NewRuntime(runCtx)
@@ -100,15 +93,11 @@ func runPluginWASMWithTimeout(ctx context.Context, plugin model.Plugin, function
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	fsConfig := wazero.NewFSConfig()
-	if pluginPath := strings.TrimSpace(plugin.Path); pluginPath != "" {
-		fsConfig = fsConfig.WithReadOnlyDirMount(pluginPath, "/model")
-	}
 	config := wazero.NewModuleConfig().
 		WithStdout(&stdout).
 		WithStderr(&stderr).
 		WithStdin(io.Reader(bytes.NewReader(stdin))).
-		WithFSConfig(fsConfig).
+		WithFSConfig(wazero.NewFSConfig()).
 		WithStartFunctions("_initialize")
 	module, err := runtime.InstantiateWithConfig(runCtx, wasm, config)
 	if err != nil {

@@ -30,26 +30,16 @@ var (
 type pluginAPI struct{}
 
 type PluginManifest struct {
-	ID          string                   `json:"id"`
-	Name        string                   `json:"name"`
-	Version     string                   `json:"version"`
-	Description string                   `json:"description"`
-	Author      string                   `json:"author"`
-	WASM        string                   `json:"wasm"`
-	Permissions []string                 `json:"permissions"`
-	Hooks       []PluginHook             `json:"hooks"`
-	Frontend    json.RawMessage          `json:"frontend"`
-	Settings    json.RawMessage          `json:"settings"`
-	Embedding   *PluginEmbeddingManifest `json:"embedding,omitempty"`
-}
-
-// PluginEmbeddingManifest declares that a WASM plugin can provide text
-// embeddings. The module receives {"input":[...]} on stdin and writes the
-// embedding response on stdout from the configured entrypoint.
-type PluginEmbeddingManifest struct {
-	Dimensions     int    `json:"dimensions"`
-	Entrypoint     string `json:"entrypoint,omitempty"`
-	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
+	ID          string          `json:"id"`
+	Name        string          `json:"name"`
+	Version     string          `json:"version"`
+	Description string          `json:"description"`
+	Author      string          `json:"author"`
+	WASM        string          `json:"wasm"`
+	Permissions []string        `json:"permissions"`
+	Hooks       []PluginHook    `json:"hooks"`
+	Frontend    json.RawMessage `json:"frontend"`
+	Settings    json.RawMessage `json:"settings"`
 }
 
 type PluginHook struct {
@@ -560,9 +550,42 @@ func loadPluginsOnStartup() error {
 			continue
 		}
 		filePath := filepath.Join(root, entry.Name())
-		loadPluginFromWASMOnStartup(filePath, root)
+		manifest, raw, err := ReadPluginManifestFromWASM(context.Background(), filePath)
+		if err != nil {
+			recordPluginLog(0, "", "warn", "startup_load_failed", err.Error(), mustJSON(gin.H{"path": filePath}))
+			continue
+		}
+		manifest = normalizePluginManifest(manifest)
+		if err := validatePluginManifest(manifest); err != nil {
+			recordPluginLog(0, manifest.ID, "warn", "startup_load_failed", err.Error(), mustJSON(gin.H{"path": filePath}))
+			continue
+		}
+		plugin := model.Plugin{
+			ID:              manifest.ID,
+			Name:            manifest.Name,
+			Version:         manifest.Version,
+			Description:     manifest.Description,
+			Author:          manifest.Author,
+			Enabled:         true,
+			ManifestJSON:    string(raw),
+			PermissionsJSON: mustJSON(manifest.Permissions),
+			HooksJSON:       mustJSON(manifest.Hooks),
+			FrontendJSON:    string(manifest.Frontend),
+			SettingsJSON:    string(manifest.Settings),
+			Path:            root,
+			WASMPath:        filePath,
+		}
+		if err := model.DB.Where(&model.Plugin{ID: plugin.ID}).Assign(plugin).FirstOrCreate(&plugin).Error; err != nil {
+			recordPluginLog(0, manifest.ID, "warn", "startup_load_failed", err.Error(), mustJSON(gin.H{"path": filePath}))
+			continue
+		}
+		if err := InitializePluginWASM(context.Background(), plugin); err != nil {
+			model.DB.Model(&plugin).Update("last_error", err.Error())
+			recordPluginLog(0, plugin.ID, "warn", "startup_init_failed", err.Error(), mustJSON(gin.H{"path": filePath}))
+			continue
+		}
+		model.DB.Model(&plugin).Update("last_error", "")
 	}
-	loadEmbeddingPluginsOnStartup()
 	DispatchPluginHooks(context.Background(), PluginHookInput{
 		Point:  PluginHookPointAppBoot,
 		Source: "startup",
@@ -571,57 +594,6 @@ func loadPluginsOnStartup() error {
 		},
 	})
 	return nil
-}
-
-// loadEmbeddingPluginsOnStartup discovers packaged embedding plugins. Every
-// package is still a normal WASM plugin; the dedicated directory merely lets a
-// plugin ship its tokenizer and weights beside model.wasm.
-func loadEmbeddingPluginsOnStartup() {
-	root := filepath.Join(config.DataPath, "embedding-models")
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		recordPluginLog(0, "", "warn", "embedding_startup_load_failed", err.Error(), mustJSON(gin.H{"path": root}))
-		return
-	}
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		recordPluginLog(0, "", "warn", "embedding_startup_load_failed", err.Error(), mustJSON(gin.H{"path": root}))
-		return
-	}
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		directory := filepath.Join(root, entry.Name())
-		loadPluginFromWASMOnStartup(filepath.Join(directory, "model.wasm"), directory)
-	}
-}
-
-func loadPluginFromWASMOnStartup(filePath, pluginPath string) {
-	manifest, raw, err := ReadPluginManifestFromWASM(context.Background(), filePath)
-	if err != nil {
-		recordPluginLog(0, "", "warn", "startup_load_failed", err.Error(), mustJSON(gin.H{"path": filePath}))
-		return
-	}
-	manifest = normalizePluginManifest(manifest)
-	if err := validatePluginManifest(manifest); err != nil {
-		recordPluginLog(0, manifest.ID, "warn", "startup_load_failed", err.Error(), mustJSON(gin.H{"path": filePath}))
-		return
-	}
-	plugin := model.Plugin{
-		ID: manifest.ID, Name: manifest.Name, Version: manifest.Version, Description: manifest.Description, Author: manifest.Author,
-		Enabled: true, ManifestJSON: string(raw), PermissionsJSON: mustJSON(manifest.Permissions), HooksJSON: mustJSON(manifest.Hooks),
-		FrontendJSON: string(manifest.Frontend), SettingsJSON: string(manifest.Settings), Path: pluginPath, WASMPath: filePath,
-	}
-	if err := model.DB.Where(&model.Plugin{ID: plugin.ID}).Assign(plugin).FirstOrCreate(&plugin).Error; err != nil {
-		recordPluginLog(0, manifest.ID, "warn", "startup_load_failed", err.Error(), mustJSON(gin.H{"path": filePath}))
-		return
-	}
-	if err := InitializePluginWASM(context.Background(), plugin); err != nil {
-		model.DB.Model(&plugin).Update("last_error", err.Error())
-		recordPluginLog(0, plugin.ID, "warn", "startup_init_failed", err.Error(), mustJSON(gin.H{"path": filePath}))
-		return
-	}
-	model.DB.Model(&plugin).Update("last_error", "")
 }
 
 func setUserPluginEnabled(userID uint, pluginID string, enabled bool) error {
@@ -657,17 +629,6 @@ func validatePluginManifest(manifest PluginManifest) error {
 			return fmt.Errorf("unsupported plugin hook mode: %s", hook.Mode)
 		}
 	}
-	if manifest.Embedding != nil {
-		if manifest.Embedding.Dimensions < 1 || manifest.Embedding.Dimensions > 8192 {
-			return errors.New("embedding plugin dimensions must be between 1 and 8192")
-		}
-		if !pluginHookPointPattern.MatchString(manifest.Embedding.Entrypoint) {
-			return errors.New("embedding plugin entrypoint is invalid")
-		}
-		if manifest.Embedding.TimeoutSeconds < 1 || manifest.Embedding.TimeoutSeconds > 300 {
-			return errors.New("embedding plugin timeout_seconds must be between 1 and 300")
-		}
-	}
 	return nil
 }
 
@@ -677,15 +638,6 @@ func normalizePluginManifest(manifest PluginManifest) PluginManifest {
 	manifest.Version = strings.TrimSpace(manifest.Version)
 	manifest.Author = strings.TrimSpace(manifest.Author)
 	manifest.WASM = strings.TrimSpace(manifest.WASM)
-	if manifest.Embedding != nil {
-		manifest.Embedding.Entrypoint = strings.TrimSpace(manifest.Embedding.Entrypoint)
-		if manifest.Embedding.Entrypoint == "" {
-			manifest.Embedding.Entrypoint = "embedding"
-		}
-		if manifest.Embedding.TimeoutSeconds == 0 {
-			manifest.Embedding.TimeoutSeconds = 60
-		}
-	}
 	for i := range manifest.Permissions {
 		manifest.Permissions[i] = strings.TrimSpace(manifest.Permissions[i])
 	}
