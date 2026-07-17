@@ -23,10 +23,11 @@ type SQLiteMigrationReport struct {
 	Rows         int64
 }
 
-// MigrateSQLiteToDSN copies all application tables from sourcePath to an empty
-// MySQL or PostgreSQL database. It never modifies the SQLite source.
-func MigrateSQLiteToDSN(sourcePath, targetDSN string) (SQLiteMigrationReport, error) {
+// MigrateSQLiteToTarget copies all application tables from sourcePath to an
+// empty MySQL or PostgreSQL database. It never modifies the SQLite source.
+func MigrateSQLiteToTarget(sourcePath, targetDriver, targetDSN string) (SQLiteMigrationReport, error) {
 	sourcePath = strings.TrimSpace(sourcePath)
+	targetDriver = strings.ToLower(strings.TrimSpace(targetDriver))
 	targetDSN = strings.TrimSpace(targetDSN)
 	if sourcePath == "" {
 		return SQLiteMigrationReport{}, errors.New("SQLite source path is required")
@@ -41,7 +42,7 @@ func MigrateSQLiteToDSN(sourcePath, targetDSN string) (SQLiteMigrationReport, er
 	if info.IsDir() {
 		return SQLiteMigrationReport{}, fmt.Errorf("SQLite source path %q is a directory", sourcePath)
 	}
-	targetDriver, targetDialector, err := migrationTargetDialector(targetDSN)
+	targetDriver, targetDialector, err := migrationTargetDialector(targetDriver, targetDSN)
 	if err != nil {
 		return SQLiteMigrationReport{}, err
 	}
@@ -128,15 +129,17 @@ func migrationModelTableName(db *gorm.DB, item interface{}) string {
 	return db.NamingStrategy.TableName(modelType.Name())
 }
 
-func migrationTargetDialector(dsn string) (string, gorm.Dialector, error) {
-	normalized := strings.ToLower(strings.TrimSpace(dsn))
-	switch {
-	case strings.HasPrefix(normalized, "postgres://"), strings.HasPrefix(normalized, "postgresql://"), strings.Contains(normalized, "host="), strings.Contains(normalized, "dbname="):
+func migrationTargetDialector(driver, dsn string) (string, gorm.Dialector, error) {
+	if strings.TrimSpace(dsn) == "" {
+		return "", nil, errors.New("target DB_DSN is required")
+	}
+	switch strings.ToLower(strings.TrimSpace(driver)) {
+	case "postgres", "postgresql":
 		return "postgres", postgres.Open(dsn), nil
-	case strings.Contains(normalized, "@tcp("), strings.Contains(normalized, "@unix("), strings.HasPrefix(normalized, "mysql://"):
+	case "mysql", "mariadb":
 		return "mysql", mysql.Open(dsn), nil
 	default:
-		return "", nil, errors.New("DB_DSN must be a MySQL or PostgreSQL DSN when using --migrate")
+		return "", nil, errors.New("--migrate requires DB_DRIVER=postgres or DB_DRIVER=mysql")
 	}
 }
 

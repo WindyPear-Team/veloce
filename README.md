@@ -91,16 +91,19 @@ DB_DSN=flai:change-me@tcp(127.0.0.1:3306)/flai?charset=utf8mb4&parseTime=True&lo
 
 ### Migrate SQLite to PostgreSQL or MySQL
 
-Keep `DB_DRIVER=sqlite` and point `DB_PATH` at the source file. Set `DB_DSN`
-to an empty PostgreSQL or MySQL database, then run the one-way migration:
+Point `DB_PATH` at the SQLite source file. Set `DB_DRIVER` and `DB_DSN` to the
+empty PostgreSQL or MySQL target database, then run the one-way migration:
 
 ```bash
+DB_DRIVER=postgres
+DB_PATH=veloce.db
+DB_DSN=host=127.0.0.1 user=flai password=change-me dbname=flai port=5432 sslmode=disable
 go run . --migrate
 ```
 
 The source SQLite file is read only. The command refuses a target that already
 contains application tables, copies data in batches, and exits when complete.
-Afterward, switch `DB_DRIVER` to `postgres` or `mysql` for normal startup.
+The target settings remain in place for normal startup after migration.
 
 ## License
 

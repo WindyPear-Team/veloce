@@ -784,10 +784,10 @@ func Run() error {
 // startup continues to use DB_DRIVER and never invokes this operation.
 func MigrateSQLiteDatabase() error {
 	config.Init()
-	if config.DBDriver != "" && config.DBDriver != "sqlite" {
-		return errors.New("--migrate requires DB_DRIVER=sqlite so DB_PATH is the source database")
+	if config.DBDriver != "postgres" && config.DBDriver != "postgresql" && config.DBDriver != "mysql" && config.DBDriver != "mariadb" {
+		return errors.New("--migrate requires DB_DRIVER=postgres or DB_DRIVER=mysql for the target database")
 	}
-	report, err := model.MigrateSQLiteToDSN(config.DBPath, config.DBDSN)
+	report, err := model.MigrateSQLiteToTarget(config.DBPath, config.DBDriver, config.DBDSN)
 	if err != nil {
 		return err
 	}
