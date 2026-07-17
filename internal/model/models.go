@@ -195,7 +195,7 @@ type ModelGroupMultiplier struct {
 type ReferralCommissionLog struct {
 	ID             uint            `gorm:"primaryKey" json:"id"`
 	ReferrerID     uint            `gorm:"index;not null" json:"referrer_id"`
-	Referrer       User            `gorm:"foreignKey:ReferrerID" json:"-"`
+	Referrer       User            `gorm:"foreignKey:ReferrerID;references:ID;belongsTo:User" json:"-"`
 	ReferredUserID uint            `gorm:"index;not null" json:"referred_user_id"`
 	ReferredUser   User            `gorm:"foreignKey:ReferredUserID" json:"referred_user,omitempty"`
 	TokenLogID     uint            `gorm:"uniqueIndex;not null" json:"token_log_id"`
