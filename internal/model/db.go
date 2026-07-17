@@ -113,7 +113,7 @@ func InitDB() {
 			log.Printf("failed to replace legacy personal company owner index: %v", err)
 		}
 	}
-	if err := DB.AutoMigrate(
+	enterpriseModels := []interface{}{
 		&Organization{},
 		&Department{},
 		&Workspace{},
@@ -135,7 +135,19 @@ func InitDB() {
 		&EnterpriseDeviceAssignment{},
 		&QuotaAccount{},
 		&QuotaLedger{},
-	); err != nil {
+	}
+	// A number of enterprise references use composite keys to keep every
+	// relation inside its organization. PostgreSQL requires the referenced
+	// unique index to exist before it accepts a self-referential foreign key,
+	// while AutoMigrate otherwise attempts both in one pass. SQLite rebuilds
+	// tables when adding foreign keys, so it must retain the normal one-pass
+	// migration behavior that creates those constraints inline.
+	if DB.Dialector.Name() != "sqlite" {
+		if err := autoMigrateWithoutForeignKeys(DB, enterpriseModels...); err != nil {
+			log.Fatalf("failed to prepare enterprise database models: %v", err)
+		}
+	}
+	if err := DB.AutoMigrate(enterpriseModels...); err != nil {
 		log.Fatalf("failed to migrate enterprise database models: %v", err)
 	}
 	if !hadCachedInputPrice {
@@ -167,6 +179,15 @@ func InitDB() {
 			log.Fatalf("failed to initialize enterprise tenant: %v", err)
 		}
 	}
+}
+
+func autoMigrateWithoutForeignKeys(db *gorm.DB, models ...interface{}) error {
+	original := db.Config.DisableForeignKeyConstraintWhenMigrating
+	db.Config.DisableForeignKeyConstraintWhenMigrating = true
+	defer func() {
+		db.Config.DisableForeignKeyConstraintWhenMigrating = original
+	}()
+	return db.AutoMigrate(models...)
 }
 
 func databaseDialector() (gorm.Dialector, bool, error) {

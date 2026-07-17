@@ -66,6 +66,17 @@ func TestEnterpriseConstraintsRejectCrossOrganizationReferences(t *testing.T) {
 	}
 }
 
+func TestEnterpriseMigrationSupportsSQLiteCompositeForeignKeys(t *testing.T) {
+	db := openConstraintTestDB(t, "enterprise-phased-migration")
+	models := []interface{}{&User{}, &Group{}, &Organization{}, &Department{}, &Workspace{}, &Role{}, &RoleBinding{}, &EnterpriseTask{}, &EnterpriseDevice{}, &EnterpriseDeviceAssignment{}, &QuotaAccount{}, &QuotaLedger{}}
+	if err := db.AutoMigrate(models...); err != nil {
+		t.Fatal(err)
+	}
+	if !db.Migrator().HasConstraint(&EnterpriseTask{}, "ParentTask") {
+		t.Fatal("expected parent-task composite foreign key")
+	}
+}
+
 func TestEnterpriseWorkModelsMigrateAndEnforceScopeUniqueness(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open("file:enterprise-work-test?mode=memory&cache=shared"), &gorm.Config{})
 	if err != nil {
