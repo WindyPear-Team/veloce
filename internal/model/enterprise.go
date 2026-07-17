@@ -76,11 +76,11 @@ type OrganizationMember struct {
 
 // Department models the enterprise department tree.
 type Department struct {
-	ID             uint         `gorm:"primaryKey" json:"id"`
-	OrganizationID uint         `gorm:"uniqueIndex:idx_department_org_slug;index;not null" json:"organization_id"`
+	ID             uint         `gorm:"primaryKey;uniqueIndex:idx_department_org_id" json:"id"`
+	OrganizationID uint         `gorm:"uniqueIndex:idx_department_org_slug;uniqueIndex:idx_department_org_id;index;not null" json:"organization_id"`
 	Organization   Organization `gorm:"foreignKey:OrganizationID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
 	ParentID       *uint        `gorm:"index" json:"parent_id,omitempty"`
-	Parent         *Department  `gorm:"foreignKey:ParentID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"-"`
+	Parent         *Department  `gorm:"foreignKey:OrganizationID,ParentID;references:OrganizationID,ID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"-"`
 	Slug           string       `gorm:"uniqueIndex:idx_department_org_slug;size:80;not null" json:"slug"`
 	Name           string       `gorm:"size:160;not null" json:"name"`
 	// Multiplier is the department-level billing factor. A department may also
@@ -100,11 +100,11 @@ type Department struct {
 // organization. DepartmentID is optional because personal and project
 // workspaces do not necessarily belong to a department.
 type Workspace struct {
-	ID              uint           `gorm:"primaryKey" json:"id"`
-	OrganizationID  uint           `gorm:"uniqueIndex:idx_workspace_org_slug;index;not null" json:"organization_id"`
+	ID              uint           `gorm:"primaryKey;uniqueIndex:idx_workspace_org_id" json:"id"`
+	OrganizationID  uint           `gorm:"uniqueIndex:idx_workspace_org_slug;uniqueIndex:idx_workspace_org_id;index;not null" json:"organization_id"`
 	Organization    Organization   `gorm:"foreignKey:OrganizationID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
 	DepartmentID    *uint          `gorm:"index" json:"department_id,omitempty"`
-	Department      *Department    `gorm:"foreignKey:DepartmentID;constraint:OnUpdate:CASCADE,OnDelete:SET NULL" json:"-"`
+	Department      *Department    `gorm:"foreignKey:OrganizationID,DepartmentID;references:OrganizationID,ID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"-"`
 	Slug            string         `gorm:"uniqueIndex:idx_workspace_org_slug;size:80;not null" json:"slug"`
 	Name            string         `gorm:"size:160;not null" json:"name"`
 	Type            string         `gorm:"size:20;not null;default:'project';index" json:"type"`

@@ -18,6 +18,20 @@ import (
 
 const sqliteMigrationBatchSize = 500
 
+var (
+	sqliteMigrationModelsMu         sync.RWMutex
+	registeredSQLiteMigrationModels []interface{}
+)
+
+// RegisterSQLiteMigrationModels lets feature packages register their own
+// persistent models for the standalone SQLite-to-server migration command.
+// Those packages cannot be imported here without creating import cycles.
+func RegisterSQLiteMigrationModels(models ...interface{}) {
+	sqliteMigrationModelsMu.Lock()
+	defer sqliteMigrationModelsMu.Unlock()
+	registeredSQLiteMigrationModels = append(registeredSQLiteMigrationModels, models...)
+}
+
 // SQLiteMigrationReport describes a completed one-way SQLite export.
 type SQLiteMigrationReport struct {
 	TargetDriver  string
@@ -278,11 +292,32 @@ func copySQLiteMigrationTable(source, target *gorm.DB, item interface{}) (int64,
 }
 
 func sqliteMigrationModels() []interface{} {
-	return []interface{}{
+	models := []interface{}{
 		&User{}, &UserAvatar{}, &APIKey{}, &EmailVerificationCode{}, &OIDCBindRequest{}, &WebAuthnChallenge{}, &PasskeyCredential{}, &CheckInRecord{}, &PaymentOrder{},
 		&Group{}, &UserGroupMembership{}, &ChannelGroupMultiplier{}, &ModelGroupMultiplier{}, &ReferralCommissionLog{}, &UserChannel{}, &Channel{}, &Model{}, &ModelConfig{},
 		&StatusMonitor{}, &StatusCheck{}, &Announcement{}, &SystemSetting{}, &VideoTask{}, &TokenLog{}, &AuditLog{}, &Plugin{}, &UserPluginState{}, &UserPluginConfig{}, &PluginKV{}, &PluginLog{},
 		&PersonalCompany{}, &CompanyCharterRevision{}, &PersonalCompanyEmployee{}, &CompanyRoleTemplate{}, &CompanyEmployeeVersion{}, &CompanyCapabilityEvidence{}, &CompanyRecruitmentPlan{}, &CompanyObjective{}, &CompanyWorkItem{}, &CompanyWorkAttempt{}, &CompanyArtifact{}, &CompanyHandoffPackage{}, &CompanyApprovalRequest{}, &CompanyBudgetLedger{}, &CompanyAuditEvent{}, &CompanySignal{}, &CompanyOutboxEvent{},
 		&Organization{}, &Department{}, &Workspace{}, &OrganizationMember{}, &WorkspaceMember{}, &Permission{}, &Role{}, &RolePermission{}, &RoleBinding{}, &DepartmentRoleBinding{}, &EnterpriseTask{}, &EnterpriseTaskAssignment{}, &EnterpriseTaskDepartment{}, &DepartmentMember{}, &EnterpriseSharedPool{}, &EnterpriseSharedSession{}, &EnterpriseSharedFile{}, &EnterpriseDevice{}, &EnterpriseDeviceAssignment{}, &QuotaAccount{}, &QuotaLedger{},
 	}
+
+	sqliteMigrationModelsMu.RLock()
+	deferred := append([]interface{}(nil), registeredSQLiteMigrationModels...)
+	sqliteMigrationModelsMu.RUnlock()
+
+	seen := make(map[reflect.Type]struct{}, len(models)+len(deferred))
+	for _, item := range models {
+		seen[reflect.TypeOf(item)] = struct{}{}
+	}
+	for _, item := range deferred {
+		if item == nil {
+			continue
+		}
+		modelType := reflect.TypeOf(item)
+		if _, exists := seen[modelType]; exists {
+			continue
+		}
+		seen[modelType] = struct{}{}
+		models = append(models, item)
+	}
+	return models
 }

@@ -45,24 +45,27 @@ const (
 // EnterpriseTask is the enterprise execution and accounting boundary. Existing
 // chat runs, schedules, and Studio work are migrated into it incrementally.
 type EnterpriseTask struct {
-	ID              uint           `gorm:"primaryKey" json:"id"`
-	OrganizationID  uint           `gorm:"index;not null" json:"organization_id"`
-	DepartmentID    *uint          `gorm:"index" json:"department_id,omitempty"`
-	WorkspaceID     *uint          `gorm:"index" json:"workspace_id,omitempty"`
-	CreatedByUserID uint           `gorm:"index;not null" json:"created_by_user_id"`
-	OwnerUserID     uint           `gorm:"index;not null" json:"owner_user_id"`
-	Owner           User           `gorm:"foreignKey:OwnerUserID" json:"owner,omitempty"`
-	ParentTaskID    *uint          `gorm:"index" json:"parent_task_id,omitempty"`
-	Title           string         `gorm:"size:200;not null" json:"title"`
-	Description     string         `gorm:"type:text;not null;default:''" json:"description"`
-	Status          string         `gorm:"size:20;not null;default:'draft';index" json:"status"`
-	Priority        int            `gorm:"not null;default:0;index" json:"priority"`
-	DueAt           *time.Time     `gorm:"index" json:"due_at,omitempty"`
-	StartedAt       *time.Time     `json:"started_at,omitempty"`
-	CompletedAt     *time.Time     `json:"completed_at,omitempty"`
-	CreatedAt       time.Time      `json:"created_at"`
-	UpdatedAt       time.Time      `json:"updated_at"`
-	DeletedAt       gorm.DeletedAt `gorm:"index" json:"-"`
+	ID              uint            `gorm:"primaryKey;uniqueIndex:idx_enterprise_task_org_id" json:"id"`
+	OrganizationID  uint            `gorm:"uniqueIndex:idx_enterprise_task_org_id;index;not null" json:"organization_id"`
+	DepartmentID    *uint           `gorm:"index" json:"department_id,omitempty"`
+	Department      *Department     `gorm:"foreignKey:OrganizationID,DepartmentID;references:OrganizationID,ID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"-"`
+	WorkspaceID     *uint           `gorm:"index" json:"workspace_id,omitempty"`
+	Workspace       *Workspace      `gorm:"foreignKey:OrganizationID,WorkspaceID;references:OrganizationID,ID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"-"`
+	CreatedByUserID uint            `gorm:"index;not null" json:"created_by_user_id"`
+	OwnerUserID     uint            `gorm:"index;not null" json:"owner_user_id"`
+	Owner           User            `gorm:"foreignKey:OwnerUserID" json:"owner,omitempty"`
+	ParentTaskID    *uint           `gorm:"index" json:"parent_task_id,omitempty"`
+	ParentTask      *EnterpriseTask `gorm:"foreignKey:OrganizationID,ParentTaskID;references:OrganizationID,ID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"-"`
+	Title           string          `gorm:"size:200;not null" json:"title"`
+	Description     string          `gorm:"type:text;not null;default:''" json:"description"`
+	Status          string          `gorm:"size:20;not null;default:'draft';index" json:"status"`
+	Priority        int             `gorm:"not null;default:0;index" json:"priority"`
+	DueAt           *time.Time      `gorm:"index" json:"due_at,omitempty"`
+	StartedAt       *time.Time      `json:"started_at,omitempty"`
+	CompletedAt     *time.Time      `json:"completed_at,omitempty"`
+	CreatedAt       time.Time       `json:"created_at"`
+	UpdatedAt       time.Time       `json:"updated_at"`
+	DeletedAt       gorm.DeletedAt  `gorm:"index" json:"-"`
 }
 
 type EnterpriseTaskAssignment struct {
@@ -82,8 +85,9 @@ type EnterpriseTaskDepartment struct {
 	ID             uint           `gorm:"primaryKey" json:"id"`
 	OrganizationID uint           `gorm:"uniqueIndex:idx_enterprise_task_department;index;not null" json:"organization_id"`
 	TaskID         uint           `gorm:"uniqueIndex:idx_enterprise_task_department;index;not null" json:"task_id"`
+	Task           EnterpriseTask `gorm:"foreignKey:OrganizationID,TaskID;references:OrganizationID,ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
 	DepartmentID   uint           `gorm:"uniqueIndex:idx_enterprise_task_department;index;not null" json:"department_id"`
-	Department     Department     `gorm:"foreignKey:DepartmentID" json:"department,omitempty"`
+	Department     Department     `gorm:"foreignKey:OrganizationID,DepartmentID;references:OrganizationID,ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"department,omitempty"`
 	AddedBy        uint           `gorm:"index;not null" json:"added_by"`
 	CreatedAt      time.Time      `json:"created_at"`
 	DeletedAt      gorm.DeletedAt `gorm:"index" json:"-"`
@@ -95,6 +99,7 @@ type DepartmentMember struct {
 	ID             uint           `gorm:"primaryKey" json:"id"`
 	OrganizationID uint           `gorm:"uniqueIndex:idx_department_member;index;not null" json:"organization_id"`
 	DepartmentID   uint           `gorm:"uniqueIndex:idx_department_member;index;not null" json:"department_id"`
+	Department     Department     `gorm:"foreignKey:OrganizationID,DepartmentID;references:OrganizationID,ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
 	UserID         uint           `gorm:"uniqueIndex:idx_department_member;index;not null" json:"user_id"`
 	CreatedAt      time.Time      `json:"created_at"`
 	DeletedAt      gorm.DeletedAt `gorm:"index" json:"-"`
@@ -139,8 +144,8 @@ type EnterpriseSharedFile struct {
 }
 
 type EnterpriseDevice struct {
-	ID                  uint           `gorm:"primaryKey" json:"id"`
-	OrganizationID      uint           `gorm:"uniqueIndex:idx_enterprise_device_org_external;index;not null" json:"organization_id"`
+	ID                  uint           `gorm:"primaryKey;uniqueIndex:idx_enterprise_device_org_id" json:"id"`
+	OrganizationID      uint           `gorm:"uniqueIndex:idx_enterprise_device_org_external;uniqueIndex:idx_enterprise_device_org_id;index;not null" json:"organization_id"`
 	ExternalDeviceID    string         `gorm:"uniqueIndex:idx_enterprise_device_org_external;size:100;not null" json:"external_device_id"`
 	Name                string         `gorm:"size:160;not null" json:"name"`
 	Kind                string         `gorm:"size:40;not null;default:'connector'" json:"kind"`
@@ -153,30 +158,31 @@ type EnterpriseDevice struct {
 }
 
 type EnterpriseDeviceAssignment struct {
-	ID             uint           `gorm:"primaryKey" json:"id"`
-	OrganizationID uint           `gorm:"index;not null" json:"organization_id"`
-	DeviceID       uint           `gorm:"index;not null" json:"device_id"`
-	ScopeType      string         `gorm:"size:20;not null;index" json:"scope_type"`
-	DepartmentID   *uint          `gorm:"index" json:"department_id,omitempty"`
-	UserID         *uint          `gorm:"index" json:"user_id,omitempty"`
-	User           *User          `gorm:"foreignKey:UserID" json:"user,omitempty"`
-	TaskID         *uint          `gorm:"index" json:"task_id,omitempty"`
-	AllowedTools   string         `gorm:"type:text;not null;default:'[]'" json:"allowed_tools"`
-	Classification string         `gorm:"size:40;not null;default:''" json:"classification"`
-	Status         string         `gorm:"size:20;not null;default:'active';index" json:"status"`
-	AssignedBy     uint           `gorm:"index;not null" json:"assigned_by"`
-	ExpiresAt      *time.Time     `gorm:"index" json:"expires_at,omitempty"`
-	CreatedAt      time.Time      `json:"created_at"`
-	UpdatedAt      time.Time      `json:"updated_at"`
-	DeletedAt      gorm.DeletedAt `gorm:"index" json:"-"`
+	ID             uint             `gorm:"primaryKey" json:"id"`
+	OrganizationID uint             `gorm:"index;not null" json:"organization_id"`
+	DeviceID       uint             `gorm:"index;not null" json:"device_id"`
+	Device         EnterpriseDevice `gorm:"foreignKey:OrganizationID,DeviceID;references:OrganizationID,ID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"-"`
+	ScopeType      string           `gorm:"size:20;not null;index;check:chk_enterprise_device_assignment_target,(scope_type = 'department' AND department_id IS NOT NULL AND user_id IS NULL AND task_id IS NULL) OR (scope_type = 'user' AND user_id IS NOT NULL AND department_id IS NULL AND task_id IS NULL) OR (scope_type = 'task' AND task_id IS NOT NULL AND department_id IS NULL AND user_id IS NULL)" json:"scope_type"`
+	DepartmentID   *uint            `gorm:"index" json:"department_id,omitempty"`
+	UserID         *uint            `gorm:"index" json:"user_id,omitempty"`
+	User           *User            `gorm:"foreignKey:UserID" json:"user,omitempty"`
+	TaskID         *uint            `gorm:"index" json:"task_id,omitempty"`
+	AllowedTools   string           `gorm:"type:text;not null;default:'[]'" json:"allowed_tools"`
+	Classification string           `gorm:"size:40;not null;default:''" json:"classification"`
+	Status         string           `gorm:"size:20;not null;default:'active';index" json:"status"`
+	AssignedBy     uint             `gorm:"index;not null" json:"assigned_by"`
+	ExpiresAt      *time.Time       `gorm:"index" json:"expires_at,omitempty"`
+	CreatedAt      time.Time        `json:"created_at"`
+	UpdatedAt      time.Time        `json:"updated_at"`
+	DeletedAt      gorm.DeletedAt   `gorm:"index" json:"-"`
 }
 
 // QuotaAccount represents an allocatable budget at one organizational scope.
 // ScopeKey makes its uniqueness portable across SQLite, PostgreSQL and MySQL.
 type QuotaAccount struct {
-	ID             uint            `gorm:"primaryKey" json:"id"`
-	OrganizationID uint            `gorm:"uniqueIndex:idx_quota_account_scope;index;not null" json:"organization_id"`
-	ScopeType      string          `gorm:"uniqueIndex:idx_quota_account_scope;size:20;not null" json:"scope_type"`
+	ID             uint            `gorm:"primaryKey;uniqueIndex:idx_quota_account_org_id" json:"id"`
+	OrganizationID uint            `gorm:"uniqueIndex:idx_quota_account_scope;uniqueIndex:idx_quota_account_org_id;index;not null" json:"organization_id"`
+	ScopeType      string          `gorm:"uniqueIndex:idx_quota_account_scope;size:20;not null;check:chk_quota_account_scope,(scope_type = 'organization' AND department_id IS NULL AND user_id IS NULL AND task_id IS NULL AND pool_id IS NULL) OR (scope_type = 'department' AND department_id IS NOT NULL AND user_id IS NULL AND task_id IS NULL AND pool_id IS NULL) OR (scope_type = 'user' AND user_id IS NOT NULL AND department_id IS NULL AND task_id IS NULL AND pool_id IS NULL) OR (scope_type = 'task' AND task_id IS NOT NULL AND department_id IS NULL AND user_id IS NULL AND pool_id IS NULL) OR (scope_type = 'pool' AND pool_id IS NOT NULL AND department_id IS NULL AND user_id IS NULL AND task_id IS NULL)" json:"scope_type"`
 	ScopeKey       string          `gorm:"uniqueIndex:idx_quota_account_scope;size:80;not null" json:"scope_key"`
 	DepartmentID   *uint           `gorm:"index" json:"department_id,omitempty"`
 	UserID         *uint           `gorm:"index" json:"user_id,omitempty"`
@@ -193,6 +199,7 @@ type QuotaLedger struct {
 	ID              uint            `gorm:"primaryKey" json:"id"`
 	OrganizationID  uint            `gorm:"index;not null" json:"organization_id"`
 	AccountID       uint            `gorm:"index;not null" json:"account_id"`
+	Account         QuotaAccount    `gorm:"foreignKey:OrganizationID,AccountID;references:OrganizationID,ID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"-"`
 	TaskID          *uint           `gorm:"index" json:"task_id,omitempty"`
 	PoolID          *uint           `gorm:"index" json:"pool_id,omitempty"`
 	EntryType       string          `gorm:"size:20;not null;index" json:"entry_type"`

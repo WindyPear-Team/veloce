@@ -39,8 +39,8 @@ type Permission struct {
 
 // Role belongs to the deployment's single enterprise organization.
 type Role struct {
-	ID             uint           `gorm:"primaryKey" json:"id"`
-	OrganizationID uint           `gorm:"uniqueIndex:idx_role_org_slug;index;not null" json:"organization_id"`
+	ID             uint           `gorm:"primaryKey;uniqueIndex:idx_role_org_id" json:"id"`
+	OrganizationID uint           `gorm:"uniqueIndex:idx_role_org_slug;uniqueIndex:idx_role_org_id;index;not null" json:"organization_id"`
 	Organization   Organization   `gorm:"foreignKey:OrganizationID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
 	Slug           string         `gorm:"uniqueIndex:idx_role_org_slug;size:80;not null" json:"slug"`
 	Name           string         `gorm:"size:120;not null" json:"name"`
@@ -70,7 +70,7 @@ type RoleBinding struct {
 	UserID          uint           `gorm:"uniqueIndex:idx_role_binding_identity;index;not null" json:"user_id"`
 	User            User           `gorm:"foreignKey:UserID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"user,omitempty"`
 	RoleID          uint           `gorm:"uniqueIndex:idx_role_binding_identity;index;not null" json:"role_id"`
-	Role            Role           `gorm:"foreignKey:RoleID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
+	Role            Role           `gorm:"foreignKey:OrganizationID,RoleID;references:OrganizationID,ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
 	ScopeType       string         `gorm:"uniqueIndex:idx_role_binding_identity;size:20;not null;index" json:"scope_type"`
 	ScopeID         uint           `gorm:"uniqueIndex:idx_role_binding_identity;not null;index" json:"scope_id"`
 	CreatedByUserID uint           `gorm:"index;not null" json:"created_by_user_id"`
@@ -88,8 +88,9 @@ type DepartmentRoleBinding struct {
 	ID              uint           `gorm:"primaryKey" json:"id"`
 	OrganizationID  uint           `gorm:"uniqueIndex:idx_department_role_binding;index;not null" json:"organization_id"`
 	DepartmentID    uint           `gorm:"uniqueIndex:idx_department_role_binding;index;not null" json:"department_id"`
+	Department      Department     `gorm:"foreignKey:OrganizationID,DepartmentID;references:OrganizationID,ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"-"`
 	RoleID          uint           `gorm:"uniqueIndex:idx_department_role_binding;index;not null" json:"role_id"`
-	Role            Role           `gorm:"foreignKey:RoleID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"role,omitempty"`
+	Role            Role           `gorm:"foreignKey:OrganizationID,RoleID;references:OrganizationID,ID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE" json:"role,omitempty"`
 	CreatedByUserID uint           `gorm:"index;not null" json:"created_by_user_id"`
 	CreatedAt       time.Time      `json:"created_at"`
 	UpdatedAt       time.Time      `json:"updated_at"`

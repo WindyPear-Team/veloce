@@ -70,3 +70,31 @@ func TestPersonalCompanyNormalizersFailClosed(t *testing.T) {
 		t.Fatalf("work status = %q, want planned", got)
 	}
 }
+
+func TestPersonalCompanyForeignKeysRejectOrphans(t *testing.T) {
+	db := openConstraintTestDB(t, "personal-company-foreign-key-constraints")
+	if err := db.AutoMigrate(&PersonalCompany{}, &CompanyObjective{}, &CompanyWorkItem{}, &CompanyWorkAttempt{}, &CompanyArtifact{}, &CompanyApprovalRequest{}, &CompanyBudgetLedger{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&CompanyWorkItem{PersonalCompanyID: 999, OwnerUserID: 1, Title: "Orphan", DefinitionOfDone: "Never", IdempotencyKey: "orphan-work"}).Error; err == nil {
+		t.Fatal("accepted work item without a company")
+	}
+	company := PersonalCompany{OwnerUserID: 1, AgentGroupID: "constraint-studio", Name: "Studio"}
+	if err := db.Create(&company).Error; err != nil {
+		t.Fatal(err)
+	}
+	work := CompanyWorkItem{PersonalCompanyID: company.ID, OwnerUserID: 1, Title: "Work", DefinitionOfDone: "Done", IdempotencyKey: "constraint-work"}
+	if err := db.Create(&work).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&CompanyWorkAttempt{WorkItemID: 999, AttemptNumber: 1}).Error; err == nil {
+		t.Fatal("accepted attempt without a work item")
+	}
+	if err := db.Create(&CompanyArtifact{WorkItemID: work.ID, WorkAttemptID: uintPtr(999), Kind: "result", URI: "memory://result"}).Error; err == nil {
+		t.Fatal("accepted artifact with a missing work attempt")
+	}
+}
+
+func uintPtr(value uint) *uint {
+	return &value
+}

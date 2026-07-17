@@ -1,0 +1,28 @@
+package service
+
+import "github.com/WindyPear-Team/veloce/internal/model"
+
+func init() {
+	model.RegisterSQLiteMigrationModels(
+		&AdvancedChatAgent{},
+		&AdvancedChatAgentStudio{},
+		&AdvancedChatUserSettings{},
+		&AdvancedChatSkill{},
+		&AdvancedChatSkillPackage{},
+		&AdvancedChatPackagedSkill{},
+		&AdvancedChatSessionFolder{},
+		&AdvancedChatSession{},
+		&AdvancedChatMessage{},
+		&AdvancedChatRun{},
+		&AdvancedChatRunEvent{},
+		&AdvancedChatFile{},
+		&AdvancedChatKnowledgeBase{},
+		&AdvancedChatKnowledgeDocument{},
+		&AdvancedChatKnowledgeChunk{},
+		&AdvancedChatConnectorDevice{},
+		&AdvancedChatConnectorTask{},
+		&AdvancedChatStaticSite{},
+		&AdvancedChatDelivery{},
+		&AdvancedChatScheduledTask{},
+	)
+}

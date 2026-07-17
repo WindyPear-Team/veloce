@@ -49,16 +49,17 @@ type PersonalCompany struct {
 // CompanyCharterRevision is immutable once created. CompanyCharterRevisionID
 // on PersonalCompany identifies the revision governing new work.
 type CompanyCharterRevision struct {
-	ID                uint      `gorm:"primaryKey" json:"id"`
-	PersonalCompanyID uint      `gorm:"uniqueIndex:idx_company_charter_revision;index;not null" json:"personal_company_id"`
-	Revision          int       `gorm:"uniqueIndex:idx_company_charter_revision;not null" json:"revision"`
-	Mission           string    `gorm:"type:text;not null" json:"mission"`
-	Goals             string    `gorm:"type:text;not null;default:'[]'" json:"goals"`
-	DataBoundaries    string    `gorm:"type:text;not null;default:'[]'" json:"data_boundaries"`
-	ProhibitedActions string    `gorm:"type:text;not null;default:'[]'" json:"prohibited_actions"`
-	ApprovalPolicy    string    `gorm:"type:text;not null;default:'{}'" json:"approval_policy"`
-	CreatedByUserID   uint      `gorm:"index;not null" json:"created_by_user_id"`
-	CreatedAt         time.Time `json:"created_at"`
+	ID                uint            `gorm:"primaryKey" json:"id"`
+	PersonalCompanyID uint            `gorm:"uniqueIndex:idx_company_charter_revision;index;not null" json:"personal_company_id"`
+	PersonalCompany   PersonalCompany `gorm:"foreignKey:PersonalCompanyID;constraint:OnUpdate:CASCADE,OnDelete:RESTRICT" json:"-"`
+	Revision          int             `gorm:"uniqueIndex:idx_company_charter_revision;not null" json:"revision"`
+	Mission           string          `gorm:"type:text;not null" json:"mission"`
+	Goals             string          `gorm:"type:text;not null;default:'[]'" json:"goals"`
+	DataBoundaries    string          `gorm:"type:text;not null;default:'[]'" json:"data_boundaries"`
+	ProhibitedActions string          `gorm:"type:text;not null;default:'[]'" json:"prohibited_actions"`
+	ApprovalPolicy    string          `gorm:"type:text;not null;default:'{}'" json:"approval_policy"`
+	CreatedByUserID   uint            `gorm:"index;not null" json:"created_by_user_id"`
+	CreatedAt         time.Time       `json:"created_at"`
 }
 
 func NormalizePersonalCompanyState(value string) string {
