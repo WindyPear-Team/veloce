@@ -105,7 +105,9 @@ The source SQLite file is read only. The command refuses a target that already
 contains application tables, copies data in batches, and exits when complete.
 The target settings remain in place for normal startup after migration.
 Dangling model configurations whose channel or model was deleted in SQLite are
-discarded because PostgreSQL and MySQL cannot create valid foreign keys for them.
+discarded. Other nullable dangling references are cleared, while records with a
+required missing parent are discarded, so PostgreSQL and MySQL can create valid
+foreign keys.
 
 ## License
 

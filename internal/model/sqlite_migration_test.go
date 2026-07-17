@@ -69,3 +69,35 @@ func TestDiscardDanglingModelConfigs(t *testing.T) {
 		t.Fatalf("remaining model configs = %d, want 1", count)
 	}
 }
+
+func TestRepairDanglingPluginLogReference(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:sqlite-migration-plugin-logs?mode=memory&cache=shared"), &gorm.Config{DisableForeignKeyConstraintWhenMigrating: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&Plugin{}, &PluginLog{}); err != nil {
+		t.Fatal(err)
+	}
+	plugin := Plugin{ID: "valid-plugin", Name: "Plugin", Version: "1", ManifestJSON: "{}", Path: "plugin.wasm"}
+	if err := db.Create(&plugin).Error; err != nil {
+		t.Fatal(err)
+	}
+	logs := []PluginLog{{ID: 1, PluginID: "valid-plugin", Level: "info", Event: "test"}, {ID: 2, PluginID: "missing-plugin", Level: "info", Event: "test"}}
+	if err := db.Omit("Plugin", "User").Create(&logs).Error; err != nil {
+		t.Fatal(err)
+	}
+	repaired, err := repairDanglingReferences(db, []interface{}{&Plugin{}, &PluginLog{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repaired != 1 {
+		t.Fatalf("repaired = %d, want 1", repaired)
+	}
+	var dangling PluginLog
+	if err := db.First(&dangling, 2).Error; err != nil {
+		t.Fatal(err)
+	}
+	if dangling.PluginID != "" {
+		t.Fatalf("plugin ID = %q, want empty after NULL repair", dangling.PluginID)
+	}
+}

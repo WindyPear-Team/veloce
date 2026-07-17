@@ -6,12 +6,14 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"sync"
 
 	"github.com/glebarez/sqlite"
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	"gorm.io/gorm/schema"
 )
 
 const sqliteMigrationBatchSize = 500
@@ -22,6 +24,7 @@ type SQLiteMigrationReport struct {
 	Tables        int
 	Rows          int64
 	DiscardedRows int64
+	RepairedRows  int64
 }
 
 // MigrateSQLiteToTarget copies all application tables from sourcePath to an
@@ -114,6 +117,11 @@ func MigrateSQLiteToTarget(sourcePath, targetDriver, targetDSN string) (SQLiteMi
 		return SQLiteMigrationReport{}, err
 	}
 	report.DiscardedRows = discarded
+	repaired, err := repairDanglingReferences(target, models)
+	if err != nil {
+		return SQLiteMigrationReport{}, err
+	}
+	report.RepairedRows = repaired
 
 	// The copied data now satisfies the source's relationships. Re-run schema
 	// migration with constraints enabled so the target matches normal startup.
@@ -142,6 +150,87 @@ WHERE NOT EXISTS (SELECT 1 FROM channels WHERE channels.id = model_configs.chann
 		return 0, fmt.Errorf("discard dangling model configurations: %w", result.Error)
 	}
 	return result.RowsAffected, nil
+}
+
+// repairDanglingReferences makes legacy SQLite data compatible with the target
+// database's foreign keys. Nullable references are cleared to retain logs and
+// history; rows with a required missing parent are removed.
+func repairDanglingReferences(db *gorm.DB, models []interface{}) (int64, error) {
+	cache := &sync.Map{}
+	seen := map[string]struct{}{}
+	var repaired int64
+	for _, item := range models {
+		parsed, err := schema.Parse(item, cache, db.NamingStrategy)
+		if err != nil {
+			return 0, fmt.Errorf("parse migration model relationship: %w", err)
+		}
+		for _, relationship := range parsed.Relationships.Relations {
+			constraint := relationship.ParseConstraint()
+			if constraint == nil || constraint.Schema == nil || constraint.ReferenceSchema == nil || len(constraint.ForeignKeys) == 0 || len(constraint.ForeignKeys) != len(constraint.References) {
+				continue
+			}
+			key := danglingReferenceKey(constraint)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			if !db.Migrator().HasTable(constraint.Schema.Table) || !db.Migrator().HasTable(constraint.ReferenceSchema.Table) {
+				continue
+			}
+			where := danglingReferenceWhere(constraint)
+			if where == "" {
+				continue
+			}
+			if danglingReferenceIsRequired(constraint) {
+				result := db.Exec("DELETE FROM " + constraint.Schema.Table + " WHERE " + where)
+				if result.Error != nil {
+					return 0, fmt.Errorf("remove dangling records for %s: %w", constraint.Name, result.Error)
+				}
+				repaired += result.RowsAffected
+				continue
+			}
+			columns := make([]string, 0, len(constraint.ForeignKeys))
+			for _, foreignKey := range constraint.ForeignKeys {
+				columns = append(columns, foreignKey.DBName+" = NULL")
+			}
+			result := db.Exec("UPDATE " + constraint.Schema.Table + " SET " + strings.Join(columns, ", ") + " WHERE " + where)
+			if result.Error != nil {
+				return 0, fmt.Errorf("clear dangling references for %s: %w", constraint.Name, result.Error)
+			}
+			repaired += result.RowsAffected
+		}
+	}
+	return repaired, nil
+}
+
+func danglingReferenceKey(constraint *schema.Constraint) string {
+	parts := []string{constraint.Schema.Table, constraint.ReferenceSchema.Table}
+	for index, foreignKey := range constraint.ForeignKeys {
+		parts = append(parts, foreignKey.DBName+"="+constraint.References[index].DBName)
+	}
+	return strings.Join(parts, ":")
+}
+
+func danglingReferenceWhere(constraint *schema.Constraint) string {
+	nonNull := make([]string, 0, len(constraint.ForeignKeys))
+	matches := make([]string, 0, len(constraint.ForeignKeys))
+	for index, foreignKey := range constraint.ForeignKeys {
+		nonNull = append(nonNull, constraint.Schema.Table+"."+foreignKey.DBName+" IS NOT NULL")
+		matches = append(matches, constraint.ReferenceSchema.Table+"."+constraint.References[index].DBName+" = "+constraint.Schema.Table+"."+foreignKey.DBName)
+	}
+	if len(nonNull) == 0 {
+		return ""
+	}
+	return strings.Join(nonNull, " AND ") + " AND NOT EXISTS (SELECT 1 FROM " + constraint.ReferenceSchema.Table + " WHERE " + strings.Join(matches, " AND ") + ")"
+}
+
+func danglingReferenceIsRequired(constraint *schema.Constraint) bool {
+	for _, foreignKey := range constraint.ForeignKeys {
+		if foreignKey.NotNull {
+			return true
+		}
+	}
+	return false
 }
 
 func migrationModelTableName(db *gorm.DB, item interface{}) string {
