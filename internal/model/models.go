@@ -22,7 +22,7 @@ type User struct {
 	APIKey        string                `gorm:"uniqueIndex;size:100" json:"-"`
 	ReferralCode  *string               `gorm:"uniqueIndex;size:32" json:"referral_code,omitempty"`
 	ReferrerID    *uint                 `gorm:"index" json:"referrer_id,omitempty"`
-	Referrer      *User                 `gorm:"foreignKey:ReferrerID" json:"referrer,omitempty"`
+	Referrer      *User                 `gorm:"foreignKey:ReferrerID;references:ID" json:"referrer,omitempty"`
 	IsAdmin       bool                  `gorm:"default:false" json:"is_admin"`
 	CreatedAt     time.Time             `json:"created_at"`
 	UpdatedAt     time.Time             `json:"updated_at"`
