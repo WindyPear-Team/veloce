@@ -520,6 +520,8 @@ func EnsureDefaultSystemSettings() error {
 		"theme_dark_muted":                           "#1e293b",
 		"theme_dark_muted_foreground":                "#94a3b8",
 		"theme_dark_border":                          "#1e293b",
+		"theme_background_image":                     "",
+		"theme_custom_css":                           "",
 		"sidebar_dashboard_enabled":                  "true",
 		"sidebar_usage_enabled":                      "true",
 		"sidebar_wallet_enabled":                     "true",

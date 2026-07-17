@@ -74,6 +74,8 @@ type systemSettingsResponse struct {
 	ThemeDarkMuted                       string `json:"theme_dark_muted"`
 	ThemeDarkMutedForeground             string `json:"theme_dark_muted_foreground"`
 	ThemeDarkBorder                      string `json:"theme_dark_border"`
+	ThemeBackgroundImage                 string `json:"theme_background_image"`
+	ThemeCustomCSS                       string `json:"theme_custom_css"`
 	SidebarDashboardEnabled              bool   `json:"sidebar_dashboard_enabled"`
 	SidebarUsageEnabled                  bool   `json:"sidebar_usage_enabled"`
 	SidebarWalletEnabled                 bool   `json:"sidebar_wallet_enabled"`
@@ -209,6 +211,8 @@ type systemSettingsInput struct {
 	ThemeDarkMuted                       *string `json:"theme_dark_muted"`
 	ThemeDarkMutedForeground             *string `json:"theme_dark_muted_foreground"`
 	ThemeDarkBorder                      *string `json:"theme_dark_border"`
+	ThemeBackgroundImage                 *string `json:"theme_background_image"`
+	ThemeCustomCSS                       *string `json:"theme_custom_css"`
 	SidebarDashboardEnabled              *bool   `json:"sidebar_dashboard_enabled"`
 	SidebarUsageEnabled                  *bool   `json:"sidebar_usage_enabled"`
 	SidebarWalletEnabled                 *bool   `json:"sidebar_wallet_enabled"`
@@ -426,6 +430,8 @@ func (api *SystemAPI) UpdateSettings(c *gin.Context) {
 		"theme_dark_muted":                         input.ThemeDarkMuted,
 		"theme_dark_muted_foreground":              input.ThemeDarkMutedForeground,
 		"theme_dark_border":                        input.ThemeDarkBorder,
+		"theme_background_image":                   input.ThemeBackgroundImage,
+		"theme_custom_css":                         input.ThemeCustomCSS,
 		"oidc_issuer":                              input.OIDCIssuer,
 		"oidc_client_id":                           input.OIDCClientID,
 		"oidc_client_secret":                       input.OIDCClientSecret,
@@ -605,6 +611,8 @@ func currentPublicSystemSettings() systemSettingsResponse {
 		ThemeDarkMuted:                       settingString("theme_dark_muted", "#1e293b"),
 		ThemeDarkMutedForeground:             settingString("theme_dark_muted_foreground", "#94a3b8"),
 		ThemeDarkBorder:                      settingString("theme_dark_border", "#1e293b"),
+		ThemeBackgroundImage:                 settingString("theme_background_image", ""),
+		ThemeCustomCSS:                       settingString("theme_custom_css", ""),
 		SidebarDashboardEnabled:              settingBool("sidebar_dashboard_enabled", true),
 		SidebarUsageEnabled:                  settingBool("sidebar_usage_enabled", true),
 		SidebarWalletEnabled:                 settingBool("sidebar_wallet_enabled", true),
