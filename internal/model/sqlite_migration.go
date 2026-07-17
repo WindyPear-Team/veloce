@@ -18,9 +18,10 @@ const sqliteMigrationBatchSize = 500
 
 // SQLiteMigrationReport describes a completed one-way SQLite export.
 type SQLiteMigrationReport struct {
-	TargetDriver string
-	Tables       int
-	Rows         int64
+	TargetDriver  string
+	Tables        int
+	Rows          int64
+	DiscardedRows int64
 }
 
 // MigrateSQLiteToTarget copies all application tables from sourcePath to an
@@ -108,6 +109,11 @@ func MigrateSQLiteToTarget(sourcePath, targetDriver, targetDSN string) (SQLiteMi
 	}); err != nil {
 		return SQLiteMigrationReport{}, err
 	}
+	discarded, err := discardDanglingModelConfigs(target)
+	if err != nil {
+		return SQLiteMigrationReport{}, err
+	}
+	report.DiscardedRows = discarded
 
 	// The copied data now satisfies the source's relationships. Re-run schema
 	// migration with constraints enabled so the target matches normal startup.
@@ -119,6 +125,23 @@ func MigrateSQLiteToTarget(sourcePath, targetDriver, targetDSN string) (SQLiteMi
 		return SQLiteMigrationReport{}, fmt.Errorf("finalize %s schema: %w", targetDriver, err)
 	}
 	return report, nil
+}
+
+// discardDanglingModelConfigs removes legacy records that cannot be used by
+// the application because their channel or model was already deleted. SQLite
+// can retain these rows when foreign keys were disabled; PostgreSQL/MySQL
+// correctly reject them when the constraint is created.
+func discardDanglingModelConfigs(db *gorm.DB) (int64, error) {
+	if !db.Migrator().HasTable(&ModelConfig{}) {
+		return 0, nil
+	}
+	result := db.Exec(`DELETE FROM model_configs
+WHERE NOT EXISTS (SELECT 1 FROM channels WHERE channels.id = model_configs.channel_id)
+   OR NOT EXISTS (SELECT 1 FROM models WHERE models.id = model_configs.model_id)`)
+	if result.Error != nil {
+		return 0, fmt.Errorf("discard dangling model configurations: %w", result.Error)
+	}
+	return result.RowsAffected, nil
 }
 
 func migrationModelTableName(db *gorm.DB, item interface{}) string {

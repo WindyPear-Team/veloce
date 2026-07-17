@@ -1,6 +1,11 @@
 package model
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/glebarez/sqlite"
+	"gorm.io/gorm"
+)
 
 func TestMigrationTargetDialector(t *testing.T) {
 	tests := []struct {
@@ -28,5 +33,39 @@ func TestMigrationTargetDialector(t *testing.T) {
 				t.Fatalf("driver = %q, want %q", driver, test.want)
 			}
 		})
+	}
+}
+
+func TestDiscardDanglingModelConfigs(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open("file:sqlite-migration-model-configs?mode=memory&cache=shared"), &gorm.Config{DisableForeignKeyConstraintWhenMigrating: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&Channel{}, &Model{}, &ModelConfig{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Omit("Models", "Configs").Create(&Channel{ID: 1, Name: "channel"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Omit("Configs").Create(&Model{ID: 1, ModelName: "model"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	configs := []ModelConfig{{ID: 1, ChannelID: 1, ModelID: 1}, {ID: 2, ChannelID: 2, ModelID: 1}, {ID: 3, ChannelID: 1, ModelID: 2}}
+	if err := db.Omit("Channel", "Model", "GroupMultipliers").Create(&configs).Error; err != nil {
+		t.Fatal(err)
+	}
+	discarded, err := discardDanglingModelConfigs(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if discarded != 2 {
+		t.Fatalf("discarded = %d, want 2", discarded)
+	}
+	var count int64
+	if err := db.Model(&ModelConfig{}).Count(&count).Error; err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("remaining model configs = %d, want 1", count)
 	}
 }

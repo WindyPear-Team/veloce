@@ -791,7 +791,7 @@ func MigrateSQLiteDatabase() error {
 	if err != nil {
 		return err
 	}
-	log.Printf("SQLite migration completed: %d rows across %d tables copied to %s", report.Rows, report.Tables, report.TargetDriver)
+	log.Printf("SQLite migration completed: %d rows across %d tables copied to %s (%d dangling records discarded)", report.Rows, report.Tables, report.TargetDriver, report.DiscardedRows)
 	return nil
 }
 
