@@ -31,12 +31,14 @@ func NewSyncService() *SyncService {
 	return &SyncService{}
 }
 
-// StartSyncLoop starts a background worker to sync prices
+// StartSyncLoop starts a background worker that checks channel-specific price
+// sync schedules once per minute.
 func (s *SyncService) StartSyncLoop() {
-	ticker := time.NewTicker(1 * time.Hour)
+	ticker := time.NewTicker(time.Minute)
 	go func() {
+		defer ticker.Stop()
 		for range ticker.C {
-			s.SyncAll()
+			s.SyncScheduledPrices()
 		}
 	}()
 }

@@ -1291,6 +1291,14 @@ func (api *ChannelAPI) Create(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Unsafe or invalid base URL"})
 		return
 	}
+	if strings.TrimSpace(channel.PriceSyncCron) == "" {
+		channel.PriceSyncEnabled = true
+	}
+	channel.PriceSyncCron = service.NormalizePriceSyncCron(channel.PriceSyncCron)
+	if err := service.ValidatePriceSyncCron(channel.PriceSyncCron); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
 	if err := model.DB.Create(&channel).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -1320,6 +1328,11 @@ func (api *ChannelAPI) Update(c *gin.Context) {
 	}
 	if err := service.ValidateConfiguredHTTPURL(channel.BaseURL); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Unsafe or invalid base URL"})
+		return
+	}
+	channel.PriceSyncCron = service.NormalizePriceSyncCron(channel.PriceSyncCron)
+	if err := service.ValidatePriceSyncCron(channel.PriceSyncCron); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 	channel.ID = channelID

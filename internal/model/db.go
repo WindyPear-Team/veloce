@@ -98,6 +98,14 @@ func InitDB() {
 	if err != nil {
 		log.Fatalf("failed to migrate database: %v", err)
 	}
+	if err := DB.Model(&Channel{}).
+		Where("price_sync_cron IS NULL OR price_sync_cron = ?", "").
+		Updates(map[string]interface{}{
+			"price_sync_enabled": true,
+			"price_sync_cron":    "0 * * * *",
+		}).Error; err != nil {
+		log.Fatalf("failed to initialize channel price sync settings: %v", err)
+	}
 	// Studio operations are independently scoped by owner and Studio. Older
 	// PersonalCompany schemas used a single-column owner uniqueness constraint.
 	if DB.Migrator().HasIndex(&PersonalCompany{}, "idx_personal_companies_owner_user_id") {

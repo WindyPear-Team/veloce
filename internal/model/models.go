@@ -219,6 +219,9 @@ type Channel struct {
 	Priority            int                      `gorm:"default:1" json:"priority"`
 	Weight              int                      `gorm:"default:1" json:"weight"`
 	Enabled             bool                     `gorm:"default:true" json:"enabled"`
+	PriceSyncEnabled    bool                     `json:"price_sync_enabled"`
+	PriceSyncCron       string                   `gorm:"size:100" json:"price_sync_cron"`
+	PriceSyncLastAt     *time.Time               `json:"price_sync_last_at"`
 	ConsecutiveFailures int                      `gorm:"default:0" json:"consecutive_failures"`
 	LastFailureAt       *time.Time               `json:"last_failure_at"`
 	LastFailureReason   string                   `gorm:"size:500" json:"last_failure_reason"`
