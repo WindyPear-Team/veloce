@@ -236,6 +236,10 @@ func advancedChatKnowledgeTextChunks(text string) []string {
 }
 
 func createAdvancedChatKnowledgeEmbeddings(ctx context.Context, requestContext *gin.Context, user *model.User, cfg advancedChatKnowledgeEmbeddingConfig, input []string) ([][]float32, error) {
+	if IsBuiltinEmbeddingModel(cfg.ModelName) {
+		vectors, _, err := CreateBuiltinEmbeddings(ctx, cfg.ModelName, input)
+		return vectors, err
+	}
 	if user == nil {
 		return nil, errors.New("Knowledge owner is required")
 	}
@@ -396,6 +400,13 @@ func (api *advancedChatAPI) vectorizeKnowledgeBase(c *gin.Context) {
 	if modelName == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Embedding model is required"})
 		return
+	}
+	if IsBuiltinEmbeddingModel(modelName) {
+		if _, err := LoadBuiltinEmbeddingModel(modelName); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		input.UserChannelID = 0
 	}
 	var documents []AdvancedChatKnowledgeDocument
 	if err := model.DB.Transaction(func(tx *gorm.DB) error {
