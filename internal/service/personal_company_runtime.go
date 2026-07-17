@@ -34,6 +34,10 @@ type personalCompanyStudioRuntimeInput struct {
 	ConnectorCommandPrefixes []string `json:"connector_command_prefixes"`
 }
 
+type personalCompanySchedulerInput struct {
+	MaxConcurrentTasks int `json:"max_concurrent_tasks"`
+}
+
 type personalCompanyConnectorApprovalDecisionInput struct {
 	Approved bool `json:"approved"`
 }
@@ -81,6 +85,37 @@ func (api *personalCompanyAPI) updateStudioRuntime(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"connector_device_id": deviceID, "connector_workspace_path": workspacePath})
+}
+
+func (api *personalCompanyAPI) updateStudioScheduler(c *gin.Context) {
+	ctx, ok := api.personalCompanyContext(c)
+	if !ok {
+		return
+	}
+	company, err := loadPersonalCompany(ctx.userID, ctx.agentGroupID)
+	if writePersonalCompanyLoadError(c, err) {
+		return
+	}
+	var input personalCompanySchedulerInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	maxConcurrent := normalizePersonalCompanyMaxConcurrentTasks(input.MaxConcurrentTasks)
+	if input.MaxConcurrentTasks != maxConcurrent {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "max_concurrent_tasks must be between 1 and 8"})
+		return
+	}
+	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&model.PersonalCompany{}).Where("id = ? AND owner_user_id = ?", company.ID, ctx.userID).Update("max_concurrent_tasks", maxConcurrent).Error; err != nil {
+			return err
+		}
+		return createPersonalCompanyAuditEvent(tx, company.ID, nil, "owner", ctx.userID, "studio.scheduler_configured", fmt.Sprintf(`{"max_concurrent_tasks":%d}`, maxConcurrent))
+	}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to configure Studio scheduler"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"max_concurrent_tasks": maxConcurrent})
 }
 
 func (api *personalCompanyAPI) bindEmployeeRuntime(c *gin.Context) {
@@ -149,13 +184,13 @@ func (api *personalCompanyAPI) runWorkItem(c *gin.Context) {
 			c.JSON(http.StatusConflict, gin.H{"error": "Work item is not ready to run"})
 			return
 		}
+		work.Status = model.CompanyWorkStatusQueued
 	}
-	attempt, runID, err := startPersonalCompanyWorkRun(company, ctx.userID, work.ID)
-	if err != nil {
-		writePersonalCompanyRuntimeError(c, err)
+	if work.Status != model.CompanyWorkStatusQueued && work.Status != model.CompanyWorkStatusExecuting {
+		c.JSON(http.StatusConflict, gin.H{"error": "Work item is not scheduled"})
 		return
 	}
-	c.JSON(http.StatusAccepted, gin.H{"work_attempt": attempt, "advanced_chat_run_id": runID})
+	c.JSON(http.StatusAccepted, gin.H{"work_item_id": work.ID, "status": "queued", "message": "The Chief scheduler will start this work item."})
 }
 
 // getWorkItemInternalSession exposes the immutable Studio conversation that
@@ -380,7 +415,7 @@ func leasePersonalCompanyWorkItem(db *gorm.DB, companyID, workItemID uint, now t
 			return err
 		}
 		expiresAt := now.Add(leaseDuration)
-		attempt = model.CompanyWorkAttempt{WorkItemID: work.ID, AttemptNumber: int(count) + 1, Status: model.CompanyWorkStatusExecuting, LeaseToken: newPersonalCompanyID("lease"), LeaseExpiresAt: &expiresAt, StartedAt: &now, InputSnapshot: work.InputSnapshot}
+		attempt = model.CompanyWorkAttempt{WorkItemID: work.ID, AttemptNumber: int(count) + 1, Kind: model.CompanyWorkAttemptKindExecution, Status: model.CompanyWorkStatusExecuting, LeaseToken: newPersonalCompanyID("lease"), LeaseExpiresAt: &expiresAt, StartedAt: &now, InputSnapshot: work.InputSnapshot}
 		if err := tx.Create(&attempt).Error; err != nil {
 			return err
 		}
@@ -389,8 +424,75 @@ func leasePersonalCompanyWorkItem(db *gorm.DB, companyID, workItemID uint, now t
 	return attempt, err
 }
 
+// startPersonalCompanyReviewRun creates a separate immutable Chief-led run.
+// The Chief must delegate the inspection to a reviewer and record the review
+// decision through the bounded Studio review tool.
+func startPersonalCompanyReviewRun(company model.PersonalCompany, userID, workItemID uint) (model.CompanyWorkAttempt, string, error) {
+	if company.State != model.PersonalCompanyStateOperating || strings.TrimSpace(company.AgentGroupID) == "" {
+		return model.CompanyWorkAttempt{}, "", errors.New("studio operations are paused")
+	}
+	if _, err := readAdvancedChatAgentGroup(context.Background(), userID, nil, company.AgentGroupID); err != nil {
+		return model.CompanyWorkAttempt{}, "", errors.New("bound Agent Studio is unavailable")
+	}
+	var work model.CompanyWorkItem
+	if err := model.DB.Where("id = ? AND personal_company_id = ? AND status = ?", workItemID, company.ID, model.CompanyWorkStatusAwaitingReview).First(&work).Error; err != nil {
+		return model.CompanyWorkAttempt{}, "", err
+	}
+	var completed model.CompanyWorkAttempt
+	if err := model.DB.Where("work_item_id = ? AND kind = ?", work.ID, model.CompanyWorkAttemptKindExecution).Order("attempt_number DESC").First(&completed).Error; err != nil {
+		return model.CompanyWorkAttempt{}, "", errors.New("work item has no completed execution attempt")
+	}
+	policy := personalCompanyRuntimePolicy{}
+	_ = json.Unmarshal([]byte(company.ConnectorCommandPrefixes), &policy.ConnectorCommandPrefixes)
+	policy.ConnectorDeviceID, policy.ConnectorWorkspacePath = company.ConnectorDeviceID, company.ConnectorWorkspacePath
+	prompt := fmt.Sprintf("You are the Chief scheduling a mandatory review for governed Personal Company work item #%d.\nTitle: %s\nDefinition of done: %s\nExecution result: %s\n\nDelegate the evidence and result inspection to a reviewer member. After the reviewer returns, call studio_review_work with its decision. Do not execute workspace actions yourself.", work.ID, work.Title, work.DefinitionOfDone, truncatePersonalCompanyText(completed.ResultSummary, 4000))
+	input := advancedChatCompletionInput{SessionID: newAdvancedChatID("pcw"), Title: "Personal Company Review: " + work.Title, Messages: []advancedChatCompletionMessage{{Role: "user", Content: prompt}}, Mode: advancedChatModeAgentGroup, AgentGroupID: company.AgentGroupID, ConnectorDeviceID: policy.ConnectorDeviceID, ConnectorWorkspacePath: policy.ConnectorWorkspacePath, ConnectorApprovalMode: advancedChatConnectorApprovalManual, ConnectorCommandPrefixes: policy.ConnectorCommandPrefixes, ChargeBalance: true}
+	prepared, _, message, err := prepareAdvancedChatAssistantRun(context.Background(), userID, input, input.Messages, "")
+	if err != nil {
+		return model.CompanyWorkAttempt{}, "", errors.New(message)
+	}
+	var attempt model.CompanyWorkAttempt
+	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		var count int64
+		if err := tx.Model(&model.CompanyWorkAttempt{}).Where("work_item_id = ?", work.ID).Count(&count).Error; err != nil {
+			return err
+		}
+		now := time.Now().UTC()
+		expiresAt := now.Add(10 * time.Minute)
+		if result := tx.Model(&model.CompanyWorkItem{}).Where("id = ? AND status = ?", work.ID, model.CompanyWorkStatusAwaitingReview).Update("status", model.CompanyWorkStatusExecuting); result.Error != nil || result.RowsAffected != 1 {
+			if result.Error != nil {
+				return result.Error
+			}
+			return ErrPersonalCompanyNoQueuedWork
+		}
+		attempt = model.CompanyWorkAttempt{WorkItemID: work.ID, AttemptNumber: int(count) + 1, Kind: model.CompanyWorkAttemptKindReview, Status: model.CompanyWorkStatusExecuting, LeaseToken: newPersonalCompanyID("lease"), LeaseExpiresAt: &expiresAt, StartedAt: &now, InputSnapshot: work.InputSnapshot}
+		if err := tx.Create(&attempt).Error; err != nil {
+			return err
+		}
+		return createPersonalCompanyAuditEvent(tx, company.ID, &work.ID, "chief", 0, "review_attempt.scheduled", fmt.Sprintf(`{"attempt_id":%d}`, attempt.ID))
+	}); err != nil {
+		return model.CompanyWorkAttempt{}, "", err
+	}
+	_, run, _, message, err := createAdvancedChatAssistantRun(userID, prepared)
+	if err != nil {
+		_ = finishPersonalCompanyReviewWithoutDecision(company.ID, work.ID, attempt.ID, "Review run could not be created")
+		return attempt, "", errors.New(message)
+	}
+	if err := model.DB.Model(&model.CompanyWorkAttempt{}).Where("id = ?", attempt.ID).Update("advanced_chat_run_id", run.ID).Error; err != nil {
+		_ = finishPersonalCompanyReviewWithoutDecision(company.ID, work.ID, attempt.ID, "Review run link could not be saved")
+		return attempt, "", err
+	}
+	attempt.AdvancedChatRunID = run.ID
+	go runPersonalCompanyReviewWork(company.ID, work.ID, attempt.ID, userID, run.ID, prepared)
+	return attempt, run.ID, nil
+}
+
 func runPersonalCompanyAdvancedChatWork(companyID, workItemID, attemptID, userID uint, runID string, prepared preparedAdvancedChatAssistantRun) {
 	runAdvancedChatAssistantCompletion(runID, userID, prepared)
+	var currentAttempt model.CompanyWorkAttempt
+	if err := model.DB.Where("id = ?", attemptID).First(&currentAttempt).Error; err != nil || currentAttempt.Status != model.CompanyWorkStatusExecuting {
+		return
+	}
 	var run AdvancedChatRun
 	if err := model.DB.Where("id = ? AND user_id = ?", runID, userID).First(&run).Error; err != nil {
 		return
@@ -408,7 +510,7 @@ func runPersonalCompanyAdvancedChatWork(companyID, workItemID, attemptID, userID
 			}
 			updates["result_summary"] = truncatePersonalCompanyText(result.Content, 4000)
 		}
-		if err := tx.Model(&model.CompanyWorkAttempt{}).Where("id = ?", attemptID).Updates(updates).Error; err != nil {
+		if err := tx.Model(&model.CompanyWorkAttempt{}).Where("id = ? AND status = ?", attemptID, model.CompanyWorkStatusExecuting).Updates(updates).Error; err != nil {
 			return err
 		}
 		var workItem model.CompanyWorkItem
@@ -458,7 +560,48 @@ func runPersonalCompanyAdvancedChatWork(companyID, workItemID, attemptID, userID
 				return err
 			}
 		}
+		signalCompany := model.PersonalCompany{ID: companyID, OwnerUserID: userID}
+		if err := enqueuePersonalCompanySignal(tx, signalCompany, &workItemID, "execution", "work_item."+status, fmt.Sprintf(`{"attempt_id":%d,"run_id":%q,"status":%q}`, attemptID, runID, status)); err != nil {
+			return err
+		}
 		return createPersonalCompanyAuditEvent(tx, companyID, &workItemID, "worker", 0, "work_attempt.completed", fmt.Sprintf(`{"attempt_id":%d,"run_id":%q,"status":%q}`, attemptID, runID, status))
+	})
+}
+
+func runPersonalCompanyReviewWork(companyID, workItemID, attemptID, userID uint, runID string, prepared preparedAdvancedChatAssistantRun) {
+	runAdvancedChatAssistantCompletion(runID, userID, prepared)
+	var attempt model.CompanyWorkAttempt
+	if err := model.DB.Where("id = ?", attemptID).First(&attempt).Error; err != nil || attempt.Status != model.CompanyWorkStatusExecuting {
+		return
+	}
+	var run AdvancedChatRun
+	if err := model.DB.Where("id = ? AND user_id = ?", runID, userID).First(&run).Error; err != nil {
+		return
+	}
+	reason := "Reviewer did not record a decision"
+	if run.Status != advancedChatRunStatusCompleted {
+		reason = "Review run did not complete: " + truncatePersonalCompanyText(run.ErrorMessage, 800)
+	}
+	_ = finishPersonalCompanyReviewWithoutDecision(companyID, workItemID, attemptID, reason)
+}
+
+func finishPersonalCompanyReviewWithoutDecision(companyID, workItemID, attemptID uint, reason string) error {
+	return model.DB.Transaction(func(tx *gorm.DB) error {
+		now := time.Now().UTC()
+		if err := tx.Model(&model.CompanyWorkAttempt{}).Where("id = ? AND status = ?", attemptID, model.CompanyWorkStatusExecuting).Updates(map[string]interface{}{"status": model.CompanyWorkStatusBlocked, "finished_at": now, "result_summary": truncatePersonalCompanyText(reason, 1000)}).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&model.CompanyWorkItem{}).Where("id = ? AND status = ?", workItemID, model.CompanyWorkStatusExecuting).Update("status", model.CompanyWorkStatusBlocked).Error; err != nil {
+			return err
+		}
+		var company model.PersonalCompany
+		if err := tx.Select("id", "owner_user_id").Where("id = ?", companyID).First(&company).Error; err != nil {
+			return err
+		}
+		if err := enqueuePersonalCompanySignal(tx, company, &workItemID, "review", "work_item.blocked", fmt.Sprintf(`{"attempt_id":%d,"reason":%q}`, attemptID, truncatePersonalCompanyText(reason, 1000))); err != nil {
+			return err
+		}
+		return createPersonalCompanyAuditEvent(tx, companyID, &workItemID, "chief", 0, "review_attempt.blocked", fmt.Sprintf(`{"attempt_id":%d}`, attemptID))
 	})
 }
 

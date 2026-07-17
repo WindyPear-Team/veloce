@@ -39,6 +39,7 @@ type PersonalCompany struct {
 	ConnectorDeviceID        string          `gorm:"size:80;not null;default:''" json:"connector_device_id,omitempty"`
 	ConnectorWorkspacePath   string          `gorm:"type:text;not null;default:''" json:"connector_workspace_path,omitempty"`
 	ConnectorCommandPrefixes string          `gorm:"type:text;not null;default:'[]'" json:"connector_command_prefixes,omitempty"`
+	MaxConcurrentTasks       int             `gorm:"not null;default:1" json:"max_concurrent_tasks"`
 	PausedAt                 *time.Time      `gorm:"index" json:"paused_at,omitempty"`
 	CreatedAt                time.Time       `json:"created_at"`
 	UpdatedAt                time.Time       `json:"updated_at"`

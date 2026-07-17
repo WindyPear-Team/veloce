@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -44,11 +45,7 @@ func (api *personalCompanyAPI) getCompany(c *gin.Context) {
 	if !ok {
 		return
 	}
-	company, err := loadPersonalCompany(ctx.userID, ctx.agentGroupID)
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		c.JSON(http.StatusOK, gin.H{"company": nil, "bootstrap_required": true})
-		return
-	}
+	company, err := ensurePersonalCompanyOperating(ctx.userID, ctx.agentGroupID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load Personal Company"})
 		return
@@ -59,6 +56,43 @@ func (api *personalCompanyAPI) getCompany(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, dashboard)
+}
+
+// ensurePersonalCompanyOperating makes Studio operations the default for every
+// persisted Agent Studio. A user may later pause the operation, but a fresh
+// Studio starts with a minimal governing charter and an active Chief loop.
+func ensurePersonalCompanyOperating(userID uint, agentGroupID string) (model.PersonalCompany, error) {
+	company, err := loadPersonalCompany(userID, agentGroupID)
+	if err == nil || !errors.Is(err, gorm.ErrRecordNotFound) {
+		return company, err
+	}
+	group, err := readAdvancedChatAgentGroup(context.Background(), userID, nil, agentGroupID)
+	if err != nil {
+		return model.PersonalCompany{}, err
+	}
+	company = model.PersonalCompany{OwnerUserID: userID, AgentGroupID: group.ID, Name: truncatePersonalCompanyText(group.Name, 160), State: model.PersonalCompanyStateOperating, Timezone: "UTC", AutonomyLevel: model.PersonalCompanyAutonomyR0}
+	err = model.DB.Transaction(func(tx *gorm.DB) error {
+		var existing model.PersonalCompany
+		if err := tx.Where("owner_user_id = ? AND agent_group_id = ?", userID, group.ID).First(&existing).Error; err == nil {
+			company = existing
+			return nil
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		if err := tx.Create(&company).Error; err != nil {
+			return err
+		}
+		charter := model.CompanyCharterRevision{PersonalCompanyID: company.ID, Revision: 1, Mission: "Chief-scheduled delivery through immutable internal Studio sessions.", Goals: "[]", DataBoundaries: "[]", ProhibitedActions: "[]", ApprovalPolicy: `{"r3":"owner_required","r4":"forbidden"}`, CreatedByUserID: userID}
+		if err := tx.Create(&charter).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&company).Updates(map[string]interface{}{"charter_revision_id": charter.ID}).Error; err != nil {
+			return err
+		}
+		company.CharterRevisionID = &charter.ID
+		return createPersonalCompanyAuditEvent(tx, company.ID, nil, "system", 0, "company.default_enabled", `{}`)
+	})
+	return company, err
 }
 
 func (api *personalCompanyAPI) bootstrapCompany(c *gin.Context) {
@@ -217,10 +251,22 @@ func (api *personalCompanyAPI) setCompanyState(c *gin.Context, state string) {
 		if err := tx.Model(&model.PersonalCompany{}).Where("id = ? AND owner_user_id = ?", company.ID, ctx.userID).Updates(updates).Error; err != nil {
 			return err
 		}
+		updatedCompany := company
+		updatedCompany.State = state
+		if err := enqueuePersonalCompanySignal(tx, updatedCompany, nil, "owner", "company."+state, `{}`); err != nil {
+			return err
+		}
 		return createPersonalCompanyAuditEvent(tx, company.ID, nil, "owner", ctx.userID, "company."+state, `{}`)
 	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update company state"})
 		return
+	}
+	if state == model.PersonalCompanyStatePaused {
+		company.OwnerUserID = ctx.userID
+		if err := interruptPersonalCompanyWork(company); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Studio paused but active work could not be interrupted"})
+			return
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{"state": state})
 }

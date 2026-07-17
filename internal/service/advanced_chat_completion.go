@@ -143,6 +143,10 @@ func (api *advancedChatAPI) completeChat(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	if personalCompanyInternalSession(user.ID, input.SessionID) {
+		c.JSON(http.StatusConflict, gin.H{"error": "Internal Studio sessions are immutable"})
+		return
+	}
 	messages := normalizeAdvancedChatCompletionMessages(input.Messages)
 	if len(messages) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Messages are required"})

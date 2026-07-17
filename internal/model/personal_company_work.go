@@ -28,6 +28,9 @@ const (
 	CompanyWorkStatusDeadLetter       = "dead_letter"
 	CompanyWorkStatusCancelled        = "cancelled"
 
+	CompanyWorkAttemptKindExecution = "execution"
+	CompanyWorkAttemptKindReview    = "review"
+
 	CompanyHandoffStatusPending       = "pending"
 	CompanyHandoffStatusAccepted      = "accepted"
 	CompanyHandoffStatusRejected      = "rejected"
@@ -80,6 +83,7 @@ type CompanyWorkAttempt struct {
 	WorkItemID        uint            `gorm:"uniqueIndex:idx_company_work_attempt;index;not null" json:"work_item_id"`
 	AttemptNumber     int             `gorm:"uniqueIndex:idx_company_work_attempt;not null" json:"attempt_number"`
 	AdvancedChatRunID string          `gorm:"index;size:80;not null;default:''" json:"advanced_chat_run_id,omitempty"`
+	Kind              string          `gorm:"size:20;not null;default:'execution';index" json:"kind"`
 	Status            string          `gorm:"size:24;not null;default:'queued';index" json:"status"`
 	LeaseToken        string          `gorm:"index;size:100;not null;default:''" json:"-"`
 	LeaseExpiresAt    *time.Time      `gorm:"index" json:"lease_expires_at,omitempty"`

@@ -94,13 +94,7 @@ func QueuePersonalCompanyWorkItem(db *gorm.DB, company model.PersonalCompany, wo
 		if result.RowsAffected != 1 {
 			return ErrPersonalCompanyWorkNotQueueable
 		}
-		key := fmt.Sprintf("work-item:%d:queued", workItem.ID)
-		signal := model.CompanySignal{PersonalCompanyID: company.ID, OwnerUserID: actorUserID, Source: "work_item", DeduplicationKey: key, Payload: fmt.Sprintf(`{"work_item_id":%d}`, workItem.ID), Status: model.CompanySignalStatusTriaged, WorkItemID: &workItem.ID}
-		if err := tx.Where("personal_company_id = ? AND deduplication_key = ?", company.ID, key).FirstOrCreate(&signal).Error; err != nil {
-			return err
-		}
-		outbox := model.CompanyOutboxEvent{PersonalCompanyID: company.ID, EventKey: key, EventType: "work_item.queued", Payload: signal.Payload, Status: model.CompanyOutboxStatusPending}
-		if err := tx.Where("personal_company_id = ? AND event_key = ?", company.ID, key).FirstOrCreate(&outbox).Error; err != nil {
+		if err := enqueuePersonalCompanySignal(tx, company, &workItem.ID, "work_item", "work_item.queued", fmt.Sprintf(`{"work_item_id":%d}`, workItem.ID)); err != nil {
 			return err
 		}
 		return createPersonalCompanyAuditEvent(tx, company.ID, &workItem.ID, "owner", actorUserID, "work_item.queued", `{}`)
@@ -136,7 +130,7 @@ func LeaseNextPersonalCompanyWorkItem(db *gorm.DB, companyID uint, now time.Time
 		}
 		startedAt := now
 		expiresAt := now.Add(leaseDuration)
-		leased = model.CompanyWorkAttempt{WorkItemID: workItem.ID, AttemptNumber: int(attemptCount) + 1, Status: model.CompanyWorkStatusExecuting, LeaseToken: newPersonalCompanyID("lease"), LeaseExpiresAt: &expiresAt, StartedAt: &startedAt, InputSnapshot: workItem.InputSnapshot}
+		leased = model.CompanyWorkAttempt{WorkItemID: workItem.ID, AttemptNumber: int(attemptCount) + 1, Kind: model.CompanyWorkAttemptKindExecution, Status: model.CompanyWorkStatusExecuting, LeaseToken: newPersonalCompanyID("lease"), LeaseExpiresAt: &expiresAt, StartedAt: &startedAt, InputSnapshot: workItem.InputSnapshot}
 		if err := tx.Create(&leased).Error; err != nil {
 			return err
 		}

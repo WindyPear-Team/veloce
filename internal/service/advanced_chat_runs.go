@@ -379,6 +379,10 @@ func (api *advancedChatAPI) moveSessionToFolder(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid session id"})
 		return
 	}
+	if personalCompanyInternalSession(user.ID, sessionID) {
+		c.JSON(http.StatusConflict, gin.H{"error": "Internal Studio sessions are immutable"})
+		return
+	}
 	var input advancedChatSessionFolderMoveInput
 	if err := c.ShouldBindJSON(&input); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -448,6 +452,10 @@ func (api *advancedChatAPI) saveSession(c *gin.Context) {
 	if sessionID == "" {
 		sessionID = newAdvancedChatID("acs")
 	}
+	if personalCompanyInternalSession(user.ID, sessionID) {
+		c.JSON(http.StatusConflict, gin.H{"error": "Internal Studio sessions are immutable"})
+		return
+	}
 	session, status, message, err := saveAdvancedChatSessionSnapshot(user.ID, sessionID, input, true)
 	if err != nil {
 		c.JSON(status, gin.H{"error": message})
@@ -463,6 +471,10 @@ func (api *advancedChatAPI) deleteSession(c *gin.Context) {
 		return
 	}
 	sessionID := strings.TrimSpace(c.Param("id"))
+	if personalCompanyInternalSession(user.ID, sessionID) {
+		c.JSON(http.StatusConflict, gin.H{"error": "Internal Studio sessions are immutable"})
+		return
+	}
 	err := model.DB.Transaction(func(tx *gorm.DB) error {
 		var runs []AdvancedChatRun
 		if err := tx.Where("session_id = ? AND user_id = ?", sessionID, user.ID).Find(&runs).Error; err != nil {
@@ -510,6 +522,10 @@ func (api *advancedChatAPI) stopRun(c *gin.Context) {
 	user, ok := currentAdvancedChatUser(c)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+	if personalCompanyChiefRunIsInternal(c.Param("id")) {
+		c.JSON(http.StatusConflict, gin.H{"error": "Internal Studio runs are controlled by Studio operations"})
 		return
 	}
 	run, status, message, err := stopAdvancedChatRun(c.Param("id"), user.ID)
@@ -1057,6 +1073,10 @@ func interruptActiveAdvancedChatRunsForSession(userID uint, rawSessionID string,
 }
 
 func (api *advancedChatAPI) startAssistantCompletionRun(c *gin.Context, user *model.User, input advancedChatCompletionInput, messages []advancedChatCompletionMessage, modelName string) {
+	if personalCompanyInternalSession(user.ID, input.SessionID) {
+		c.JSON(http.StatusConflict, gin.H{"error": "Internal Studio sessions are immutable"})
+		return
+	}
 	prepared, status, message, err := prepareAdvancedChatAssistantRun(c.Request.Context(), user.ID, input, messages, modelName)
 	if err != nil {
 		c.JSON(status, gin.H{"error": message})
@@ -1916,6 +1936,10 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 	studioCanSplit := studioRoleActive && advancedChatAgentStudioCanSplit(studioRole)
 	studioCanDelegate := studioRoleActive && advancedChatAgentStudioCanDelegate(studioRole, true)
 	studioCanCommit := studioRoleActive && normalizeAdvancedChatAgentType(studioRole) == "reviewer"
+	externalChiefScheduler := studioRoleActive && normalizeAdvancedChatAgentType(studioRole) == "chief" && personalCompanyExternalChiefSchedulingRun(user.ID, prepared.input.AgentGroupID, prepared.runID)
+	if externalChiefScheduler {
+		studioCanDelegate = false
+	}
 	approvalChecker := prepared.approvalChecker
 	if prepared.agentGroup != nil {
 		if groupChecker, ok := advancedChatAgentStudioApprovalCheckerForGroup(prepared.agentGroup); ok {
@@ -1940,6 +1964,10 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 	connectorBindings := allConnectorBindings
 	if studioRoleActive {
 		connectorTools, connectorBindings = filterAdvancedChatAgentStudioConnectorTools(studioRole, allConnectorTools, allConnectorBindings)
+		if externalChiefScheduler {
+			connectorTools = nil
+			connectorBindings = map[string]advancedChatConnectorToolBinding{}
+		}
 	}
 	if len(connectorTools) > 0 {
 		tools = append(tools, connectorTools...)
@@ -1954,7 +1982,7 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 	if studioCanSplit {
 		tools = append(tools, advancedChatAgentSplitTool())
 	}
-	if studioRoleActive {
+	if studioRoleActive && !externalChiefScheduler {
 		tools = append(tools, advancedChatAgentStudioInterruptTool(), advancedChatAgentStudioQueryStatusTool(), advancedChatAgentStudioResumeTool())
 	}
 	if studioCanCommit && len(connectorTools) > 0 {
@@ -1977,8 +2005,21 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 	if err != nil {
 		return nil, fmt.Errorf("Failed to load assistant extensions: %w", err)
 	}
+	extensionToolNames := map[string]bool{}
 	if len(extension.Tools) > 0 {
-		tools = append(tools, extension.Tools...)
+		if externalChiefScheduler {
+			for _, tool := range extension.Tools {
+				if tool.Name == personalCompanyChiefCreateWorkToolName || tool.Name == personalCompanyChiefListWorkToolName {
+					tools = append(tools, tool)
+					extensionToolNames[tool.Name] = true
+				}
+			}
+		} else {
+			tools = append(tools, extension.Tools...)
+			for _, tool := range extension.Tools {
+				extensionToolNames[tool.Name] = true
+			}
+		}
 	}
 	if groupPrompt := advancedChatAgentGroupChatSystemPrompt(prepared.agentGroup, prepared.groupAgent); groupPrompt != "" {
 		if strings.TrimSpace(systemPrompt) == "" {
@@ -2124,7 +2165,7 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 			resumeExists := toolCall.Name == advancedChatAgentStudioResumeToolName && studioRoleActive
 			activateSkillExists := toolCall.Name == advancedChatActivateSkillToolName && hasSkillCatalog
 			readSkillResourceExists := toolCall.Name == advancedChatReadSkillResourceToolName && hasSkillCatalog
-			extensionExists := AdvancedChatToolHandlerExists(toolCall.Name)
+			extensionExists := extensionToolNames[toolCall.Name] && AdvancedChatToolHandlerExists(toolCall.Name)
 			detail := advancedChatCompletionToolCall{ID: toolCall.ID, Round: round + 1, Name: toolCall.Name, Status: "running"}
 			precreatedConnectorTaskID := ""
 			var precreateConnectorTaskErr error
@@ -2820,6 +2861,10 @@ func (api *advancedChatAPI) regenerateSessionTitle(c *gin.Context) {
 	sessionID := normalizeAdvancedChatSessionID(c.Param("id"))
 	if sessionID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid session id"})
+		return
+	}
+	if personalCompanyInternalSession(user.ID, sessionID) {
+		c.JSON(http.StatusConflict, gin.H{"error": "Internal Studio sessions are immutable"})
 		return
 	}
 	settings := ensureAdvancedChatUserSettings(user.ID)

@@ -172,6 +172,9 @@ func (api *personalCompanyAPI) createWorkItem(c *gin.Context) {
 				return err
 			}
 		}
+		if err := enqueuePersonalCompanySignal(tx, company, &workItem.ID, "owner", "work_item."+status, fmt.Sprintf(`{"work_item_id":%d}`, workItem.ID)); err != nil {
+			return err
+		}
 		return createPersonalCompanyAuditEvent(tx, company.ID, &workItem.ID, "owner", ctx.userID, "work_item.created", fmt.Sprintf(`{"status":%q}`, status))
 	})
 	if err != nil {
@@ -185,11 +188,6 @@ func (api *personalCompanyAPI) createWorkItem(c *gin.Context) {
 		}
 		return
 	}
-	go func() {
-		if _, _, err := startPersonalCompanyWorkRun(company, ctx.userID, workItem.ID); err != nil {
-			_ = recordPersonalCompanyWorkStartFailure(company.ID, workItem.ID, err)
-		}
-	}()
 	c.JSON(http.StatusCreated, gin.H{"work_item": workItem})
 }
 
