@@ -1,9 +1,11 @@
 package app
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log"
 	"mime"
@@ -557,6 +559,8 @@ func Run() error {
 		// System settings
 		admin.GET("/settings", systemAPI.GetSettings)
 		admin.PUT("/settings", systemAPI.UpdateSettings)
+		admin.GET("/updates", systemAPI.GetAutoUpdateStatus)
+		admin.POST("/updates/check", systemAPI.CheckForUpdate)
 		admin.GET("/status-monitors", statusMonitorAPI.List)
 		admin.POST("/status-monitors", statusMonitorAPI.Create)
 		admin.PUT("/status-monitors/:id", statusMonitorAPI.Update)
@@ -782,7 +786,31 @@ func Run() error {
 		IdleTimeout:       120 * time.Second,
 	}
 
-	return server.ListenAndServe()
+	updateRestartDone := make(chan error, 1)
+	updater := service.NewAutoUpdateService()
+	updater.Start(func(stagedBinary string) error {
+		go func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := server.Shutdown(shutdownCtx); err != nil {
+				updateRestartDone <- fmt.Errorf("stop server for update: %w", err)
+				return
+			}
+			updateRestartDone <- service.RestartWithStagedUpdate(stagedBinary)
+		}()
+		return nil
+	})
+
+	err = server.ListenAndServe()
+	if !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	select {
+	case restartErr := <-updateRestartDone:
+		return restartErr
+	case <-time.After(35 * time.Second):
+		return errors.New("timed out while applying automatic update")
+	}
 }
 
 // MigrateSQLiteDatabase runs the explicit one-way --migrate command. Normal

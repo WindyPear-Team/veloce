@@ -166,6 +166,8 @@ type systemSettingsResponse struct {
 	OIDCClientSecret                     string `json:"oidc_client_secret,omitempty"`
 	OIDCRedirectURL                      string `json:"oidc_redirect_url,omitempty"`
 	OAuthProviders                       string `json:"oauth_providers,omitempty"`
+	AutoUpdateEnabled                    bool   `json:"auto_update_enabled"`
+	AutoUpdateIntervalHours              string `json:"auto_update_interval_hours"`
 }
 
 type systemSettingsInput struct {
@@ -303,6 +305,8 @@ type systemSettingsInput struct {
 	OIDCClientSecret                     *string `json:"oidc_client_secret"`
 	OIDCRedirectURL                      *string `json:"oidc_redirect_url"`
 	OAuthProviders                       *string `json:"oauth_providers"`
+	AutoUpdateEnabled                    *bool   `json:"auto_update_enabled"`
+	AutoUpdateIntervalHours              *string `json:"auto_update_interval_hours"`
 }
 
 func (api *SystemAPI) PublicSettings(c *gin.Context) {
@@ -311,6 +315,20 @@ func (api *SystemAPI) PublicSettings(c *gin.Context) {
 
 func (api *SystemAPI) GetSettings(c *gin.Context) {
 	c.JSON(http.StatusOK, currentAdminSystemSettings())
+}
+
+func (api *SystemAPI) GetAutoUpdateStatus(c *gin.Context) {
+	c.JSON(http.StatusOK, service.CurrentAutoUpdateStatus())
+}
+
+func (api *SystemAPI) CheckForUpdate(c *gin.Context) {
+	updater := service.NewAutoUpdateService()
+	status, err := updater.CheckNow(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error(), "status": status})
+		return
+	}
+	c.JSON(http.StatusOK, status)
 }
 
 func (api *SystemAPI) UpdateSettings(c *gin.Context) {
@@ -349,6 +367,17 @@ func (api *SystemAPI) UpdateSettings(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid auth agreement mode"})
 			return
 		}
+	}
+
+	var autoUpdateIntervalHours *string
+	if input.AutoUpdateIntervalHours != nil {
+		interval, err := strconv.Atoi(strings.TrimSpace(*input.AutoUpdateIntervalHours))
+		if err != nil || interval < 1 || interval > 168 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Automatic update interval must be between 1 and 168 hours"})
+			return
+		}
+		normalized := strconv.Itoa(interval)
+		autoUpdateIntervalHours = &normalized
 	}
 
 	var oauthProvidersValue *string
@@ -437,6 +466,7 @@ func (api *SystemAPI) UpdateSettings(c *gin.Context) {
 		"oidc_client_secret":                       input.OIDCClientSecret,
 		"oidc_redirect_url":                        input.OIDCRedirectURL,
 		"oauth_providers":                          oauthProvidersValue,
+		"auto_update_interval_hours":               autoUpdateIntervalHours,
 		"referral_commission_rate":                 input.ReferralCommissionRate,
 		"group_multiplier_mode":                    input.GroupMultiplierMode,
 		"reliability_disable_after_failures":       input.ReliabilityDisableAfterFailures,
@@ -543,6 +573,7 @@ func (api *SystemAPI) UpdateSettings(c *gin.Context) {
 		"token_api_enabled":                        input.TokenAPIEnabled,
 		"password_hcaptcha_enabled":                input.PasswordHCaptchaEnabled,
 		"email_verification_required":              input.EmailVerificationRequired,
+		"auto_update_enabled":                      input.AutoUpdateEnabled,
 	}
 	for key, value := range map[string]*string{"registration_email_suffixes": input.RegistrationEmailSuffixes, "registration_email_routing": input.RegistrationEmailRouting} {
 		if value != nil {
@@ -680,6 +711,8 @@ func currentPublicSystemSettings() systemSettingsResponse {
 		EmailVerificationRequired:            settingBool("email_verification_required", false),
 		RegistrationEmailSuffixes:            settingString("registration_email_suffixes", ""),
 		RegistrationEmailRouting:             settingString("registration_email_routing", "[]"),
+		AutoUpdateEnabled:                    settingBool("auto_update_enabled", false),
+		AutoUpdateIntervalHours:              settingString("auto_update_interval_hours", "24"),
 	}
 }
 
