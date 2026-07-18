@@ -559,6 +559,8 @@ func Run() error {
 		// System settings
 		admin.GET("/settings", systemAPI.GetSettings)
 		admin.PUT("/settings", systemAPI.UpdateSettings)
+		admin.POST("/settings/export", systemAPI.ExportConfiguration)
+		admin.POST("/settings/import", systemAPI.ImportConfiguration)
 		admin.DELETE("/logs", systemAPI.DeleteLogs)
 		admin.GET("/updates", systemAPI.GetAutoUpdateStatus)
 		admin.POST("/updates/check", systemAPI.CheckForUpdate)

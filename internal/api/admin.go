@@ -23,11 +23,105 @@ import (
 type SystemAPI struct{}
 
 const (
-	chatPageModeBasic     = "basic"
-	chatPageModeAdvanced  = "advanced"
-	authAgreementNotice   = "notice"
-	authAgreementCheckbox = "checkbox"
+	chatPageModeBasic            = "basic"
+	chatPageModeAdvanced         = "advanced"
+	authAgreementNotice          = "notice"
+	authAgreementCheckbox        = "checkbox"
+	configurationExportVersion   = 1
+	configurationSectionSettings = "system_settings"
+	configurationSectionChannels = "channels"
+	configurationSectionModels   = "model_data"
+	configurationSectionPrices   = "model_prices"
 )
+
+var configurationSections = map[string]struct{}{
+	configurationSectionSettings: {},
+	configurationSectionChannels: {},
+	configurationSectionModels:   {},
+	configurationSectionPrices:   {},
+}
+
+type configurationExportRequest struct {
+	Sections []string `json:"sections"`
+}
+
+// configurationExport is intentionally limited to operational configuration.
+// It excludes users, API keys, balances, orders, logs, and every other
+// business record.
+type configurationExport struct {
+	Version        int                        `json:"version"`
+	ExportedAt     time.Time                  `json:"exported_at"`
+	Sections       []string                   `json:"sections"`
+	SystemSettings []model.SystemSetting      `json:"system_settings,omitempty"`
+	UserChannels   []configurationUserChannel `json:"user_channels,omitempty"`
+	Channels       []configurationChannel     `json:"channels,omitempty"`
+	Models         []configurationModel       `json:"models,omitempty"`
+	ModelPrices    []configurationModelPrice  `json:"model_prices,omitempty"`
+	ModelConfigs   []configurationModelConfig `json:"model_configs,omitempty"`
+}
+
+type configurationUserChannel struct {
+	Name             string          `json:"name"`
+	Description      string          `json:"description"`
+	Multiplier       decimal.Decimal `json:"multiplier"`
+	RoutingAlgorithm string          `json:"routing_algorithm"`
+	Enabled          bool            `json:"enabled"`
+}
+
+type configurationChannel struct {
+	Name             string          `json:"name"`
+	Type             string          `json:"type"`
+	BaseURL          string          `json:"base_url"`
+	APIKey           string          `json:"api_key"`
+	UserChannelName  string          `json:"user_channel_name,omitempty"`
+	Multiplier       decimal.Decimal `json:"multiplier"`
+	Priority         int             `json:"priority"`
+	Weight           int             `json:"weight"`
+	Enabled          bool            `json:"enabled"`
+	PriceSyncEnabled bool            `json:"price_sync_enabled"`
+	PriceSyncCron    string          `json:"price_sync_cron"`
+}
+
+type configurationModel struct {
+	ModelName       string `json:"model_name"`
+	Provider        string `json:"provider"`
+	ProviderIconURL string `json:"provider_icon_url"`
+	Enabled         bool   `json:"enabled"`
+}
+
+type configurationModelPrice struct {
+	ModelName                   string                   `json:"model_name"`
+	QuotaType                   int                      `json:"quota_type"`
+	InputPrice                  decimal.Decimal          `json:"input_price"`
+	OutputPrice                 decimal.Decimal          `json:"output_price"`
+	CachedInputPrice            decimal.Decimal          `json:"cached_input_price"`
+	CacheWriteInputPrice        decimal.Decimal          `json:"cache_write_input_price"`
+	CacheWrite1hInputPrice      decimal.Decimal          `json:"cache_write_1h_input_price"`
+	ImageInputPrice             decimal.Decimal          `json:"image_input_price"`
+	ImageOutputPrice            decimal.Decimal          `json:"image_output_price"`
+	AudioInputPrice             decimal.Decimal          `json:"audio_input_price"`
+	AudioOutputPrice            decimal.Decimal          `json:"audio_output_price"`
+	InputPriceTiers             model.PriceTierList      `json:"input_price_tiers"`
+	OutputPriceTiers            model.PriceTierList      `json:"output_price_tiers"`
+	CachedInputPriceTiers       model.PriceTierList      `json:"cached_input_price_tiers"`
+	CacheWriteInputPriceTiers   model.PriceTierList      `json:"cache_write_input_price_tiers"`
+	CacheWrite1hInputPriceTiers model.PriceTierList      `json:"cache_write_1h_input_price_tiers"`
+	ImageInputPriceTiers        model.PriceTierList      `json:"image_input_price_tiers"`
+	ImageOutputPriceTiers       model.PriceTierList      `json:"image_output_price_tiers"`
+	AudioInputPriceTiers        model.PriceTierList      `json:"audio_input_price_tiers"`
+	AudioOutputPriceTiers       model.PriceTierList      `json:"audio_output_price_tiers"`
+	VideoBillingConfig          model.VideoBillingConfig `json:"video_billing_config"`
+}
+
+type configurationModelConfig struct {
+	ChannelName       string          `json:"channel_name"`
+	ChannelBaseURL    string          `json:"channel_base_url"`
+	ModelName         string          `json:"model_name"`
+	UpstreamModelName string          `json:"upstream_model_name"`
+	InputPrice        decimal.Decimal `json:"input_price"`
+	OutputPrice       decimal.Decimal `json:"output_price"`
+	Enabled           bool            `json:"enabled"`
+}
 
 type systemSettingsResponse struct {
 	Edition                              string `json:"edition"`
@@ -347,6 +441,319 @@ func (api *SystemAPI) DeleteLogs(c *gin.Context) {
 	}
 	service.RecordAuditLog(service.AuditLogInput{LogType: service.AuditLogTypeSystem, Action: "logs_deleted", Resource: "log_databases", UserID: userID, Method: c.Request.Method, Path: c.Request.URL.Path, StatusCode: http.StatusOK, IPAddress: c.ClientIP(), UserAgent: c.Request.UserAgent(), Metadata: `{"rows":` + strconv.FormatInt(deleted, 10) + `}`})
 	c.JSON(http.StatusOK, gin.H{"deleted": deleted})
+}
+
+func (api *SystemAPI) ExportConfiguration(c *gin.Context) {
+	var input configurationExportRequest
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid export request"})
+		return
+	}
+	sections, err := normalizeConfigurationSections(input.Sections)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	export, err := buildConfigurationExport(sections)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to export configuration"})
+		return
+	}
+	payload, err := json.MarshalIndent(export, "", "  ")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to encode configuration export"})
+		return
+	}
+	c.Header("Content-Disposition", `attachment; filename="flai-configuration-`+time.Now().Format("20060102-150405")+`.json"`)
+	c.Data(http.StatusOK, "application/json; charset=utf-8", payload)
+}
+
+func (api *SystemAPI) ImportConfiguration(c *gin.Context) {
+	var input configurationExport
+	decoder := json.NewDecoder(io.LimitReader(c.Request.Body, 20<<20))
+	if err := decoder.Decode(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid configuration file"})
+		return
+	}
+	if input.Version != configurationExportVersion {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Unsupported configuration export version"})
+		return
+	}
+	sections, err := normalizeConfigurationSections(input.Sections)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if err := importConfiguration(input, sections); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"imported_sections": input.Sections})
+}
+
+func normalizeConfigurationSections(values []string) (map[string]bool, error) {
+	if len(values) == 0 {
+		return nil, errors.New("Select at least one configuration section")
+	}
+	sections := make(map[string]bool, len(values))
+	for _, value := range values {
+		section := strings.ToLower(strings.TrimSpace(value))
+		if _, ok := configurationSections[section]; !ok {
+			return nil, errors.New("Unsupported configuration section")
+		}
+		sections[section] = true
+	}
+	return sections, nil
+}
+
+func buildConfigurationExport(sections map[string]bool) (configurationExport, error) {
+	selected := make([]string, 0, len(sections))
+	for _, section := range []string{configurationSectionSettings, configurationSectionChannels, configurationSectionModels, configurationSectionPrices} {
+		if sections[section] {
+			selected = append(selected, section)
+		}
+	}
+	export := configurationExport{Version: configurationExportVersion, ExportedAt: time.Now().UTC(), Sections: selected}
+	if sections[configurationSectionSettings] {
+		if err := model.DB.Order("key ASC").Find(&export.SystemSettings).Error; err != nil {
+			return configurationExport{}, err
+		}
+	}
+	if sections[configurationSectionChannels] {
+		var userChannels []model.UserChannel
+		var channels []model.Channel
+		if err := model.DB.Order("name ASC").Find(&userChannels).Error; err != nil {
+			return configurationExport{}, err
+		}
+		if err := model.DB.Preload("UserChannel").Order("name ASC, base_url ASC").Find(&channels).Error; err != nil {
+			return configurationExport{}, err
+		}
+		export.UserChannels = make([]configurationUserChannel, 0, len(userChannels))
+		for _, channel := range userChannels {
+			export.UserChannels = append(export.UserChannels, configurationUserChannel{Name: channel.Name, Description: channel.Description, Multiplier: channel.Multiplier, RoutingAlgorithm: channel.RoutingAlgorithm, Enabled: channel.Enabled})
+		}
+		export.Channels = make([]configurationChannel, 0, len(channels))
+		for _, channel := range channels {
+			userChannelName := ""
+			if channel.UserChannelID != nil {
+				userChannelName = channel.UserChannel.Name
+			}
+			export.Channels = append(export.Channels, configurationChannel{Name: channel.Name, Type: channel.Type, BaseURL: channel.BaseURL, APIKey: channel.APIKey, UserChannelName: userChannelName, Multiplier: channel.Multiplier, Priority: channel.Priority, Weight: channel.Weight, Enabled: channel.Enabled, PriceSyncEnabled: channel.PriceSyncEnabled, PriceSyncCron: channel.PriceSyncCron})
+		}
+	}
+	if sections[configurationSectionModels] || sections[configurationSectionPrices] {
+		var models []model.Model
+		if err := model.DB.Order("model_name ASC").Find(&models).Error; err != nil {
+			return configurationExport{}, err
+		}
+		if sections[configurationSectionModels] {
+			export.Models = make([]configurationModel, 0, len(models))
+			for _, item := range models {
+				export.Models = append(export.Models, configurationModel{ModelName: item.ModelName, Provider: item.Provider, ProviderIconURL: item.ProviderIconURL, Enabled: item.Enabled})
+			}
+		}
+		if sections[configurationSectionPrices] {
+			export.ModelPrices = make([]configurationModelPrice, 0, len(models))
+			for _, item := range models {
+				export.ModelPrices = append(export.ModelPrices, configurationModelPrice{ModelName: item.ModelName, QuotaType: item.QuotaType, InputPrice: item.InputPrice, OutputPrice: item.OutputPrice, CachedInputPrice: item.CachedInputPrice, CacheWriteInputPrice: item.CacheWriteInputPrice, CacheWrite1hInputPrice: item.CacheWrite1hInputPrice, ImageInputPrice: item.ImageInputPrice, ImageOutputPrice: item.ImageOutputPrice, AudioInputPrice: item.AudioInputPrice, AudioOutputPrice: item.AudioOutputPrice, InputPriceTiers: item.InputPriceTiers, OutputPriceTiers: item.OutputPriceTiers, CachedInputPriceTiers: item.CachedInputPriceTiers, CacheWriteInputPriceTiers: item.CacheWriteInputPriceTiers, CacheWrite1hInputPriceTiers: item.CacheWrite1hInputPriceTiers, ImageInputPriceTiers: item.ImageInputPriceTiers, ImageOutputPriceTiers: item.ImageOutputPriceTiers, AudioInputPriceTiers: item.AudioInputPriceTiers, AudioOutputPriceTiers: item.AudioOutputPriceTiers, VideoBillingConfig: item.VideoBillingConfig})
+			}
+			var configs []model.ModelConfig
+			if err := model.DB.Preload("Channel").Preload("Model").Order("channel_id ASC, model_id ASC, upstream_model_name ASC").Find(&configs).Error; err != nil {
+				return configurationExport{}, err
+			}
+			export.ModelConfigs = make([]configurationModelConfig, 0, len(configs))
+			for _, item := range configs {
+				export.ModelConfigs = append(export.ModelConfigs, configurationModelConfig{ChannelName: item.Channel.Name, ChannelBaseURL: item.Channel.BaseURL, ModelName: item.Model.ModelName, UpstreamModelName: item.UpstreamModelName, InputPrice: item.InputPrice, OutputPrice: item.OutputPrice, Enabled: item.Enabled})
+			}
+		}
+	}
+	return export, nil
+}
+
+func importConfiguration(input configurationExport, sections map[string]bool) error {
+	return model.DB.Transaction(func(tx *gorm.DB) error {
+		if sections[configurationSectionSettings] {
+			for _, entry := range input.SystemSettings {
+				entry.Key = strings.TrimSpace(entry.Key)
+				if entry.Key == "" {
+					return errors.New("System setting key is required")
+				}
+				if err := tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "key"}}, DoUpdates: clause.AssignmentColumns([]string{"value", "updated_at"})}).Create(&model.SystemSetting{Key: entry.Key, Value: entry.Value}).Error; err != nil {
+					return err
+				}
+			}
+		}
+		if sections[configurationSectionChannels] {
+			if err := importConfigurationChannels(tx, input.UserChannels, input.Channels); err != nil {
+				return err
+			}
+		}
+		if sections[configurationSectionModels] {
+			if err := importConfigurationModels(tx, input.Models); err != nil {
+				return err
+			}
+		}
+		if sections[configurationSectionPrices] {
+			if err := importConfigurationPrices(tx, input.ModelPrices, input.ModelConfigs); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func importConfigurationChannels(tx *gorm.DB, userChannels []configurationUserChannel, channels []configurationChannel) error {
+	userChannelIDs := map[string]uint{}
+	for _, item := range userChannels {
+		item.Name = strings.TrimSpace(item.Name)
+		if item.Name == "" {
+			return errors.New("User channel name is required")
+		}
+		var existing model.UserChannel
+		err := tx.Where("name = ?", item.Name).First(&existing).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			existing = model.UserChannel{Name: item.Name, Description: item.Description, Multiplier: item.Multiplier, RoutingAlgorithm: item.RoutingAlgorithm, Enabled: item.Enabled}
+			if err := tx.Create(&existing).Error; err != nil {
+				return err
+			}
+		} else if err != nil {
+			return err
+		} else if err := tx.Model(&existing).Updates(map[string]interface{}{"description": item.Description, "multiplier": item.Multiplier, "routing_algorithm": item.RoutingAlgorithm, "enabled": item.Enabled}).Error; err != nil {
+			return err
+		}
+		userChannelIDs[item.Name] = existing.ID
+	}
+	for _, item := range channels {
+		item.Name = strings.TrimSpace(item.Name)
+		item.BaseURL = strings.TrimSpace(item.BaseURL)
+		if item.Name == "" || item.BaseURL == "" {
+			return errors.New("Channel name and base URL are required")
+		}
+		if err := service.ValidateConfiguredHTTPURL(item.BaseURL); err != nil {
+			return errors.New("Channel has an unsafe or invalid base URL")
+		}
+		item.PriceSyncCron = service.NormalizePriceSyncCron(item.PriceSyncCron)
+		if err := service.ValidatePriceSyncCron(item.PriceSyncCron); err != nil {
+			return err
+		}
+		var userChannelID *uint
+		if item.UserChannelName = strings.TrimSpace(item.UserChannelName); item.UserChannelName != "" {
+			id, ok := userChannelIDs[item.UserChannelName]
+			if !ok {
+				var userChannel model.UserChannel
+				if err := tx.Where("name = ?", item.UserChannelName).First(&userChannel).Error; err != nil {
+					return errors.New("Referenced user channel was not found")
+				}
+				id = userChannel.ID
+			}
+			userChannelID = &id
+		}
+		values := map[string]interface{}{"type": item.Type, "api_key": item.APIKey, "user_channel_id": userChannelID, "multiplier": item.Multiplier, "priority": item.Priority, "weight": item.Weight, "enabled": item.Enabled, "price_sync_enabled": item.PriceSyncEnabled, "price_sync_cron": item.PriceSyncCron}
+		var existing model.Channel
+		err := tx.Where("name = ? AND base_url = ?", item.Name, item.BaseURL).First(&existing).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			existing = model.Channel{Name: item.Name, Type: item.Type, BaseURL: item.BaseURL, APIKey: item.APIKey, UserChannelID: userChannelID, Multiplier: item.Multiplier, Priority: item.Priority, Weight: item.Weight, Enabled: item.Enabled, PriceSyncEnabled: item.PriceSyncEnabled, PriceSyncCron: item.PriceSyncCron}
+			if err := tx.Create(&existing).Error; err != nil {
+				return err
+			}
+		} else if err != nil {
+			return err
+		} else if err := tx.Model(&existing).Updates(values).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func importConfigurationModels(tx *gorm.DB, models []configurationModel) error {
+	for _, item := range models {
+		item.ModelName = strings.TrimSpace(item.ModelName)
+		if item.ModelName == "" {
+			return errors.New("Model name is required")
+		}
+		values := map[string]interface{}{"provider": item.Provider, "provider_icon_url": item.ProviderIconURL, "enabled": item.Enabled}
+		var existing model.Model
+		err := tx.Where("model_name = ?", item.ModelName).First(&existing).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			if err := tx.Create(&model.Model{ModelName: item.ModelName, Provider: item.Provider, ProviderIconURL: item.ProviderIconURL, Enabled: item.Enabled}).Error; err != nil {
+				return err
+			}
+		} else if err != nil {
+			return err
+		} else if err := tx.Model(&existing).Updates(values).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func importConfigurationPrices(tx *gorm.DB, prices []configurationModelPrice, configs []configurationModelConfig) error {
+	models := map[string]model.Model{}
+	for _, item := range prices {
+		item.ModelName = strings.TrimSpace(item.ModelName)
+		if item.ModelName == "" {
+			return errors.New("Model price requires a model name")
+		}
+		var existing model.Model
+		if err := tx.Where("model_name = ?", item.ModelName).First(&existing).Error; err != nil {
+			return errors.New("Model price references a model that was not found")
+		}
+		existing.QuotaType = item.QuotaType
+		existing.InputPrice = item.InputPrice
+		existing.OutputPrice = item.OutputPrice
+		existing.CachedInputPrice = item.CachedInputPrice
+		existing.CacheWriteInputPrice = item.CacheWriteInputPrice
+		existing.CacheWrite1hInputPrice = item.CacheWrite1hInputPrice
+		existing.ImageInputPrice = item.ImageInputPrice
+		existing.ImageOutputPrice = item.ImageOutputPrice
+		existing.AudioInputPrice = item.AudioInputPrice
+		existing.AudioOutputPrice = item.AudioOutputPrice
+		existing.InputPriceTiers = item.InputPriceTiers
+		existing.OutputPriceTiers = item.OutputPriceTiers
+		existing.CachedInputPriceTiers = item.CachedInputPriceTiers
+		existing.CacheWriteInputPriceTiers = item.CacheWriteInputPriceTiers
+		existing.CacheWrite1hInputPriceTiers = item.CacheWrite1hInputPriceTiers
+		existing.ImageInputPriceTiers = item.ImageInputPriceTiers
+		existing.ImageOutputPriceTiers = item.ImageOutputPriceTiers
+		existing.AudioInputPriceTiers = item.AudioInputPriceTiers
+		existing.AudioOutputPriceTiers = item.AudioOutputPriceTiers
+		existing.VideoBillingConfig = item.VideoBillingConfig
+		if err := tx.Save(&existing).Error; err != nil {
+			return err
+		}
+		models[item.ModelName] = existing
+	}
+	for _, item := range configs {
+		item.ChannelName = strings.TrimSpace(item.ChannelName)
+		item.ChannelBaseURL = strings.TrimSpace(item.ChannelBaseURL)
+		item.ModelName = strings.TrimSpace(item.ModelName)
+		if item.ChannelName == "" || item.ChannelBaseURL == "" || item.ModelName == "" {
+			return errors.New("Model configuration is missing a channel or model reference")
+		}
+		var channel model.Channel
+		if err := tx.Where("name = ? AND base_url = ?", item.ChannelName, item.ChannelBaseURL).First(&channel).Error; err != nil {
+			return errors.New("Model configuration references a channel that was not found")
+		}
+		modelItem, ok := models[item.ModelName]
+		if !ok {
+			if err := tx.Where("model_name = ?", item.ModelName).First(&modelItem).Error; err != nil {
+				return errors.New("Model configuration references a model that was not found")
+			}
+		}
+		var existing model.ModelConfig
+		err := tx.Where("channel_id = ? AND model_id = ? AND upstream_model_name = ?", channel.ID, modelItem.ID, item.UpstreamModelName).First(&existing).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			existing = model.ModelConfig{ChannelID: channel.ID, ModelID: modelItem.ID, UpstreamModelName: item.UpstreamModelName, InputPrice: item.InputPrice, OutputPrice: item.OutputPrice, Enabled: item.Enabled}
+			if err := tx.Create(&existing).Error; err != nil {
+				return err
+			}
+		} else if err != nil {
+			return err
+		} else if err := tx.Model(&existing).Updates(map[string]interface{}{"input_price": item.InputPrice, "output_price": item.OutputPrice, "enabled": item.Enabled}).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (api *SystemAPI) UpdateSettings(c *gin.Context) {
