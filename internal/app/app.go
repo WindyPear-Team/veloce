@@ -37,6 +37,9 @@ func Run() error {
 	if err := service.InitCommunityAdvancedChatFeatures(); err != nil {
 		return err
 	}
+	if err := service.InitCloudSandboxFeatures(); err != nil {
+		return err
+	}
 	if err := messagechannel.InitFeatures(); err != nil {
 		return err
 	}
@@ -614,6 +617,7 @@ func Run() error {
 		admin.GET("/stats", statsAPI.GetDashboardStats)
 		admin.GET("/channel-usage", statsAPI.GetChannelUsage)
 		service.RegisterCommunityAdvancedChatAdminRoutes(admin)
+		service.RegisterCloudSandboxAdminRoutes(admin)
 		messagechannel.RegisterAdminRoutes(admin)
 		service.ApplyAdminRouteHooks(admin)
 	}
@@ -746,6 +750,7 @@ func Run() error {
 		userGroup.GET("/enterprise/quota-ledger", middleware.PermissionMiddleware("cost.read"), enterpriseAPI.ListQuotaLedger)
 		service.RegisterPersonalCompanyUserRoutes(userGroup)
 		service.RegisterCommunityAdvancedChatUserRoutes(userGroup)
+		service.RegisterCloudSandboxUserRoutes(userGroup)
 		messagechannel.RegisterUserRoutes(userGroup)
 		service.ApplyUserRouteHooks(userGroup)
 	}

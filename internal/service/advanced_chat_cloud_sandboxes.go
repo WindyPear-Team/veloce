@@ -91,6 +91,13 @@ func registerAdvancedChatCloudSandboxAdminRoutes(group *gin.RouterGroup) {
 	group.GET("/advanced-chat/sandbox-hosts", api.listCloudSandboxHosts)
 	group.POST("/advanced-chat/sandbox-hosts", api.createCloudSandboxHost)
 	group.PUT("/advanced-chat/sandbox-hosts/:id", api.updateCloudSandboxHost)
+	group.POST("/advanced-chat/sandbox-hosts/:id/token", api.rotateCloudSandboxHostToken)
+}
+
+// RegisterCloudSandboxAdminRoutes keeps the managed-sandbox control plane
+// independent from the legacy advanced-chat feature registration path.
+func RegisterCloudSandboxAdminRoutes(group *gin.RouterGroup) {
+	registerAdvancedChatCloudSandboxAdminRoutes(group)
 }
 
 func registerAdvancedChatCloudSandboxUserRoutes(group *gin.RouterGroup) {
@@ -101,6 +108,21 @@ func registerAdvancedChatCloudSandboxUserRoutes(group *gin.RouterGroup) {
 	group.GET("/advanced-chat/cloud-sandboxes/:id", api.getCloudSandbox)
 	group.DELETE("/advanced-chat/cloud-sandboxes/:id", api.deleteCloudSandbox)
 	group.GET("/advanced-chat/cloud-sandboxes/:id/charges", api.listCloudSandboxCharges)
+}
+
+// RegisterCloudSandboxUserRoutes registers user sandbox management directly.
+func RegisterCloudSandboxUserRoutes(group *gin.RouterGroup) {
+	registerAdvancedChatCloudSandboxUserRoutes(group)
+}
+
+// InitCloudSandboxFeatures owns its schema independently from the legacy
+// advanced-chat startup hooks.
+func InitCloudSandboxFeatures() error {
+	return model.DB.AutoMigrate(
+		&AdvancedChatCloudSandboxHost{},
+		&AdvancedChatCloudSandbox{},
+		&AdvancedChatCloudSandboxCharge{},
+	)
 }
 
 func requireCloudSandboxAdmin(c *gin.Context) (*model.User, bool) {
@@ -141,7 +163,8 @@ func (api *advancedChatAPI) listCloudSandboxHosts(c *gin.Context) {
 }
 
 func (api *advancedChatAPI) createCloudSandboxHost(c *gin.Context) {
-	if _, ok := requireCloudSandboxAdmin(c); !ok {
+	admin, ok := requireCloudSandboxAdmin(c)
+	if !ok {
 		return
 	}
 	var input advancedChatCloudSandboxHostInput
@@ -168,7 +191,7 @@ func (api *advancedChatAPI) createCloudSandboxHost(c *gin.Context) {
 		return
 	}
 	now := time.Now()
-	device := AdvancedChatConnectorDevice{ID: newAdvancedChatID("acd"), UserID: 0, TokenHash: hashAdvancedChatConnectorToken(token), Name: name, Kind: advancedChatConnectorDeviceKindCLI, Mode: advancedChatConnectorModeSandboxd, Status: advancedChatConnectorDeviceStatusOffline, Workspaces: "[]", CreatedAt: now, UpdatedAt: now}
+	device := AdvancedChatConnectorDevice{ID: newAdvancedChatID("acd"), UserID: admin.ID, TokenHash: hashAdvancedChatConnectorToken(token), Name: name, Kind: advancedChatConnectorDeviceKindCLI, Mode: advancedChatConnectorModeSandboxd, Status: advancedChatConnectorDeviceStatusOffline, Workspaces: "[]", CreatedAt: now, UpdatedAt: now}
 	host := AdvancedChatCloudSandboxHost{ID: newAdvancedChatID("ash"), Name: name, ConnectorDeviceID: device.ID, Enabled: input.Enabled == nil || *input.Enabled, SecurityPolicy: policy, RuntimePriceHour: input.RuntimePriceHour, CPUPriceHour: input.CPUPriceHour, MemoryPriceGBHour: input.MemoryPriceGBHour, StoragePriceGBHour: input.StoragePriceGBHour, RuntimeMultiplier: input.RuntimeMultiplier, CreatedAt: now, UpdatedAt: now}
 	if err := model.DB.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&device).Error; err != nil {
@@ -230,6 +253,27 @@ func (api *advancedChatAPI) updateCloudSandboxHost(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, host)
+}
+
+func (api *advancedChatAPI) rotateCloudSandboxHostToken(c *gin.Context) {
+	if _, ok := requireCloudSandboxAdmin(c); !ok {
+		return
+	}
+	var host AdvancedChatCloudSandboxHost
+	if err := model.DB.Where("id = ?", strings.TrimSpace(c.Param("id"))).First(&host).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Sandbox host not found"})
+		return
+	}
+	token, err := newAdvancedChatConnectorToken()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create sandbox host token"})
+		return
+	}
+	if err := model.DB.Model(&AdvancedChatConnectorDevice{}).Where("id = ? AND mode = ?", host.ConnectorDeviceID, advancedChatConnectorModeSandboxd).Updates(map[string]interface{}{"token_hash": hashAdvancedChatConnectorToken(token), "updated_at": time.Now()}).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to rotate sandbox host token"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"host": host, "token": token, "command": "veloce-app -mode sandboxd -server <server-url> -token " + token})
 }
 
 func (api *advancedChatAPI) listAvailableCloudSandboxHosts(c *gin.Context) {
