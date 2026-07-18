@@ -9,9 +9,9 @@ import (
 
 type personalCompanyAPI struct{}
 
-// RegisterPersonalCompanyUserRoutes keeps the personal-company surface outside
-// enterprise routing and permissions. Every handler enforces personal mode and
-// ownership itself.
+// RegisterPersonalCompanyUserRoutes keeps the Studio Operations surface outside
+// enterprise routing and permissions. Every handler enforces Studio ownership
+// itself, independent of the deployment's system mode.
 func RegisterPersonalCompanyUserRoutes(group *gin.RouterGroup) {
 	api := &personalCompanyAPI{}
 	group.GET("/personal-company", api.getCompany)
@@ -48,10 +48,6 @@ func RegisterPersonalCompanyUserRoutes(group *gin.RouterGroup) {
 }
 
 func (api *personalCompanyAPI) personalCompanyContext(c *gin.Context) (*personalCompanyRequestContext, bool) {
-	if !PersonalModeEnabled() {
-		c.JSON(http.StatusConflict, gin.H{"error": "Personal Company is available only in personal mode"})
-		return nil, false
-	}
 	user, ok := currentUserFromContext(c)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
