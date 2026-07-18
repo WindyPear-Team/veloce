@@ -47,6 +47,7 @@ type advancedChatCompletionInput struct {
 	KnowledgeBaseIDs         []string                        `json:"knowledge_base_ids"`
 	ConnectorDeviceID        string                          `json:"connector_device_id"`
 	ConnectorWorkspacePath   string                          `json:"connector_workspace_path"`
+	CloudSandboxID           string                          `json:"cloud_sandbox_id"`
 	ConnectorAutoApprove     bool                            `json:"connector_auto_approve"`
 	ConnectorApprovalMode    string                          `json:"connector_approval_mode"`
 	ConnectorCommandPrefixes []string                        `json:"connector_command_prefixes"`
@@ -172,6 +173,7 @@ func (api *advancedChatAPI) completeChat(c *gin.Context) {
 	}
 	input.ConnectorDeviceID = ""
 	input.ConnectorWorkspacePath = ""
+	input.CloudSandboxID = ""
 	input.ConnectorAutoApprove = false
 	input.ConnectorApprovalMode = advancedChatConnectorApprovalManual
 	input.ConnectorCommandPrefixes = nil

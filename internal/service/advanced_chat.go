@@ -284,6 +284,9 @@ func initAdvancedChatFeatures() error {
 		&AdvancedChatKnowledgeChunk{},
 		&AdvancedChatConnectorDevice{},
 		&AdvancedChatConnectorTask{},
+		&AdvancedChatCloudSandboxHost{},
+		&AdvancedChatCloudSandbox{},
+		&AdvancedChatCloudSandboxCharge{},
 		&AdvancedChatStaticSite{},
 		&AdvancedChatDelivery{},
 		&AdvancedChatScheduledTask{},
@@ -300,6 +303,7 @@ func registerAdvancedChatAdminRoutes(group *gin.RouterGroup) {
 	api := &advancedChatAPI{}
 	group.GET("/advanced-chat/settings", api.getAdminSettings)
 	group.PUT("/advanced-chat/settings", api.updateAdminSettings)
+	registerAdvancedChatCloudSandboxAdminRoutes(group)
 }
 
 func registerAdvancedChatUserRoutes(group *gin.RouterGroup) {
@@ -387,6 +391,7 @@ func registerAdvancedChatUserRoutes(group *gin.RouterGroup) {
 	group.PUT("/advanced-chat/scheduled-tasks/:id", api.updateScheduledTask)
 	group.DELETE("/advanced-chat/scheduled-tasks/:id", api.deleteScheduledTask)
 	group.POST("/advanced-chat/scheduled-tasks/:id/run", api.runScheduledTask)
+	registerAdvancedChatCloudSandboxUserRoutes(group)
 }
 
 func (api *advancedChatAPI) getAdminSettings(c *gin.Context) {

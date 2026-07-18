@@ -55,6 +55,7 @@ type AdvancedChatSession struct {
 	KnowledgeBaseIDs         string     `gorm:"type:text;not null;default:'[]'" json:"-"`
 	ConnectorDeviceID        string     `gorm:"size:80" json:"connector_device_id"`
 	ConnectorWorkspacePath   string     `gorm:"type:text" json:"connector_workspace_path"`
+	CloudSandboxID           string     `gorm:"size:80;index" json:"cloud_sandbox_id"`
 	ConnectorAutoApprove     bool       `gorm:"default:false" json:"connector_auto_approve"`
 	ConnectorApprovalMode    string     `gorm:"size:20;not null;default:'manual'" json:"connector_approval_mode"`
 	ConnectorCommandPrefixes string     `gorm:"type:text;not null;default:'[]'" json:"-"`
@@ -162,6 +163,7 @@ type advancedChatSessionResponse struct {
 	KnowledgeBaseIDs         []string                      `json:"knowledge_base_ids"`
 	ConnectorDeviceID        string                        `json:"connector_device_id,omitempty"`
 	ConnectorWorkspacePath   string                        `json:"connector_workspace_path,omitempty"`
+	CloudSandboxID           string                        `json:"cloud_sandbox_id,omitempty"`
 	ConnectorAutoApprove     bool                          `json:"connector_auto_approve"`
 	ConnectorApprovalMode    string                        `json:"connector_approval_mode"`
 	ConnectorCommandPrefixes []string                      `json:"connector_command_prefixes"`
@@ -261,6 +263,7 @@ type advancedChatSessionInput struct {
 	KnowledgeBaseIDs         []string                          `json:"knowledge_base_ids"`
 	ConnectorDeviceID        string                            `json:"connector_device_id"`
 	ConnectorWorkspacePath   string                            `json:"connector_workspace_path"`
+	CloudSandboxID           string                            `json:"cloud_sandbox_id"`
 	ConnectorAutoApprove     bool                              `json:"connector_auto_approve"`
 	ConnectorApprovalMode    string                            `json:"connector_approval_mode"`
 	ConnectorCommandPrefixes []string                          `json:"connector_command_prefixes"`
@@ -301,6 +304,7 @@ type preparedAdvancedChatAssistantRun struct {
 	connectorApprovalMode    string
 	approvalChecker          *advancedChatAgentStudioApprovalChecker
 	connectorCommandPrefixes []string
+	cloudSandboxID           string
 	delivery                 *AdvancedChatDelivery
 	timeout                  time.Duration
 }
@@ -1165,15 +1169,37 @@ func prepareAdvancedChatAssistantRun(ctx context.Context, userID uint, input adv
 			servers = []AdvancedChatMCPServer{}
 		}
 	}
-	if (strings.TrimSpace(input.ConnectorDeviceID) != "" || strings.TrimSpace(input.ConnectorWorkspacePath) != "") && !advancedChatAssistantConnectorToolsEnabled() {
+	input.CloudSandboxID = strings.TrimSpace(input.CloudSandboxID)
+	if (strings.TrimSpace(input.ConnectorDeviceID) != "" || strings.TrimSpace(input.ConnectorWorkspacePath) != "" || input.CloudSandboxID != "") && !advancedChatAssistantConnectorToolsEnabled() {
 		return preparedAdvancedChatAssistantRun{}, http.StatusBadRequest, "Workspace tools are disabled", errors.New("workspace tools disabled")
 	}
+	if input.CloudSandboxID != "" {
+		if strings.TrimSpace(input.ConnectorDeviceID) != "" || strings.TrimSpace(input.ConnectorWorkspacePath) != "" {
+			return preparedAdvancedChatAssistantRun{}, http.StatusBadRequest, "Choose either a cloud sandbox or a local connector", errors.New("conflicting execution target")
+		}
+		_, _, sandboxDevice, sandboxErr := loadCloudSandboxForUser(userID, input.CloudSandboxID)
+		if sandboxErr != nil {
+			return preparedAdvancedChatAssistantRun{}, http.StatusBadRequest, "Cloud sandbox is unavailable", sandboxErr
+		}
+		input.ConnectorDeviceID = sandboxDevice.ID
+		input.ConnectorWorkspacePath = ""
+		// Cloud sandboxes are administrator-governed execution targets. The
+		// host policy replaces per-user connector approval prompts.
+		input.ConnectorApprovalMode = advancedChatConnectorApprovalFullAccess
+	}
 	connectorDevice, connectorWorkspace, err := loadAdvancedChatConnectorForRun(userID, input.ConnectorDeviceID, input.ConnectorWorkspacePath)
+	if input.CloudSandboxID != "" {
+		_, _, sandboxDevice, sandboxErr := loadCloudSandboxForUser(userID, input.CloudSandboxID)
+		if sandboxErr != nil {
+			return preparedAdvancedChatAssistantRun{}, http.StatusBadRequest, "Cloud sandbox is unavailable", sandboxErr
+		}
+		connectorDevice, connectorWorkspace, err = &sandboxDevice, "", nil
+	}
 	if err != nil {
 		return preparedAdvancedChatAssistantRun{}, http.StatusBadRequest, err.Error(), err
 	}
 	workspaceSkills := []advancedChatWorkspaceSkill{}
-	if connectorDevice != nil {
+	if connectorDevice != nil && input.CloudSandboxID == "" {
 		workspaceSkills, err = loadAdvancedChatWorkspaceSkillsForRun(ctx, userID, connectorDevice, connectorWorkspace)
 		if err != nil {
 			return preparedAdvancedChatAssistantRun{}, http.StatusBadRequest, err.Error(), err
@@ -1302,6 +1328,7 @@ func prepareAdvancedChatAssistantRun(ctx context.Context, userID uint, input adv
 		connectorApprovalMode:    input.ConnectorApprovalMode,
 		approvalChecker:          personalApprovalChecker,
 		connectorCommandPrefixes: input.ConnectorCommandPrefixes,
+		cloudSandboxID:           input.CloudSandboxID,
 	}, http.StatusOK, "", nil
 }
 
@@ -1454,6 +1481,7 @@ func saveAdvancedChatSessionSnapshot(userID uint, sessionID string, input advanc
 	commandPrefixesJSON, _ := json.Marshal(commandPrefixes)
 	connectorDeviceID := strings.TrimSpace(input.ConnectorDeviceID)
 	connectorWorkspacePath := strings.TrimSpace(input.ConnectorWorkspacePath)
+	cloudSandboxID := strings.TrimSpace(input.CloudSandboxID)
 	connectorApprovalMode := normalizeAdvancedChatConnectorApprovalMode(input.ConnectorApprovalMode)
 	if strings.TrimSpace(input.ConnectorApprovalMode) == "" {
 		connectorApprovalMode = legacyConnectorApprovalMode(input.ConnectorAutoApprove)
@@ -1462,6 +1490,7 @@ func saveAdvancedChatSessionSnapshot(userID uint, sessionID string, input advanc
 	if runMode == advancedChatModeChat {
 		connectorDeviceID = ""
 		connectorWorkspacePath = ""
+		cloudSandboxID = ""
 		connectorAutoApprove = false
 		connectorApprovalMode = advancedChatConnectorApprovalManual
 		commandPrefixes = []string{}
@@ -1470,10 +1499,21 @@ func saveAdvancedChatSessionSnapshot(userID uint, sessionID string, input advanc
 	if runMode == advancedChatModeAgentGroup && agentGroupID == "" {
 		return advancedChatSessionResponse{}, http.StatusBadRequest, "Studio is required", errors.New("studio required")
 	}
-	if (connectorDeviceID != "" || connectorWorkspacePath != "") && (runMode == advancedChatModeAssistant || runMode == advancedChatModeAgentGroup) && !advancedChatAssistantConnectorToolsEnabled() {
+	if (connectorDeviceID != "" || connectorWorkspacePath != "" || cloudSandboxID != "") && (runMode == advancedChatModeAssistant || runMode == advancedChatModeAgentGroup) && !advancedChatAssistantConnectorToolsEnabled() {
 		return advancedChatSessionResponse{}, http.StatusBadRequest, "Workspace tools are disabled", errors.New("workspace tools disabled")
 	}
-	if connectorDeviceID != "" || connectorWorkspacePath != "" {
+	if cloudSandboxID != "" {
+		if connectorWorkspacePath != "" {
+			return advancedChatSessionResponse{}, http.StatusBadRequest, "Cloud sandboxes do not accept a workspace path", errors.New("cloud sandbox workspace path")
+		}
+		_, _, device, err := loadCloudSandboxForUser(userID, cloudSandboxID)
+		if err != nil {
+			return advancedChatSessionResponse{}, http.StatusBadRequest, "Cloud sandbox is unavailable", err
+		}
+		connectorDeviceID = device.ID
+		connectorAutoApprove = true
+		connectorApprovalMode = advancedChatConnectorApprovalFullAccess
+	} else if connectorDeviceID != "" || connectorWorkspacePath != "" {
 		if _, workspacePath, err := loadAdvancedChatConnectorForSession(userID, connectorDeviceID, connectorWorkspacePath); err != nil {
 			return advancedChatSessionResponse{}, http.StatusBadRequest, err.Error(), err
 		} else {
@@ -1525,6 +1565,7 @@ func saveAdvancedChatSessionSnapshot(userID uint, sessionID string, input advanc
 			KnowledgeBaseIDs:         string(knowledgeBaseIDsJSON),
 			ConnectorDeviceID:        connectorDeviceID,
 			ConnectorWorkspacePath:   connectorWorkspacePath,
+			CloudSandboxID:           cloudSandboxID,
 			ConnectorAutoApprove:     connectorAutoApprove,
 			ConnectorApprovalMode:    connectorApprovalMode,
 			ConnectorCommandPrefixes: string(commandPrefixesJSON),
@@ -1549,6 +1590,7 @@ func saveAdvancedChatSessionSnapshot(userID uint, sessionID string, input advanc
 				"knowledge_base_ids":         session.KnowledgeBaseIDs,
 				"connector_device_id":        session.ConnectorDeviceID,
 				"connector_workspace_path":   session.ConnectorWorkspacePath,
+				"cloud_sandbox_id":           session.CloudSandboxID,
 				"connector_auto_approve":     session.ConnectorAutoApprove,
 				"connector_approval_mode":    session.ConnectorApprovalMode,
 				"connector_command_prefixes": session.ConnectorCommandPrefixes,
@@ -1681,6 +1723,7 @@ func createAdvancedChatAssistantRun(userID uint, prepared preparedAdvancedChatAs
 			KnowledgeBaseIDs:         string(knowledgeBaseIDs),
 			ConnectorDeviceID:        strings.TrimSpace(prepared.input.ConnectorDeviceID),
 			ConnectorWorkspacePath:   prepared.connectorWorkspace,
+			CloudSandboxID:           prepared.input.CloudSandboxID,
 			ConnectorAutoApprove:     prepared.connectorApprovalMode == advancedChatConnectorApprovalFullAccess,
 			ConnectorApprovalMode:    prepared.connectorApprovalMode,
 			ConnectorCommandPrefixes: string(commandPrefixes),
@@ -1705,6 +1748,7 @@ func createAdvancedChatAssistantRun(userID uint, prepared preparedAdvancedChatAs
 				"knowledge_base_ids":         session.KnowledgeBaseIDs,
 				"connector_device_id":        session.ConnectorDeviceID,
 				"connector_workspace_path":   session.ConnectorWorkspacePath,
+				"cloud_sandbox_id":           session.CloudSandboxID,
 				"connector_auto_approve":     session.ConnectorAutoApprove,
 				"connector_approval_mode":    session.ConnectorApprovalMode,
 				"connector_command_prefixes": session.ConnectorCommandPrefixes,
@@ -1959,7 +2003,7 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 			bindings = map[string]mcpToolBinding{}
 		}
 	}
-	allConnectorTools, allConnectorBindings := advancedChatConnectorToolsWithApprovalMode(prepared.connectorDevice, prepared.connectorWorkspace, prepared.connectorApprovalMode, prepared.connectorCommandPrefixes)
+	allConnectorTools, allConnectorBindings := advancedChatConnectorToolsWithApprovalModeAndSandbox(prepared.connectorDevice, prepared.connectorWorkspace, prepared.connectorApprovalMode, prepared.connectorCommandPrefixes, prepared.cloudSandboxID)
 	connectorTools := allConnectorTools
 	connectorBindings := allConnectorBindings
 	if studioRoleActive {
@@ -2812,6 +2856,7 @@ func createPersistedAdvancedChatCompletionSession(userID uint, input advancedCha
 		KnowledgeBaseIDs:         input.KnowledgeBaseIDs,
 		ConnectorDeviceID:        input.ConnectorDeviceID,
 		ConnectorWorkspacePath:   input.ConnectorWorkspacePath,
+		CloudSandboxID:           input.CloudSandboxID,
 		ConnectorAutoApprove:     input.ConnectorAutoApprove,
 		ConnectorApprovalMode:    normalizeAdvancedChatConnectorApprovalMode(input.ConnectorApprovalMode),
 		ConnectorCommandPrefixes: input.ConnectorCommandPrefixes,
@@ -3276,6 +3321,7 @@ func advancedChatSessionResponseFromModel(session AdvancedChatSession) (advanced
 		KnowledgeBaseIDs:         decodeStringList(session.KnowledgeBaseIDs),
 		ConnectorDeviceID:        session.ConnectorDeviceID,
 		ConnectorWorkspacePath:   session.ConnectorWorkspacePath,
+		CloudSandboxID:           session.CloudSandboxID,
 		ConnectorAutoApprove:     session.ConnectorAutoApprove,
 		ConnectorApprovalMode:    normalizeAdvancedChatConnectorApprovalMode(session.ConnectorApprovalMode),
 		ConnectorCommandPrefixes: decodeStringList(session.ConnectorCommandPrefixes),

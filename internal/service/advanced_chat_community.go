@@ -31,6 +31,9 @@ func InitCommunityAdvancedChatFeatures() error {
 		&AdvancedChatKnowledgeChunk{},
 		&AdvancedChatConnectorDevice{},
 		&AdvancedChatConnectorTask{},
+		&AdvancedChatCloudSandboxHost{},
+		&AdvancedChatCloudSandbox{},
+		&AdvancedChatCloudSandboxCharge{},
 		&AdvancedChatStaticSite{},
 	)
 	if err == nil {
@@ -67,6 +70,7 @@ func RegisterCommunityAdvancedChatAdminRoutes(group *gin.RouterGroup) {
 	api := &advancedChatAPI{}
 	group.GET("/advanced-chat/settings", api.getAdminSettings)
 	group.PUT("/advanced-chat/settings", api.updateAdminSettings)
+	registerAdvancedChatCloudSandboxAdminRoutes(group)
 }
 
 func RegisterCommunityAdvancedChatUserRoutes(group *gin.RouterGroup) {
@@ -142,6 +146,7 @@ func RegisterCommunityAdvancedChatUserRoutes(group *gin.RouterGroup) {
 	group.GET("/advanced-chat/skill-packages/:id/files", api.readSkillPackageFile)
 	group.POST("/advanced-chat/skill-packages", api.uploadSkillPackage)
 	group.DELETE("/advanced-chat/skill-packages/:id", api.deleteSkillPackage)
+	registerAdvancedChatCloudSandboxUserRoutes(group)
 }
 
 func RegisterCommunityAdvancedChatPublicRoutes(group *gin.RouterGroup) {
