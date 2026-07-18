@@ -90,6 +90,7 @@ func (s *StatusService) CheckMonitor(ctx context.Context, monitor *model.StatusM
 	status, latencyMs, statusCode, message := s.performCheck(ctx, monitor)
 	checkedAt := time.Now()
 	check := model.StatusCheck{
+		ID:         model.NextLogID(),
 		MonitorID:  monitor.ID,
 		Status:     status,
 		LatencyMs:  latencyMs,
@@ -99,9 +100,6 @@ func (s *StatusService) CheckMonitor(ctx context.Context, monitor *model.StatusM
 	}
 
 	err := model.DB.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Create(&check).Error; err != nil {
-			return err
-		}
 		updates := map[string]interface{}{
 			"last_status":      status,
 			"last_latency_ms":  latencyMs,
@@ -112,9 +110,20 @@ func (s *StatusService) CheckMonitor(ctx context.Context, monitor *model.StatusM
 		if err := tx.Model(&model.StatusMonitor{}).Where("id = ?", monitor.ID).Updates(updates).Error; err != nil {
 			return err
 		}
-		return cleanupStatusChecks(tx, monitor.ID, monitor.RetentionHours, checkedAt)
+		return nil
 	})
 	if err != nil {
+		return model.StatusCheck{}, err
+	}
+	database, err := model.LogDB()
+	if err != nil {
+		return model.StatusCheck{}, err
+	}
+	if err := database.Create(&check).Error; err != nil {
+		return model.StatusCheck{}, err
+	}
+	retention := statusRetentionHours(monitor.RetentionHours)
+	if err := database.Where("monitor_id = ? AND checked_at < ?", monitor.ID, checkedAt.Add(-time.Duration(retention)*time.Hour)).Delete(&model.StatusCheck{}).Error; err != nil {
 		return model.StatusCheck{}, err
 	}
 	return check, nil
@@ -216,12 +225,6 @@ func tcpTargetAddress(target string) (string, error) {
 		return "", errors.New("tcp target must include a port")
 	}
 	return net.JoinHostPort(target, defaultPort), nil
-}
-
-func cleanupStatusChecks(tx *gorm.DB, monitorID uint, retentionHours int, now time.Time) error {
-	retention := statusRetentionHours(retentionHours)
-	cutoff := now.Add(-time.Duration(retention) * time.Hour)
-	return tx.Where("monitor_id = ? AND checked_at < ?", monitorID, cutoff).Delete(&model.StatusCheck{}).Error
 }
 
 func normalizeStatusCheckType(value string) string {

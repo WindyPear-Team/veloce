@@ -1299,6 +1299,7 @@ func (s *ProxyService) billUsageAndReturnCost(c *gin.Context, user *model.User, 
 	}
 
 	tokenLog := model.TokenLog{
+		ID:                      model.NextLogID(),
 		UserID:                  user.ID,
 		APIKeyID:                apiKeyID(apiKey),
 		UserChannelID:           channel.UserChannelID,
@@ -1318,16 +1319,15 @@ func (s *ProxyService) billUsageAndReturnCost(c *gin.Context, user *model.User, 
 		UserAgent:               c.Request.UserAgent(),
 		CreatedAt:               time.Now(),
 	}
-	if err := tx.Create(&tokenLog).Error; err != nil {
-		tx.Rollback()
-		return decimal.Zero, http.StatusInternalServerError, "Failed to log usage", err
-	}
 	if err := applyReferralCommission(tx, user, tokenLog.ID, cost, referralRate); err != nil {
 		tx.Rollback()
 		return decimal.Zero, http.StatusInternalServerError, "Failed to apply referral commission", err
 	}
 	if err := tx.Commit().Error; err != nil {
 		return decimal.Zero, http.StatusInternalServerError, "Failed to commit usage", err
+	}
+	if err := model.RecordTokenLog(tokenLog); err != nil {
+		log.Printf("failed to record token log: %v", err)
 	}
 
 	return cost, 0, "", nil

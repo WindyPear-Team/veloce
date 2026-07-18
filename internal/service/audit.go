@@ -51,11 +51,24 @@ func (s *LogCleanupService) Start() {
 }
 
 func (s *LogCleanupService) Run() {
-	cleanupAuditLogs(AuditLogTypeAPI, logRetentionDays("log_retention_api_days"))
-	cleanupAuditLogs(AuditLogTypeLogin, logRetentionDays("log_retention_login_days"))
-	cleanupAuditLogs(AuditLogTypeAdmin, logRetentionDays("log_retention_admin_days"))
-	cleanupAuditLogs(AuditLogTypeSystem, logRetentionDays("log_retention_system_days"))
-	cleanupTokenLogs(logRetentionDays("log_retention_token_days"))
+	retentionDays := logRetentionDays("log_retention_days")
+	if retentionDays <= 0 {
+		return
+	}
+	deleted, err := model.CleanupLogsBefore(time.Now().AddDate(0, 0, -retentionDays))
+	if err != nil {
+		log.Printf("failed to cleanup log databases: %v", err)
+		return
+	}
+	if deleted > 0 {
+		RecordAuditLog(AuditLogInput{
+			LogType:  AuditLogTypeSystem,
+			Action:   "log_cleanup",
+			Resource: "log_databases",
+			Message:  "cleaned expired logs",
+			Metadata: `{"rows":` + strconv.FormatInt(deleted, 10) + `}`,
+		})
+	}
 }
 
 func RecordAuditLog(input AuditLogInput) {
@@ -65,6 +78,7 @@ func RecordAuditLog(input AuditLogInput) {
 	}
 	action := truncateAuditValue(firstNonEmptyString(strings.TrimSpace(input.Action), logType), 100)
 	record := model.AuditLog{
+		ID:         model.NextLogID(),
 		LogType:    logType,
 		Action:     action,
 		Resource:   truncateAuditValue(input.Resource, 255),
@@ -80,7 +94,12 @@ func RecordAuditLog(input AuditLogInput) {
 		Metadata:   input.Metadata,
 		DurationMs: input.DurationMs,
 	}
-	if err := model.DB.Create(&record).Error; err != nil {
+	database, err := model.LogDB()
+	if err != nil {
+		log.Printf("failed to open log database: %v", err)
+		return
+	}
+	if err := database.Create(&record).Error; err != nil {
 		log.Printf("failed to record audit log: type=%s action=%s error=%v", logType, action, err)
 	}
 }
@@ -145,48 +164,6 @@ func normalizeAuditLogType(value string) string {
 		return strings.ToLower(strings.TrimSpace(value))
 	default:
 		return ""
-	}
-}
-
-func cleanupAuditLogs(logType string, retentionDays int) {
-	if retentionDays <= 0 {
-		return
-	}
-	cutoff := time.Now().AddDate(0, 0, -retentionDays)
-	result := model.DB.Where("log_type = ? AND created_at < ?", logType, cutoff).Delete(&model.AuditLog{})
-	if result.Error != nil {
-		log.Printf("failed to cleanup audit logs: type=%s error=%v", logType, result.Error)
-		return
-	}
-	if result.RowsAffected > 0 {
-		RecordAuditLog(AuditLogInput{
-			LogType:  AuditLogTypeSystem,
-			Action:   "log_cleanup",
-			Resource: "audit_logs:" + logType,
-			Message:  "cleaned audit logs",
-			Metadata: `{"rows":` + strconv.FormatInt(result.RowsAffected, 10) + `}`,
-		})
-	}
-}
-
-func cleanupTokenLogs(retentionDays int) {
-	if retentionDays <= 0 {
-		return
-	}
-	cutoff := time.Now().AddDate(0, 0, -retentionDays)
-	result := model.DB.Where("created_at < ?", cutoff).Delete(&model.TokenLog{})
-	if result.Error != nil {
-		log.Printf("failed to cleanup token logs: %v", result.Error)
-		return
-	}
-	if result.RowsAffected > 0 {
-		RecordAuditLog(AuditLogInput{
-			LogType:  AuditLogTypeSystem,
-			Action:   "log_cleanup",
-			Resource: "token_logs",
-			Message:  "cleaned token logs",
-			Metadata: `{"rows":` + strconv.FormatInt(result.RowsAffected, 10) + `}`,
-		})
 	}
 }
 

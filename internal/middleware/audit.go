@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -21,7 +22,7 @@ func AuditMiddleware() gin.HandlerFunc {
 		start := time.Now()
 		c.Next()
 
-		if shouldSkipAuditLog(path) {
+		if shouldSkipAuditLog(path) || !shouldRecordAuditLog(c.Request.Method, path, c.Writer.Status()) {
 			return
 		}
 
@@ -55,6 +56,24 @@ func AuditMiddleware() gin.HandlerFunc {
 			UserAgent:  c.Request.UserAgent(),
 			DurationMs: time.Since(start).Milliseconds(),
 		})
+	}
+}
+
+// Keep the audit trail meaningful: successful billable gateway calls already
+// have TokenLog records, and read-only dashboard traffic carries no state
+// change. Failures and write operations remain fully auditable.
+func shouldRecordAuditLog(method, path string, statusCode int) bool {
+	if statusCode >= http.StatusBadRequest {
+		return true
+	}
+	if strings.HasPrefix(path, "/v1/") || strings.HasPrefix(path, "/v1beta/") {
+		return false
+	}
+	switch strings.ToUpper(strings.TrimSpace(method)) {
+	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+		return true
+	default:
+		return false
 	}
 }
 

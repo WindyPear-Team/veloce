@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strings"
@@ -300,6 +301,7 @@ func (s *ProxyService) billServerUsage(c *gin.Context, user *model.User, apiKey 
 		return decimal.Zero, http.StatusInternalServerError, "Failed to update balance", err
 	}
 	tokenLog := model.TokenLog{
+		ID:                      model.NextLogID(),
 		UserID:                  user.ID,
 		APIKeyID:                apiKeyID(apiKey),
 		UserChannelID:           channel.UserChannelID,
@@ -319,16 +321,15 @@ func (s *ProxyService) billServerUsage(c *gin.Context, user *model.User, apiKey 
 		UserAgent:               userAgentForLog(c),
 		CreatedAt:               time.Now(),
 	}
-	if err := tx.Create(&tokenLog).Error; err != nil {
-		tx.Rollback()
-		return decimal.Zero, http.StatusInternalServerError, "Failed to log usage", err
-	}
 	if err := applyReferralCommission(tx, user, tokenLog.ID, cost, referralRate); err != nil {
 		tx.Rollback()
 		return decimal.Zero, http.StatusInternalServerError, "Failed to apply referral commission", err
 	}
 	if err := tx.Commit().Error; err != nil {
 		return decimal.Zero, http.StatusInternalServerError, "Failed to commit usage", err
+	}
+	if err := model.RecordTokenLog(tokenLog); err != nil {
+		log.Printf("failed to record chat token log: %v", err)
 	}
 	return cost, 0, "", nil
 }

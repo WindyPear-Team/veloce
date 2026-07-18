@@ -216,13 +216,11 @@ func APIKeyUsageCostSince(tx *gorm.DB, apiKeyID uint, userID uint, usageResetAt 
 	if apiKeyID == 0 || userID == 0 {
 		return decimal.Zero, nil
 	}
-	var total decimal.Decimal
-	query := tx.Model(&model.TokenLog{}).Where("api_key_id = ? AND user_id = ?", apiKeyID, userID)
-	if usageResetAt != nil {
-		query = query.Where("created_at >= ?", *usageResetAt)
+	summary, err := model.SummarizeTokenLogs(model.TokenLogFilter{APIKeyID: &apiKeyID, UserID: &userID, Since: usageResetAt})
+	if err != nil {
+		return decimal.Zero, err
 	}
-	err := query.Select("COALESCE(SUM(cost), 0)").Scan(&total).Error
-	return total, err
+	return summary.TotalCost, nil
 }
 
 func apiKeyQuotaExceeded(apiKey *model.APIKey, used decimal.Decimal, cost decimal.Decimal) bool {

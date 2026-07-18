@@ -689,7 +689,12 @@ func recordPluginLog(userID uint, pluginID, level, event, message, metadata stri
 	if userID != 0 {
 		uid = &userID
 	}
-	_ = model.DB.Create(&model.PluginLog{
+	database, err := model.LogDB()
+	if err != nil {
+		return
+	}
+	_ = database.Create(&model.PluginLog{
+		ID:       model.NextLogID(),
 		UserID:   uid,
 		PluginID: pluginID,
 		Level:    level,

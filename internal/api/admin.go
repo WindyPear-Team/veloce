@@ -109,6 +109,8 @@ type systemSettingsResponse struct {
 	LogRetentionSystemDays               string `json:"log_retention_system_days"`
 	LogRetentionTokenDays                string `json:"log_retention_token_days"`
 	LogRetentionCleanupIntervalHours     string `json:"log_retention_cleanup_interval_hours"`
+	LogStorageMode                       string `json:"log_storage_mode"`
+	LogRetentionDays                     string `json:"log_retention_days"`
 	CheckInEnabled                       bool   `json:"checkin_enabled"`
 	CheckInDailyReward                   string `json:"checkin_daily_reward"`
 	CheckInTimezone                      string `json:"checkin_timezone"`
@@ -248,6 +250,8 @@ type systemSettingsInput struct {
 	LogRetentionSystemDays               *string `json:"log_retention_system_days"`
 	LogRetentionTokenDays                *string `json:"log_retention_token_days"`
 	LogRetentionCleanupIntervalHours     *string `json:"log_retention_cleanup_interval_hours"`
+	LogStorageMode                       *string `json:"log_storage_mode"`
+	LogRetentionDays                     *string `json:"log_retention_days"`
 	CheckInEnabled                       *bool   `json:"checkin_enabled"`
 	CheckInDailyReward                   *string `json:"checkin_daily_reward"`
 	CheckInTimezone                      *string `json:"checkin_timezone"`
@@ -331,6 +335,20 @@ func (api *SystemAPI) CheckForUpdate(c *gin.Context) {
 	c.JSON(http.StatusOK, status)
 }
 
+func (api *SystemAPI) DeleteLogs(c *gin.Context) {
+	deleted, err := model.DeleteLogs()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete logs"})
+		return
+	}
+	var userID *uint
+	if user, ok := currentUser(c); ok {
+		userID = &user.ID
+	}
+	service.RecordAuditLog(service.AuditLogInput{LogType: service.AuditLogTypeSystem, Action: "logs_deleted", Resource: "log_databases", UserID: userID, Method: c.Request.Method, Path: c.Request.URL.Path, StatusCode: http.StatusOK, IPAddress: c.ClientIP(), UserAgent: c.Request.UserAgent(), Metadata: `{"rows":` + strconv.FormatInt(deleted, 10) + `}`})
+	c.JSON(http.StatusOK, gin.H{"deleted": deleted})
+}
+
 func (api *SystemAPI) UpdateSettings(c *gin.Context) {
 	var input systemSettingsInput
 	if err := c.ShouldBindJSON(&input); err != nil {
@@ -378,6 +396,26 @@ func (api *SystemAPI) UpdateSettings(c *gin.Context) {
 		}
 		normalized := strconv.Itoa(interval)
 		autoUpdateIntervalHours = &normalized
+	}
+
+	var logStorageMode *string
+	if input.LogStorageMode != nil {
+		mode := strings.ToLower(strings.TrimSpace(*input.LogStorageMode))
+		if mode != model.LogStorageSingle && mode != model.LogStorageDaily {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Log storage mode must be single or daily"})
+			return
+		}
+		logStorageMode = &mode
+	}
+	var logRetentionDays *string
+	if input.LogRetentionDays != nil {
+		days, err := strconv.Atoi(strings.TrimSpace(*input.LogRetentionDays))
+		if err != nil || days < 1 || days > 3650 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Log retention must be between 1 and 3650 days"})
+			return
+		}
+		normalized := strconv.Itoa(days)
+		logRetentionDays = &normalized
 	}
 
 	var oauthProvidersValue *string
@@ -479,6 +517,8 @@ func (api *SystemAPI) UpdateSettings(c *gin.Context) {
 		"log_retention_system_days":                input.LogRetentionSystemDays,
 		"log_retention_token_days":                 input.LogRetentionTokenDays,
 		"log_retention_cleanup_interval_hours":     input.LogRetentionCleanupIntervalHours,
+		"log_storage_mode":                         logStorageMode,
+		"log_retention_days":                       logRetentionDays,
 		"checkin_daily_reward":                     input.CheckInDailyReward,
 		"checkin_timezone":                         input.CheckInTimezone,
 		"checkin_streak_cycle_days":                input.CheckInStreakCycleDays,
@@ -677,6 +717,8 @@ func currentPublicSystemSettings() systemSettingsResponse {
 		LogRetentionSystemDays:               settingString("log_retention_system_days", "0"),
 		LogRetentionTokenDays:                settingString("log_retention_token_days", "0"),
 		LogRetentionCleanupIntervalHours:     settingString("log_retention_cleanup_interval_hours", "24"),
+		LogStorageMode:                       settingString("log_storage_mode", model.LogStorageSingle),
+		LogRetentionDays:                     settingString("log_retention_days", "30"),
 		CheckInEnabled:                       settingBool("checkin_enabled", false),
 		CheckInDailyReward:                   settingString("checkin_daily_reward", "0"),
 		CheckInTimezone:                      settingString("checkin_timezone", "Asia/Shanghai"),
@@ -1129,12 +1171,11 @@ func (api *StatusMonitorAPI) Delete(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid status monitor id"})
 		return
 	}
-	if err := model.DB.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("monitor_id = ?", uint(id)).Delete(&model.StatusCheck{}).Error; err != nil {
-			return err
-		}
-		return tx.Delete(&model.StatusMonitor{}, uint(id)).Error
-	}); err != nil {
+	if err := model.DeleteStatusChecksForMonitor(uint(id)); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete status monitor logs"})
+		return
+	}
+	if err := model.DB.Delete(&model.StatusMonitor{}, uint(id)).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete status monitor"})
 		return
 	}
@@ -1234,12 +1275,8 @@ func recentStatusChecks(monitors []model.StatusMonitor, limitPerMonitor int) map
 	for _, monitor := range monitors {
 		monitorIDs = append(monitorIDs, monitor.ID)
 	}
-	var checks []model.StatusCheck
-	if err := model.DB.
-		Where("monitor_id IN ?", monitorIDs).
-		Order("checked_at DESC").
-		Limit(limitPerMonitor * len(monitors)).
-		Find(&checks).Error; err != nil {
+	checks, err := model.RecentStatusChecks(monitorIDs, limitPerMonitor)
+	if err != nil {
 		return checksByMonitor
 	}
 	for _, check := range checks {
@@ -3867,27 +3904,23 @@ type upstreamChannelUsageItem struct {
 }
 
 func (api *StatsAPI) GetLogs(c *gin.Context) {
-	var logs []model.TokenLog
-	query := model.DB.Model(&model.TokenLog{})
-	query = applyTokenLogFilters(query, c)
-	var err error
-	query, err = applyCreatedAtRange(query, c, "created_at")
+	filter, err := tokenLogFilterFromRequest(c, nil)
 	if writePaginationError(c, err) {
 		return
 	}
 	if !wantsPaginatedResponse(c) {
-		query.Limit(100).Order("created_at DESC").Find(&logs)
+		logs, _, err := model.ListTokenLogs(filter, 0, 100)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load usage logs"})
+			return
+		}
 		c.JSON(http.StatusOK, logs)
 		return
 	}
 
 	page, pageSize := parsePagination(c)
-	var total int64
-	if err := query.Count(&total).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to count usage logs"})
-		return
-	}
-	if err := query.Order("created_at DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&logs).Error; err != nil {
+	logs, total, err := model.ListTokenLogs(filter, (page-1)*pageSize, pageSize)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load usage logs"})
 		return
 	}
@@ -3921,52 +3954,26 @@ type auditLogResponse struct {
 }
 
 func (api *StatsAPI) GetAuditLogs(c *gin.Context) {
-	var logs []model.AuditLog
-	query := model.DB.Model(&model.AuditLog{}).Preload("User")
-	query = applyAuditLogFilters(query, c)
-	var err error
-	query, err = applyCreatedAtRange(query, c, "created_at")
+	filter, err := auditLogFilterFromRequest(c)
 	if writePaginationError(c, err) {
 		return
 	}
 
 	page, pageSize := parsePagination(c)
-	var total int64
-	if err := query.Count(&total).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to count audit logs"})
-		return
-	}
-	if err := query.Order("created_at DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&logs).Error; err != nil {
+	logs, total, err := model.ListAuditLogs(filter, (page-1)*pageSize, pageSize)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load audit logs"})
 		return
 	}
+	users := auditLogUsers(logs)
 	items := make([]auditLogResponse, 0, len(logs))
 	for _, logItem := range logs {
-		items = append(items, auditLogToResponse(logItem))
+		items = append(items, auditLogToResponse(logItem, users))
 	}
 	c.JSON(http.StatusOK, paginatedResponse{Items: items, Total: total, Page: page, PageSize: pageSize})
 }
 
-func applyAuditLogFilters(query *gorm.DB, c *gin.Context) *gorm.DB {
-	if logType := strings.TrimSpace(c.Query("log_type")); logType != "" {
-		query = query.Where("log_type = ?", strings.ToLower(logType))
-	}
-	if action := strings.TrimSpace(c.Query("action")); action != "" {
-		query = query.Where("LOWER(action) LIKE ?", "%"+strings.ToLower(action)+"%")
-	}
-	if path := strings.TrimSpace(c.Query("path")); path != "" {
-		query = query.Where("LOWER(path) LIKE ?", "%"+strings.ToLower(path)+"%")
-	}
-	if userID := positiveIntQuery(c, "user_id", 0); userID > 0 {
-		query = query.Where("user_id = ?", userID)
-	}
-	if statusCode := positiveIntQuery(c, "status_code", 0); statusCode > 0 {
-		query = query.Where("status_code = ?", statusCode)
-	}
-	return query
-}
-
-func auditLogToResponse(logItem model.AuditLog) auditLogResponse {
+func auditLogToResponse(logItem model.AuditLog, users map[uint]model.User) auditLogResponse {
 	item := auditLogResponse{
 		ID:         logItem.ID,
 		LogType:    logItem.LogType,
@@ -3985,62 +3992,128 @@ func auditLogToResponse(logItem model.AuditLog) auditLogResponse {
 		DurationMs: logItem.DurationMs,
 		CreatedAt:  logItem.CreatedAt,
 	}
-	if logItem.UserID != nil && logItem.User.ID != 0 {
+	if logItem.UserID != nil && users[*logItem.UserID].ID != 0 {
+		user := users[*logItem.UserID]
 		item.User = &auditLogUserResponse{
-			ID:       logItem.User.ID,
-			Username: logItem.User.Username,
-			Email:    logItem.User.Email,
+			ID:       user.ID,
+			Username: user.Username,
+			Email:    user.Email,
 		}
 	}
 	return item
 }
 
+func tokenLogFilterFromRequest(c *gin.Context, userID *uint) (model.TokenLogFilter, error) {
+	filter := model.TokenLogFilter{UserID: userID}
+	if value := positiveIntQuery(c, "api_key_id", 0); value > 0 {
+		parsed := uint(value)
+		filter.APIKeyID = &parsed
+	}
+	if value := positiveIntQuery(c, "user_channel_id", 0); value > 0 {
+		parsed := uint(value)
+		filter.UserChannelID = &parsed
+	}
+	if value := positiveIntQuery(c, "channel_id", 0); value > 0 {
+		parsed := uint(value)
+		filter.ChannelID = &parsed
+	}
+	filter.ModelName = strings.TrimSpace(c.Query("model_name"))
+	return filter, applyLogTimeRange(c, &filter.Since, &filter.Until)
+}
+
+func auditLogFilterFromRequest(c *gin.Context) (model.AuditLogFilter, error) {
+	filter := model.AuditLogFilter{
+		LogType:    strings.TrimSpace(c.Query("log_type")),
+		Action:     strings.TrimSpace(c.Query("action")),
+		Path:       strings.TrimSpace(c.Query("path")),
+		StatusCode: positiveIntQuery(c, "status_code", 0),
+	}
+	if value := positiveIntQuery(c, "user_id", 0); value > 0 {
+		parsed := uint(value)
+		filter.UserID = &parsed
+	}
+	return filter, applyLogTimeRange(c, &filter.Since, &filter.Until)
+}
+
+func applyLogTimeRange(c *gin.Context, since, until **time.Time) error {
+	if raw := firstNonEmptyString(c.Query("start_time"), c.Query("start_date")); strings.TrimSpace(raw) != "" {
+		parsed, _, err := parseTimeBoundary(raw, false)
+		if err != nil {
+			return err
+		}
+		*since = &parsed
+	}
+	if raw := firstNonEmptyString(c.Query("end_time"), c.Query("end_date")); strings.TrimSpace(raw) != "" {
+		parsed, exclusive, err := parseTimeBoundary(raw, true)
+		if err != nil {
+			return err
+		}
+		if exclusive {
+			parsed = parsed.Add(-time.Nanosecond)
+		}
+		*until = &parsed
+	}
+	return nil
+}
+
+func auditLogUsers(logs []model.AuditLog) map[uint]model.User {
+	ids := make([]uint, 0, len(logs))
+	seen := map[uint]struct{}{}
+	for _, entry := range logs {
+		if entry.UserID != nil && *entry.UserID != 0 {
+			if _, exists := seen[*entry.UserID]; !exists {
+				seen[*entry.UserID] = struct{}{}
+				ids = append(ids, *entry.UserID)
+			}
+		}
+	}
+	users := map[uint]model.User{}
+	if len(ids) == 0 {
+		return users
+	}
+	var records []model.User
+	if err := model.DB.Where("id IN ?", ids).Find(&records).Error; err != nil {
+		return users
+	}
+	for _, user := range records {
+		users[user.ID] = user
+	}
+	return users
+}
+
 func (api *StatsAPI) GetChannelUsage(c *gin.Context) {
-	var userChannels []userChannelUsageItem
-	if err := model.DB.Table("user_channels").
-		Select(`
-			user_channels.id,
-			user_channels.name,
-			user_channels.description,
-			user_channels.routing_algorithm,
-			user_channels.multiplier,
-			COUNT(token_logs.id) AS request_count,
-			COALESCE(SUM(token_logs.input_tokens), 0) AS input_tokens,
-			COALESCE(SUM(token_logs.output_tokens), 0) AS output_tokens,
-			COALESCE(SUM(token_logs.cached_input_tokens), 0) AS cached_input_tokens,
-			COALESCE(SUM(token_logs.input_tokens + token_logs.output_tokens), 0) AS total_tokens,
-			COALESCE(SUM(token_logs.cost), 0) AS total_cost`).
-		Joins("LEFT JOIN token_logs ON token_logs.user_channel_id = user_channels.id").
-		Group("user_channels.id").
-		Order("user_channels.name ASC").
-		Scan(&userChannels).Error; err != nil {
+	var sourceUserChannels []model.UserChannel
+	if err := model.DB.Order("name ASC").Find(&sourceUserChannels).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load user channel usage"})
 		return
 	}
+	userChannels := make([]userChannelUsageItem, 0, len(sourceUserChannels))
+	for _, channel := range sourceUserChannels {
+		summary, err := model.SummarizeTokenLogs(model.TokenLogFilter{UserChannelID: &channel.ID})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load user channel usage"})
+			return
+		}
+		userChannels = append(userChannels, userChannelUsageItem{ID: channel.ID, Name: channel.Name, Description: channel.Description, RoutingAlgorithm: channel.RoutingAlgorithm, Multiplier: channel.Multiplier, RequestCount: summary.RequestCount, InputTokens: summary.InputTokens, OutputTokens: summary.OutputTokens, CachedInputTokens: summary.CachedInputTokens, TotalTokens: summary.TotalTokens, TotalCost: summary.TotalCost})
+	}
 
-	var upstreamChannels []upstreamChannelUsageItem
-	if err := model.DB.Table("channels").
-		Select(`
-			channels.id,
-			channels.name,
-			channels.type,
-			channels.user_channel_id,
-			user_channels.name AS user_channel_name,
-			channels.priority,
-			channels.weight,
-			COUNT(token_logs.id) AS request_count,
-			COALESCE(SUM(token_logs.input_tokens), 0) AS input_tokens,
-			COALESCE(SUM(token_logs.output_tokens), 0) AS output_tokens,
-			COALESCE(SUM(token_logs.cached_input_tokens), 0) AS cached_input_tokens,
-			COALESCE(SUM(token_logs.input_tokens + token_logs.output_tokens), 0) AS total_tokens,
-			COALESCE(SUM(token_logs.cost), 0) AS total_cost`).
-		Joins("LEFT JOIN user_channels ON user_channels.id = channels.user_channel_id").
-		Joins("LEFT JOIN token_logs ON token_logs.channel_id = channels.id").
-		Group("channels.id").
-		Order("channels.priority DESC, channels.weight DESC, channels.name ASC").
-		Scan(&upstreamChannels).Error; err != nil {
+	var sourceChannels []model.Channel
+	if err := model.DB.Preload("UserChannel").Order("priority DESC, weight DESC, name ASC").Find(&sourceChannels).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load upstream channel usage"})
 		return
+	}
+	upstreamChannels := make([]upstreamChannelUsageItem, 0, len(sourceChannels))
+	for _, channel := range sourceChannels {
+		summary, err := model.SummarizeTokenLogs(model.TokenLogFilter{ChannelID: &channel.ID})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load upstream channel usage"})
+			return
+		}
+		name := ""
+		if channel.UserChannelID != nil {
+			name = channel.UserChannel.Name
+		}
+		upstreamChannels = append(upstreamChannels, upstreamChannelUsageItem{ID: channel.ID, Name: channel.Name, Type: channel.Type, UserChannelID: channel.UserChannelID, UserChannelName: name, Priority: channel.Priority, Weight: channel.Weight, RequestCount: summary.RequestCount, InputTokens: summary.InputTokens, OutputTokens: summary.OutputTokens, CachedInputTokens: summary.CachedInputTokens, TotalTokens: summary.TotalTokens, TotalCost: summary.TotalCost})
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -4056,47 +4129,27 @@ func (api *StatsAPI) GetUserLogs(c *gin.Context) {
 		return
 	}
 
-	var logs []model.TokenLog
-	query := model.DB.Model(&model.TokenLog{}).Where("user_id = ?", user.ID)
-	query = applyTokenLogFilters(query, c)
-	var err error
-	query, err = applyCreatedAtRange(query, c, "created_at")
+	filter, err := tokenLogFilterFromRequest(c, &user.ID)
 	if writePaginationError(c, err) {
 		return
 	}
 	if !wantsPaginatedResponse(c) {
-		query.Limit(100).Order("created_at DESC").Find(&logs)
+		logs, _, err := model.ListTokenLogs(filter, 0, 100)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load usage logs"})
+			return
+		}
 		c.JSON(http.StatusOK, logs)
 		return
 	}
 
 	page, pageSize := parsePagination(c)
-	var total int64
-	if err := query.Count(&total).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to count usage logs"})
-		return
-	}
-	if err := query.Order("created_at DESC").Offset((page - 1) * pageSize).Limit(pageSize).Find(&logs).Error; err != nil {
+	logs, total, err := model.ListTokenLogs(filter, (page-1)*pageSize, pageSize)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load usage logs"})
 		return
 	}
 	c.JSON(http.StatusOK, paginatedResponse{Items: logs, Total: total, Page: page, PageSize: pageSize})
-}
-
-func applyTokenLogFilters(query *gorm.DB, c *gin.Context) *gorm.DB {
-	if apiKeyID := positiveIntQuery(c, "api_key_id", 0); apiKeyID > 0 {
-		query = query.Where("api_key_id = ?", apiKeyID)
-	}
-	if userChannelID := positiveIntQuery(c, "user_channel_id", 0); userChannelID > 0 {
-		query = query.Where("user_channel_id = ?", userChannelID)
-	}
-	if channelID := positiveIntQuery(c, "channel_id", 0); channelID > 0 {
-		query = query.Where("channel_id = ?", channelID)
-	}
-	if modelName := strings.TrimSpace(c.Query("model_name")); modelName != "" {
-		query = query.Where("LOWER(model_name) LIKE ?", "%"+strings.ToLower(modelName)+"%")
-	}
-	return query
 }
 
 func (api *StatsAPI) GetDashboardStats(c *gin.Context) {
@@ -4107,8 +4160,13 @@ func (api *StatsAPI) GetDashboardStats(c *gin.Context) {
 
 	model.DB.Model(&model.User{}).Count(&userCount)
 	model.DB.Model(&model.Channel{}).Count(&channelCount)
-	model.DB.Model(&model.TokenLog{}).Where("created_at >= ?", time.Now().Truncate(24*time.Hour)).Count(&todayRequests)
-	model.DB.Model(&model.TokenLog{}).Select("COALESCE(SUM(cost), 0)").Row().Scan(&totalCost)
+	today := time.Now().Truncate(24 * time.Hour)
+	if summary, err := model.SummarizeTokenLogs(model.TokenLogFilter{Since: &today}); err == nil {
+		todayRequests = summary.RequestCount
+	}
+	if summary, err := model.SummarizeTokenLogs(model.TokenLogFilter{}); err == nil {
+		totalCost = summary.TotalCost
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"users":          userCount,
@@ -4132,15 +4190,18 @@ func (api *StatsAPI) GetUserDashboardStats(c *gin.Context) {
 	var tpm int64
 	rateWindowStart := time.Now().Add(-1 * time.Minute)
 
-	model.DB.Model(&model.TokenLog{}).Where("user_id = ?", user.ID).Count(&totalRequests)
-	model.DB.Model(&model.TokenLog{}).Where("user_id = ? AND created_at >= ?", user.ID, time.Now().Truncate(24*time.Hour)).Count(&todayRequests)
-	model.DB.Model(&model.TokenLog{}).Where("user_id = ?", user.ID).Select("COALESCE(SUM(cost), 0)").Row().Scan(&totalCost)
-	model.DB.Model(&model.TokenLog{}).Where("user_id = ? AND created_at >= ?", user.ID, rateWindowStart).Count(&rpm)
-	model.DB.Model(&model.TokenLog{}).
-		Where("user_id = ? AND created_at >= ?", user.ID, rateWindowStart).
-		Select("COALESCE(SUM(input_tokens + output_tokens), 0)").
-		Row().
-		Scan(&tpm)
+	if summary, err := model.SummarizeTokenLogs(model.TokenLogFilter{UserID: &user.ID}); err == nil {
+		totalRequests = summary.RequestCount
+		totalCost = summary.TotalCost
+	}
+	today := time.Now().Truncate(24 * time.Hour)
+	if summary, err := model.SummarizeTokenLogs(model.TokenLogFilter{UserID: &user.ID, Since: &today}); err == nil {
+		todayRequests = summary.RequestCount
+	}
+	if summary, err := model.SummarizeTokenLogs(model.TokenLogFilter{UserID: &user.ID, Since: &rateWindowStart}); err == nil {
+		rpm = summary.RequestCount
+		tpm = summary.TotalTokens
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"balance":        user.Balance,
@@ -4194,21 +4255,12 @@ func apiKeyUsageStats(apiKeyID uint, userID uint, usageResetAt *time.Time) usage
 	if apiKeyID == 0 || userID == 0 {
 		return usageStats{}
 	}
-	var stats usageStats
-	query := model.DB.Model(&model.TokenLog{}).Where("api_key_id = ? AND user_id = ?", apiKeyID, userID)
-	if usageResetAt != nil {
-		query = query.Where("created_at >= ?", *usageResetAt)
+	filter := model.TokenLogFilter{APIKeyID: &apiKeyID, UserID: &userID, Since: usageResetAt}
+	summary, err := model.SummarizeTokenLogs(filter)
+	if err != nil {
+		return usageStats{}
 	}
-	query.
-		Select(`
-			COUNT(*) AS request_count,
-			COALESCE(SUM(input_tokens), 0) AS input_tokens,
-			COALESCE(SUM(output_tokens), 0) AS output_tokens,
-			COALESCE(SUM(cached_input_tokens), 0) AS cached_input_tokens,
-			COALESCE(SUM(input_tokens + output_tokens), 0) AS total_tokens,
-			COALESCE(SUM(cost), 0) AS total_cost`).
-		Scan(&stats)
-	return stats
+	return usageStats{RequestCount: summary.RequestCount, InputTokens: summary.InputTokens, OutputTokens: summary.OutputTokens, CachedInputTokens: summary.CachedInputTokens, TotalTokens: summary.TotalTokens, TotalCost: summary.TotalCost}
 }
 
 func validateAPIKeyUserChannel(userChannelIDs []uint) (uint, error) {

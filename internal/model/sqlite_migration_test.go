@@ -70,7 +70,7 @@ func TestDiscardDanglingModelConfigs(t *testing.T) {
 	}
 }
 
-func TestRepairDanglingPluginLogReference(t *testing.T) {
+func TestLogTablesAreNotMigratedWithBusinessData(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open("file:sqlite-migration-plugin-logs?mode=memory&cache=shared"), &gorm.Config{DisableForeignKeyConstraintWhenMigrating: true})
 	if err != nil {
 		t.Fatal(err)
@@ -86,18 +86,18 @@ func TestRepairDanglingPluginLogReference(t *testing.T) {
 	if err := db.Omit("Plugin", "User").Create(&logs).Error; err != nil {
 		t.Fatal(err)
 	}
-	repaired, err := repairDanglingReferences(db, []interface{}{&Plugin{}, &PluginLog{}})
+	repaired, err := repairDanglingReferences(db, []interface{}{&Plugin{}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if repaired != 1 {
-		t.Fatalf("repaired = %d, want 1", repaired)
+	if repaired != 0 {
+		t.Fatalf("repaired = %d, want 0", repaired)
 	}
 	var dangling PluginLog
 	if err := db.First(&dangling, 2).Error; err != nil {
 		t.Fatal(err)
 	}
-	if dangling.PluginID != "" {
-		t.Fatalf("plugin ID = %q, want empty after NULL repair", dangling.PluginID)
+	if dangling.PluginID != "missing-plugin" {
+		t.Fatalf("plugin ID = %q, want original log value", dangling.PluginID)
 	}
 }

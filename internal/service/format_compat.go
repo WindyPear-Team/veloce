@@ -93,14 +93,12 @@ func (s *ProxyService) HandleUserBalance(c *gin.Context) {
 		})
 		return
 	}
-	var used decimal.Decimal
-	if err := model.DB.Model(&model.TokenLog{}).
-		Where("user_id = ?", user.ID).
-		Select("COALESCE(SUM(cost), 0)").
-		Scan(&used).Error; err != nil {
+	summary, err := model.SummarizeTokenLogs(model.TokenLogFilter{UserID: &user.ID})
+	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"success": false, "message": "Failed to get user info: " + err.Error()})
 		return
 	}
+	used := summary.TotalCost
 	c.JSON(http.StatusOK, gin.H{
 		"success":        true,
 		"remain_balance": user.Balance,

@@ -199,7 +199,7 @@ type ReferralCommissionLog struct {
 	ReferredUserID uint            `gorm:"index;not null" json:"referred_user_id"`
 	ReferredUser   User            `gorm:"foreignKey:ReferredUserID" json:"referred_user,omitempty"`
 	TokenLogID     uint            `gorm:"uniqueIndex;not null" json:"token_log_id"`
-	TokenLog       TokenLog        `gorm:"foreignKey:TokenLogID" json:"-"`
+	TokenLog       TokenLog        `gorm:"-" json:"-"`
 	BaseCost       decimal.Decimal `gorm:"type:decimal(20,10);not null" json:"base_cost"`
 	Rate           decimal.Decimal `gorm:"type:decimal(10,6);not null" json:"rate"`
 	Amount         decimal.Decimal `gorm:"type:decimal(20,10);not null" json:"amount"`
@@ -305,14 +305,14 @@ type StatusMonitor struct {
 	LastCheckedAt   *time.Time    `json:"last_checked_at"`
 	CreatedAt       time.Time     `json:"created_at"`
 	UpdatedAt       time.Time     `json:"updated_at"`
-	Checks          []StatusCheck `gorm:"foreignKey:MonitorID" json:"checks,omitempty"`
+	Checks          []StatusCheck `gorm:"-" json:"checks,omitempty"`
 }
 
 // StatusCheck records a single status-monitor result.
 type StatusCheck struct {
 	ID         uint          `gorm:"primaryKey" json:"id"`
 	MonitorID  uint          `gorm:"index;not null" json:"monitor_id"`
-	Monitor    StatusMonitor `gorm:"foreignKey:MonitorID" json:"-"`
+	Monitor    StatusMonitor `gorm:"-" json:"-"`
 	Status     string        `gorm:"size:20;not null" json:"status"`
 	LatencyMs  int           `json:"latency_ms"`
 	StatusCode int           `json:"status_code"`
@@ -401,9 +401,9 @@ type PluginKV struct {
 type PluginLog struct {
 	ID        uint      `gorm:"primaryKey" json:"id"`
 	UserID    *uint     `gorm:"index" json:"user_id,omitempty"`
-	User      User      `gorm:"foreignKey:UserID" json:"user,omitempty"`
+	User      User      `gorm:"-" json:"user,omitempty"`
 	PluginID  string    `gorm:"index;size:80" json:"plugin_id"`
-	Plugin    Plugin    `gorm:"foreignKey:PluginID" json:"plugin"`
+	Plugin    Plugin    `gorm:"-" json:"plugin"`
 	Level     string    `gorm:"index;size:20;not null" json:"level"`
 	Event     string    `gorm:"index;size:100;not null" json:"event"`
 	Message   string    `gorm:"type:text" json:"message"`
@@ -461,7 +461,7 @@ type AuditLog struct {
 	Action     string    `gorm:"index;size:100;not null" json:"action"`
 	Resource   string    `gorm:"index;size:255" json:"resource"`
 	UserID     *uint     `gorm:"index" json:"user_id,omitempty"`
-	User       User      `gorm:"foreignKey:UserID" json:"user,omitempty"`
+	User       User      `gorm:"-" json:"user,omitempty"`
 	APIKeyID   *uint     `gorm:"index" json:"api_key_id,omitempty"`
 	Method     string    `gorm:"size:12" json:"method"`
 	Path       string    `gorm:"index;size:255" json:"path"`
