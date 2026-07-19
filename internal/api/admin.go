@@ -264,6 +264,12 @@ type systemSettingsResponse struct {
 	OAuthProviders                       string `json:"oauth_providers,omitempty"`
 	AutoUpdateEnabled                    bool   `json:"auto_update_enabled"`
 	AutoUpdateIntervalHours              string `json:"auto_update_interval_hours"`
+	RedisEnabled                         bool   `json:"redis_enabled"`
+	RedisAddress                         string `json:"redis_address"`
+	RedisUsername                        string `json:"redis_username"`
+	RedisPasswordSet                     bool   `json:"redis_password_set"`
+	RedisDatabase                        string `json:"redis_database"`
+	RedisTLSEnabled                      bool   `json:"redis_tls_enabled"`
 }
 
 type systemSettingsInput struct {
@@ -405,6 +411,13 @@ type systemSettingsInput struct {
 	OAuthProviders                       *string `json:"oauth_providers"`
 	AutoUpdateEnabled                    *bool   `json:"auto_update_enabled"`
 	AutoUpdateIntervalHours              *string `json:"auto_update_interval_hours"`
+	RedisEnabled                         *bool   `json:"redis_enabled"`
+	RedisAddress                         *string `json:"redis_address"`
+	RedisUsername                        *string `json:"redis_username"`
+	RedisPassword                        *string `json:"redis_password"`
+	RedisPasswordClear                   *bool   `json:"redis_password_clear"`
+	RedisDatabase                        *string `json:"redis_database"`
+	RedisTLSEnabled                      *bool   `json:"redis_tls_enabled"`
 }
 
 func (api *SystemAPI) PublicSettings(c *gin.Context) {
@@ -825,6 +838,27 @@ func (api *SystemAPI) UpdateSettings(c *gin.Context) {
 		logRetentionDays = &normalized
 	}
 
+	var redisDatabase *string
+	if input.RedisDatabase != nil {
+		database, err := strconv.Atoi(strings.TrimSpace(*input.RedisDatabase))
+		if err != nil || database < 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Redis database must be a non-negative integer"})
+			return
+		}
+		normalized := strconv.Itoa(database)
+		redisDatabase = &normalized
+	}
+	if input.RedisEnabled != nil && *input.RedisEnabled {
+		address := settingString("redis_address", "127.0.0.1:6379")
+		if input.RedisAddress != nil {
+			address = strings.TrimSpace(*input.RedisAddress)
+		}
+		if address == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Redis address is required when Redis is enabled"})
+			return
+		}
+	}
+
 	var oauthProvidersValue *string
 	if input.OAuthProviders != nil {
 		normalized, err := service.NormalizeOAuthProvidersJSON(*input.OAuthProviders)
@@ -959,6 +993,9 @@ func (api *SystemAPI) UpdateSettings(c *gin.Context) {
 		"smtp_username":                            input.SMTPUsername,
 		"smtp_password":                            input.SMTPPassword,
 		"smtp_from":                                input.SMTPFrom,
+		"redis_address":                            input.RedisAddress,
+		"redis_username":                           input.RedisUsername,
+		"redis_database":                           redisDatabase,
 	}
 	for key, value := range stringSettings {
 		if value == nil {
@@ -1021,6 +1058,19 @@ func (api *SystemAPI) UpdateSettings(c *gin.Context) {
 		"password_hcaptcha_enabled":                input.PasswordHCaptchaEnabled,
 		"email_verification_required":              input.EmailVerificationRequired,
 		"auto_update_enabled":                      input.AutoUpdateEnabled,
+		"redis_enabled":                            input.RedisEnabled,
+		"redis_tls_enabled":                        input.RedisTLSEnabled,
+	}
+	if input.RedisPasswordClear != nil && *input.RedisPasswordClear {
+		if err := model.SetSystemSetting("redis_password", ""); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update Redis password"})
+			return
+		}
+	} else if input.RedisPassword != nil && *input.RedisPassword != "" {
+		if err := model.SetSystemSetting("redis_password", *input.RedisPassword); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update Redis password"})
+			return
+		}
 	}
 	for key, value := range map[string]*string{"registration_email_suffixes": input.RegistrationEmailSuffixes, "registration_email_routing": input.RegistrationEmailRouting} {
 		if value != nil {
@@ -1191,6 +1241,12 @@ func currentAdminSystemSettings() systemSettingsResponse {
 	settings.PaymentOpenPaymentKey = settingString("payment_openpayment_key", "")
 	settings.PaymentOpenPaymentNotifyURL = callbackURLFromBaseURL(settings.BaseURL, "/api/payment/openpayment/notify")
 	settings.PaymentOpenPaymentReturnURL = callbackURLFromBaseURL(settings.BaseURL, "/api/payment/openpayment/return")
+	settings.RedisEnabled = settingBool("redis_enabled", false)
+	settings.RedisAddress = settingString("redis_address", "127.0.0.1:6379")
+	settings.RedisUsername = settingString("redis_username", "")
+	settings.RedisPasswordSet = settingString("redis_password", "") != ""
+	settings.RedisDatabase = settingString("redis_database", "0")
+	settings.RedisTLSEnabled = settingBool("redis_tls_enabled", false)
 	return settings
 }
 
