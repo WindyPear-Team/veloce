@@ -1,6 +1,11 @@
 package cache
 
-import "testing"
+import (
+	"context"
+	"testing"
+
+	"github.com/shopspring/decimal"
+)
 
 func TestResolveRedisConfigUsesSettings(t *testing.T) {
 	settings := map[string]string{
@@ -66,6 +71,17 @@ func TestResolveRedisConfigRejectsInvalidEnabledConfiguration(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected empty enabled Redis address to be rejected")
 	}
+}
+
+func TestBillingOperationsFallBackWhenRedisIsDisabled(t *testing.T) {
+	if err := Close(); err != nil {
+		t.Fatalf("close Redis: %v", err)
+	}
+
+	release := AcquireUserBillingLock(context.Background(), 42)
+	StoreUserBillingBalance(context.Background(), 42, decimal.RequireFromString("1.25"))
+	InvalidateUserBillingBalance(context.Background(), 42)
+	release()
 }
 
 func settingValue(values map[string]string) func(string, string) string {

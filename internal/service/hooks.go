@@ -9,6 +9,7 @@ import (
 	"github.com/shopspring/decimal"
 	"gorm.io/gorm"
 
+	"github.com/WindyPear-Team/veloce/internal/cache"
 	"github.com/WindyPear-Team/veloce/internal/model"
 )
 
@@ -317,4 +318,22 @@ func ApplyUsageCharge(tx *gorm.DB, userID uint, cost decimal.Decimal) error {
 		return ErrInsufficientBalance
 	}
 	return nil
+}
+
+func committedBillingBalance(tx *gorm.DB, userID uint) (decimal.Decimal, error) {
+	if cache.Client() == nil {
+		return decimal.Zero, nil
+	}
+	var user model.User
+	if err := tx.Select("balance").First(&user, userID).Error; err != nil {
+		return decimal.Zero, err
+	}
+	return user.Balance, nil
+}
+
+func billingContext(c *gin.Context) context.Context {
+	if c != nil && c.Request != nil {
+		return c.Request.Context()
+	}
+	return context.Background()
 }

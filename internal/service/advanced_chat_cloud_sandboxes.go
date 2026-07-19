@@ -1,12 +1,14 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/WindyPear-Team/veloce/internal/cache"
 	"github.com/WindyPear-Team/veloce/internal/model"
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
@@ -440,7 +442,19 @@ func syncCloudSandboxHostHeartbeat(deviceID string, seenAt time.Time) {
 // recordCloudSandboxTaskCharge is deliberately idempotent: a connector can
 // retry result delivery without charging a completed task twice.
 func recordCloudSandboxTaskCharge(taskID string, finishedAt time.Time) error {
-	return model.DB.Transaction(func(tx *gorm.DB) error {
+	var taskOwner AdvancedChatConnectorTask
+	if err := model.DB.Select("user_id").Where("id = ?", taskID).First(&taskOwner).Error; err != nil {
+		return err
+	}
+	billingContext := context.Background()
+	release := cache.AcquireUserBillingLock(billingContext, taskOwner.UserID)
+	defer release()
+
+	var (
+		balance    decimal.Decimal
+		hasBalance bool
+	)
+	err := model.DB.Transaction(func(tx *gorm.DB) error {
 		var task AdvancedChatConnectorTask
 		if err := tx.Where("id = ?", taskID).First(&task).Error; err != nil {
 			return err
@@ -494,8 +508,22 @@ func recordCloudSandboxTaskCharge(taskID string, finishedAt time.Time) error {
 				return ErrInsufficientBalance
 			}
 		}
-		return chargeCloudSandboxStorage(tx, sandbox, host, finishedAt)
+		if err := chargeCloudSandboxStorage(tx, sandbox, host, finishedAt); err != nil {
+			return err
+		}
+		var err error
+		balance, err = committedBillingBalance(tx, task.UserID)
+		hasBalance = err == nil
+		return err
 	})
+	if err != nil {
+		cache.InvalidateUserBillingBalance(billingContext, taskOwner.UserID)
+		return err
+	}
+	if hasBalance {
+		cache.StoreUserBillingBalance(billingContext, taskOwner.UserID, balance)
+	}
+	return nil
 }
 
 // Storage is charged when a sandbox performs work. This keeps the first

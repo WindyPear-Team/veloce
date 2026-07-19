@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/WindyPear-Team/veloce/internal/adapters"
+	"github.com/WindyPear-Team/veloce/internal/cache"
 	"github.com/WindyPear-Team/veloce/internal/model"
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
@@ -1277,6 +1278,9 @@ func (s *ProxyService) billUsageAndReturnCost(c *gin.Context, user *model.User, 
 	referralRate := referralCommissionRate(user, cost)
 
 	// 7. Deduct balance and log
+	billingContext := billingContext(c)
+	releaseBillingLock := cache.AcquireUserBillingLock(billingContext, user.ID)
+	defer releaseBillingLock()
 	tx := model.DB.Begin()
 	if tx.Error != nil {
 		return decimal.Zero, http.StatusInternalServerError, "Failed to start transaction", tx.Error
@@ -1292,6 +1296,7 @@ func (s *ProxyService) billUsageAndReturnCost(c *gin.Context, user *model.User, 
 
 	if err := ApplyUsageCharge(tx, user.ID, cost); err != nil {
 		tx.Rollback()
+		cache.InvalidateUserBillingBalance(billingContext, user.ID)
 		if errors.Is(err, ErrInsufficientBalance) {
 			return decimal.Zero, http.StatusPaymentRequired, "Insufficient balance", err
 		}
@@ -1321,11 +1326,20 @@ func (s *ProxyService) billUsageAndReturnCost(c *gin.Context, user *model.User, 
 	}
 	if err := applyReferralCommission(tx, user, tokenLog.ID, cost, referralRate); err != nil {
 		tx.Rollback()
+		cache.InvalidateUserBillingBalance(billingContext, user.ID)
 		return decimal.Zero, http.StatusInternalServerError, "Failed to apply referral commission", err
 	}
+	balance, err := committedBillingBalance(tx, user.ID)
+	if err != nil {
+		tx.Rollback()
+		cache.InvalidateUserBillingBalance(billingContext, user.ID)
+		return decimal.Zero, http.StatusInternalServerError, "Failed to read updated balance", err
+	}
 	if err := tx.Commit().Error; err != nil {
+		cache.InvalidateUserBillingBalance(billingContext, user.ID)
 		return decimal.Zero, http.StatusInternalServerError, "Failed to commit usage", err
 	}
+	cache.StoreUserBillingBalance(billingContext, user.ID, balance)
 	if err := model.RecordTokenLog(tokenLog); err != nil {
 		log.Printf("failed to record token log: %v", err)
 	}
