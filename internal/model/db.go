@@ -626,6 +626,12 @@ func EnsureDefaultSystemSettings() error {
 		"advanced_chat_scheduled_tasks_enabled":      "false",
 		"advanced_chat_message_delivery_enabled":     "false",
 		"advanced_chat_delivery_system_smtp_enabled": "false",
+		"redis_enabled":                              "false",
+		"redis_address":                              "127.0.0.1:6379",
+		"redis_username":                             "",
+		"redis_password":                             "",
+		"redis_database":                             "0",
+		"redis_tls_enabled":                          "false",
 	}
 	for key, value := range defaults {
 		setting := SystemSetting{Key: key}

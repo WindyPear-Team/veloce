@@ -17,6 +17,7 @@ import (
 
 	webui "github.com/WindyPear-Team/veloce-web"
 	"github.com/WindyPear-Team/veloce/internal/api"
+	"github.com/WindyPear-Team/veloce/internal/cache"
 	messagechannel "github.com/WindyPear-Team/veloce/internal/channel"
 	"github.com/WindyPear-Team/veloce/internal/config"
 	"github.com/WindyPear-Team/veloce/internal/middleware"
@@ -33,6 +34,14 @@ func Run() error {
 
 	// Initialize database
 	model.InitDB()
+	if err := cache.Connect(context.Background()); err != nil {
+		return fmt.Errorf("initialize Redis: %w", err)
+	}
+	defer func() {
+		if err := cache.Close(); err != nil {
+			log.Printf("failed to close Redis connection: %v", err)
+		}
+	}()
 	if err := service.RunStartupHooks(); err != nil {
 		return err
 	}
