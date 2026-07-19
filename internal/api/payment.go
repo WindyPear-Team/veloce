@@ -27,6 +27,10 @@ const (
 
 	paymentProviderYipay       = "yipay"
 	paymentProviderOpenPayment = "openpayment"
+	paymentProviderWeChatPay   = "wechatpay"
+	paymentProviderAlipay      = "alipay"
+	paymentProviderPayPal      = "paypal"
+	paymentProviderStripe      = "stripe"
 )
 
 type PaymentAPI struct{}
@@ -60,6 +64,23 @@ type paymentConfig struct {
 	OpenPaymentKey        string
 	OpenPaymentNotifyURL  string
 	OpenPaymentReturnURL  string
+	OfficialCurrency      string
+	WeChatMchID           string
+	WeChatAppID           string
+	WeChatSerialNo        string
+	WeChatPrivateKey      string
+	WeChatPlatformCert    string
+	WeChatAPIV3Key        string
+	AlipayAppID           string
+	AlipayPrivateKey      string
+	AlipayPublicKey       string
+	AlipayGatewayURL      string
+	PayPalClientID        string
+	PayPalClientSecret    string
+	PayPalBaseURL         string
+	PayPalWebhookID       string
+	StripeSecretKey       string
+	StripeWebhookSecret   string
 }
 
 type paymentConfigResponse struct {
@@ -167,6 +188,7 @@ func (api *PaymentAPI) CreateOrder(c *gin.Context) {
 		Status:          paymentStatusPending,
 		GatewayProvider: cfg.Provider,
 	}
+	order.PaymentCurrency, order.GatewayAmount = paymentGatewayAmount(cfg, order)
 	if err := model.DB.Create(&order).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create payment order"})
 		return
@@ -280,6 +302,9 @@ func handlePaymentCallback(c *gin.Context) (bool, error) {
 	if cfg.Provider == paymentProviderOpenPayment {
 		return handleOpenPaymentCallback(c, cfg)
 	}
+	if isOfficialPaymentProvider(cfg.Provider) {
+		return false, errors.New("official payment providers require their dedicated callback endpoint")
+	}
 	return handleYipayCallback(c)
 }
 
@@ -348,7 +373,7 @@ func currentPaymentConfig() paymentConfig {
 			Methods:             []string{},
 		}
 	}
-	return paymentConfig{
+	cfg := paymentConfig{
 		Enabled:               settingBool("payment_enabled", false),
 		Provider:              normalizePaymentProvider(settingString("payment_gateway_provider", paymentProviderYipay)),
 		CurrencyDisplayName:   firstNonEmptyString(settingString("payment_currency_display_name", "$"), "$"),
@@ -367,7 +392,31 @@ func currentPaymentConfig() paymentConfig {
 		OpenPaymentKey:        settingString("payment_openpayment_key", ""),
 		OpenPaymentNotifyURL:  "",
 		OpenPaymentReturnURL:  "",
+		OfficialCurrency:      normalizeOfficialCurrency(settingString("payment_official_currency", "CNY")),
+		WeChatMchID:           settingString("payment_wechat_mch_id", ""),
+		WeChatAppID:           settingString("payment_wechat_app_id", ""),
+		WeChatSerialNo:        settingString("payment_wechat_serial_no", ""),
+		WeChatPrivateKey:      settingString("payment_wechat_private_key", ""),
+		WeChatPlatformCert:    settingString("payment_wechat_platform_certificate", ""),
+		WeChatAPIV3Key:        settingString("payment_wechat_api_v3_key", ""),
+		AlipayAppID:           settingString("payment_alipay_app_id", ""),
+		AlipayPrivateKey:      settingString("payment_alipay_private_key", ""),
+		AlipayPublicKey:       settingString("payment_alipay_public_key", ""),
+		AlipayGatewayURL:      settingString("payment_alipay_gateway_url", "https://openapi.alipay.com/gateway.do"),
+		PayPalClientID:        settingString("payment_paypal_client_id", ""),
+		PayPalClientSecret:    settingString("payment_paypal_client_secret", ""),
+		PayPalBaseURL:         settingString("payment_paypal_base_url", "https://api-m.sandbox.paypal.com"),
+		PayPalWebhookID:       settingString("payment_paypal_webhook_id", ""),
+		StripeSecretKey:       settingString("payment_stripe_secret_key", ""),
+		StripeWebhookSecret:   settingString("payment_stripe_webhook_secret", ""),
 	}
+	// Official providers expose one payment method each. This keeps the wallet
+	// selector aligned with the selected provider and prevents a stale Yipay
+	// method (for example "alipay") from being attached to a Stripe order.
+	if isOfficialPaymentProvider(cfg.Provider) {
+		cfg.Methods = []string{cfg.Provider}
+	}
+	return cfg
 }
 
 func requirePaymentFeature(c *gin.Context) bool {
@@ -384,6 +433,14 @@ func normalizePaymentProvider(provider string) string {
 		return paymentProviderYipay
 	case "openpayment", "open-payment", "open_payment", "ops":
 		return paymentProviderOpenPayment
+	case "wechat", "wechatpay", "wechat_pay", "wxpay_official":
+		return paymentProviderWeChatPay
+	case "alipay", "alipay_official":
+		return paymentProviderAlipay
+	case "paypal":
+		return paymentProviderPayPal
+	case "stripe":
+		return paymentProviderStripe
 	default:
 		return strings.ToLower(strings.TrimSpace(provider))
 	}
@@ -402,6 +459,8 @@ func validatePaymentGatewayConfig(cfg paymentConfig) error {
 		if strings.TrimSpace(openPaymentMerchantID(cfg)) == "" || strings.TrimSpace(openPaymentMerchantKey(cfg)) == "" {
 			return errors.New("Open Payment merchant is not configured")
 		}
+	case paymentProviderWeChatPay, paymentProviderAlipay, paymentProviderPayPal, paymentProviderStripe:
+		return validateOfficialPaymentConfig(cfg)
 	default:
 		return errors.New("unsupported payment gateway provider")
 	}
@@ -448,6 +507,9 @@ func generatePaymentOrderNo() (string, error) {
 }
 
 func buildPaymentURL(c *gin.Context, cfg paymentConfig, order model.PaymentOrder) (string, error) {
+	if isOfficialPaymentProvider(cfg.Provider) {
+		return buildOfficialPaymentURL(c, cfg, order)
+	}
 	if cfg.Provider == paymentProviderOpenPayment {
 		return buildOpenPaymentPaymentURL(c, cfg, order)
 	}

@@ -68,7 +68,7 @@ type CheckInRecord struct {
 	CreatedAt    time.Time       `json:"created_at"`
 }
 
-// PaymentOrder records a 易支付 recharge order.
+// PaymentOrder records a recharge order submitted through a payment provider.
 type PaymentOrder struct {
 	ID              uint            `gorm:"primaryKey" json:"id"`
 	OrderNo         string          `gorm:"uniqueIndex;size:64;not null" json:"order_no"`
@@ -77,6 +77,8 @@ type PaymentOrder struct {
 	Amount          decimal.Decimal `gorm:"type:decimal(20,6);not null" json:"amount"`
 	RMBAmount       decimal.Decimal `gorm:"type:decimal(20,2);not null" json:"rmb_amount"`
 	ExchangeRate    decimal.Decimal `gorm:"type:decimal(20,6);not null" json:"exchange_rate"`
+	PaymentCurrency string          `gorm:"size:8" json:"payment_currency"`
+	GatewayAmount   decimal.Decimal `gorm:"type:decimal(20,2)" json:"gateway_amount"`
 	Method          string          `gorm:"size:32;not null" json:"method"`
 	Status          string          `gorm:"index;size:32;not null" json:"status"`
 	GatewayProvider string          `gorm:"size:32" json:"gateway_provider"`

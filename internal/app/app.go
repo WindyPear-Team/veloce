@@ -117,6 +117,13 @@ func Run() error {
 	r.GET("/api/payment/openpayment/notify", paymentAPI.Notify)
 	r.POST("/api/payment/openpayment/notify", paymentAPI.Notify)
 	r.GET("/api/payment/openpayment/submit/:order_no", paymentAPI.OpenPaymentSubmit)
+	r.POST("/api/payment/wechatpay/notify", paymentAPI.WeChatPayNotify)
+	r.POST("/api/payment/alipay/notify", paymentAPI.AlipayNotify)
+	r.POST("/api/payment/paypal/notify", paymentAPI.PayPalNotify)
+	r.POST("/api/payment/stripe/notify", paymentAPI.StripeNotify)
+	r.GET("/api/payment/alipay/return", paymentAPI.OfficialReturn)
+	r.GET("/api/payment/paypal/return", paymentAPI.OfficialReturn)
+	r.GET("/api/payment/stripe/return", paymentAPI.OfficialReturn)
 	r.GET("/api/setup/status", func(c *gin.Context) {
 		required, err := authService.InitialSetupRequired()
 		if err != nil {

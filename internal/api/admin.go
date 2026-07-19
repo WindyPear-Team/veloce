@@ -232,6 +232,23 @@ type systemSettingsResponse struct {
 	PaymentOpenPaymentKey                string `json:"payment_openpayment_key,omitempty"`
 	PaymentOpenPaymentNotifyURL          string `json:"payment_openpayment_notify_url,omitempty"`
 	PaymentOpenPaymentReturnURL          string `json:"payment_openpayment_return_url,omitempty"`
+	PaymentOfficialCurrency              string `json:"payment_official_currency,omitempty"`
+	PaymentWeChatMchID                   string `json:"payment_wechat_mch_id,omitempty"`
+	PaymentWeChatAppID                   string `json:"payment_wechat_app_id,omitempty"`
+	PaymentWeChatSerialNo                string `json:"payment_wechat_serial_no,omitempty"`
+	PaymentWeChatPrivateKey              string `json:"payment_wechat_private_key,omitempty"`
+	PaymentWeChatPlatformCertificate     string `json:"payment_wechat_platform_certificate,omitempty"`
+	PaymentWeChatAPIV3Key                string `json:"payment_wechat_api_v3_key,omitempty"`
+	PaymentAlipayAppID                   string `json:"payment_alipay_app_id,omitempty"`
+	PaymentAlipayPrivateKey              string `json:"payment_alipay_private_key,omitempty"`
+	PaymentAlipayPublicKey               string `json:"payment_alipay_public_key,omitempty"`
+	PaymentAlipayGatewayURL              string `json:"payment_alipay_gateway_url,omitempty"`
+	PaymentPayPalClientID                string `json:"payment_paypal_client_id,omitempty"`
+	PaymentPayPalClientSecret            string `json:"payment_paypal_client_secret,omitempty"`
+	PaymentPayPalBaseURL                 string `json:"payment_paypal_base_url,omitempty"`
+	PaymentPayPalWebhookID               string `json:"payment_paypal_webhook_id,omitempty"`
+	PaymentStripeSecretKey               string `json:"payment_stripe_secret_key,omitempty"`
+	PaymentStripeWebhookSecret           string `json:"payment_stripe_webhook_secret,omitempty"`
 	RateLimitEnabled                     bool   `json:"rate_limit_enabled"`
 	RateLimitRequestsPerMinute           string `json:"rate_limit_requests_per_minute"`
 	RateLimitBurst                       string `json:"rate_limit_burst"`
@@ -379,6 +396,23 @@ type systemSettingsInput struct {
 	PaymentOpenPaymentKey                *string `json:"payment_openpayment_key"`
 	PaymentOpenPaymentNotifyURL          *string `json:"payment_openpayment_notify_url"`
 	PaymentOpenPaymentReturnURL          *string `json:"payment_openpayment_return_url"`
+	PaymentOfficialCurrency              *string `json:"payment_official_currency"`
+	PaymentWeChatMchID                   *string `json:"payment_wechat_mch_id"`
+	PaymentWeChatAppID                   *string `json:"payment_wechat_app_id"`
+	PaymentWeChatSerialNo                *string `json:"payment_wechat_serial_no"`
+	PaymentWeChatPrivateKey              *string `json:"payment_wechat_private_key"`
+	PaymentWeChatPlatformCertificate     *string `json:"payment_wechat_platform_certificate"`
+	PaymentWeChatAPIV3Key                *string `json:"payment_wechat_api_v3_key"`
+	PaymentAlipayAppID                   *string `json:"payment_alipay_app_id"`
+	PaymentAlipayPrivateKey              *string `json:"payment_alipay_private_key"`
+	PaymentAlipayPublicKey               *string `json:"payment_alipay_public_key"`
+	PaymentAlipayGatewayURL              *string `json:"payment_alipay_gateway_url"`
+	PaymentPayPalClientID                *string `json:"payment_paypal_client_id"`
+	PaymentPayPalClientSecret            *string `json:"payment_paypal_client_secret"`
+	PaymentPayPalBaseURL                 *string `json:"payment_paypal_base_url"`
+	PaymentPayPalWebhookID               *string `json:"payment_paypal_webhook_id"`
+	PaymentStripeSecretKey               *string `json:"payment_stripe_secret_key"`
+	PaymentStripeWebhookSecret           *string `json:"payment_stripe_webhook_secret"`
 	RateLimitEnabled                     *bool   `json:"rate_limit_enabled"`
 	RateLimitRequestsPerMinute           *string `json:"rate_limit_requests_per_minute"`
 	RateLimitBurst                       *string `json:"rate_limit_burst"`
@@ -981,6 +1015,23 @@ func (api *SystemAPI) UpdateSettings(c *gin.Context) {
 		"payment_openpayment_config_url":           input.PaymentOpenPaymentConfigURL,
 		"payment_openpayment_merchant_id":          input.PaymentOpenPaymentMerchantID,
 		"payment_openpayment_key":                  input.PaymentOpenPaymentKey,
+		"payment_official_currency":                input.PaymentOfficialCurrency,
+		"payment_wechat_mch_id":                    input.PaymentWeChatMchID,
+		"payment_wechat_app_id":                    input.PaymentWeChatAppID,
+		"payment_wechat_serial_no":                 input.PaymentWeChatSerialNo,
+		"payment_wechat_private_key":               input.PaymentWeChatPrivateKey,
+		"payment_wechat_platform_certificate":      input.PaymentWeChatPlatformCertificate,
+		"payment_wechat_api_v3_key":                input.PaymentWeChatAPIV3Key,
+		"payment_alipay_app_id":                    input.PaymentAlipayAppID,
+		"payment_alipay_private_key":               input.PaymentAlipayPrivateKey,
+		"payment_alipay_public_key":                input.PaymentAlipayPublicKey,
+		"payment_alipay_gateway_url":               input.PaymentAlipayGatewayURL,
+		"payment_paypal_client_id":                 input.PaymentPayPalClientID,
+		"payment_paypal_client_secret":             input.PaymentPayPalClientSecret,
+		"payment_paypal_base_url":                  input.PaymentPayPalBaseURL,
+		"payment_paypal_webhook_id":                input.PaymentPayPalWebhookID,
+		"payment_stripe_secret_key":                input.PaymentStripeSecretKey,
+		"payment_stripe_webhook_secret":            input.PaymentStripeWebhookSecret,
 		"rate_limit_requests_per_minute":           input.RateLimitRequestsPerMinute,
 		"rate_limit_burst":                         input.RateLimitBurst,
 		"sensitive_words":                          input.SensitiveWords,
@@ -1241,6 +1292,23 @@ func currentAdminSystemSettings() systemSettingsResponse {
 	settings.PaymentOpenPaymentKey = settingString("payment_openpayment_key", "")
 	settings.PaymentOpenPaymentNotifyURL = callbackURLFromBaseURL(settings.BaseURL, "/api/payment/openpayment/notify")
 	settings.PaymentOpenPaymentReturnURL = callbackURLFromBaseURL(settings.BaseURL, "/api/payment/openpayment/return")
+	settings.PaymentOfficialCurrency = settingString("payment_official_currency", "CNY")
+	settings.PaymentWeChatMchID = settingString("payment_wechat_mch_id", "")
+	settings.PaymentWeChatAppID = settingString("payment_wechat_app_id", "")
+	settings.PaymentWeChatSerialNo = settingString("payment_wechat_serial_no", "")
+	settings.PaymentWeChatPrivateKey = settingString("payment_wechat_private_key", "")
+	settings.PaymentWeChatPlatformCertificate = settingString("payment_wechat_platform_certificate", "")
+	settings.PaymentWeChatAPIV3Key = settingString("payment_wechat_api_v3_key", "")
+	settings.PaymentAlipayAppID = settingString("payment_alipay_app_id", "")
+	settings.PaymentAlipayPrivateKey = settingString("payment_alipay_private_key", "")
+	settings.PaymentAlipayPublicKey = settingString("payment_alipay_public_key", "")
+	settings.PaymentAlipayGatewayURL = settingString("payment_alipay_gateway_url", "https://openapi.alipay.com/gateway.do")
+	settings.PaymentPayPalClientID = settingString("payment_paypal_client_id", "")
+	settings.PaymentPayPalClientSecret = settingString("payment_paypal_client_secret", "")
+	settings.PaymentPayPalBaseURL = settingString("payment_paypal_base_url", "https://api-m.sandbox.paypal.com")
+	settings.PaymentPayPalWebhookID = settingString("payment_paypal_webhook_id", "")
+	settings.PaymentStripeSecretKey = settingString("payment_stripe_secret_key", "")
+	settings.PaymentStripeWebhookSecret = settingString("payment_stripe_webhook_secret", "")
 	settings.RedisEnabled = settingBool("redis_enabled", false)
 	settings.RedisAddress = settingString("redis_address", "127.0.0.1:6379")
 	settings.RedisUsername = settingString("redis_username", "")
