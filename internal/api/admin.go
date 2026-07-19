@@ -221,6 +221,7 @@ type systemSettingsResponse struct {
 	PaymentRechargePresets               string `json:"payment_recharge_presets"`
 	PaymentMethods                       string `json:"payment_methods"`
 	PaymentGatewayProvider               string `json:"payment_gateway_provider"`
+	PaymentChannels                      string `json:"payment_channels"`
 	PaymentYipayGatewayURL               string `json:"payment_yipay_gateway_url,omitempty"`
 	PaymentYipayPID                      string `json:"payment_yipay_pid,omitempty"`
 	PaymentYipayKey                      string `json:"payment_yipay_key,omitempty"`
@@ -385,6 +386,7 @@ type systemSettingsInput struct {
 	PaymentRechargePresets               *string `json:"payment_recharge_presets"`
 	PaymentMethods                       *string `json:"payment_methods"`
 	PaymentGatewayProvider               *string `json:"payment_gateway_provider"`
+	PaymentChannels                      *string `json:"payment_channels"`
 	PaymentYipayGatewayURL               *string `json:"payment_yipay_gateway_url"`
 	PaymentYipayPID                      *string `json:"payment_yipay_pid"`
 	PaymentYipayKey                      *string `json:"payment_yipay_key"`
@@ -1006,6 +1008,7 @@ func (api *SystemAPI) UpdateSettings(c *gin.Context) {
 		"payment_recharge_presets":                 input.PaymentRechargePresets,
 		"payment_methods":                          input.PaymentMethods,
 		"payment_gateway_provider":                 input.PaymentGatewayProvider,
+		"payment_channels":                         input.PaymentChannels,
 		"payment_yipay_gateway_url":                input.PaymentYipayGatewayURL,
 		"payment_yipay_pid":                        input.PaymentYipayPID,
 		"payment_yipay_key":                        input.PaymentYipayKey,
@@ -1282,6 +1285,7 @@ func currentAdminSystemSettings() systemSettingsResponse {
 	settings.SensitiveWords = settingString("sensitive_words", "")
 	settings.SSRFAllowedHosts = settingString("ssrf_allowed_hosts", "")
 	settings.PaymentYipayGatewayURL = settingString("payment_yipay_gateway_url", "")
+	settings.PaymentChannels = settingString("payment_channels", "[]")
 	settings.PaymentYipayPID = settingString("payment_yipay_pid", "")
 	settings.PaymentYipayKey = settingString("payment_yipay_key", "")
 	settings.PaymentYipayNotifyURL = settingString("payment_yipay_notify_url", "")

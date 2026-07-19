@@ -573,6 +573,7 @@ func EnsureDefaultSystemSettings() error {
 		"payment_recharge_presets":                   "[\"5\",\"10\",\"20\",\"50\",\"100\"]",
 		"payment_methods":                            "[\"alipay\",\"wxpay\"]",
 		"payment_gateway_provider":                   "yipay",
+		"payment_channels":                           "[]",
 		"payment_yipay_gateway_url":                  "",
 		"payment_yipay_pid":                          "",
 		"payment_yipay_key":                          "",

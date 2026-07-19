@@ -82,6 +82,7 @@ type PaymentOrder struct {
 	Method          string          `gorm:"size:32;not null" json:"method"`
 	Status          string          `gorm:"index;size:32;not null" json:"status"`
 	GatewayProvider string          `gorm:"size:32" json:"gateway_provider"`
+	GatewayChannel  string          `gorm:"size:64" json:"gateway_channel"`
 	GatewayTradeNo  string          `gorm:"size:128" json:"gateway_trade_no"`
 	NotifyPayload   string          `gorm:"type:text" json:"-"`
 	PaidAt          *time.Time      `json:"paid_at"`

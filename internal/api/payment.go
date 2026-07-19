@@ -46,6 +46,8 @@ func PaymentFeatureEnabled() bool {
 }
 
 type paymentConfig struct {
+	ChannelID             string
+	ChannelName           string
 	Enabled               bool
 	Provider              string
 	CurrencyDisplayName   string
@@ -84,17 +86,26 @@ type paymentConfig struct {
 }
 
 type paymentConfigResponse struct {
-	Enabled             bool     `json:"enabled"`
-	CurrencyDisplayName string   `json:"currency_display_name"`
-	USDToRMBRate        string   `json:"usd_to_rmb_rate"`
-	MinRechargeAmount   string   `json:"min_recharge_amount"`
-	RechargePresets     []string `json:"recharge_presets"`
-	Methods             []string `json:"methods"`
+	Enabled             bool                     `json:"enabled"`
+	CurrencyDisplayName string                   `json:"currency_display_name"`
+	USDToRMBRate        string                   `json:"usd_to_rmb_rate"`
+	MinRechargeAmount   string                   `json:"min_recharge_amount"`
+	RechargePresets     []string                 `json:"recharge_presets"`
+	Methods             []string                 `json:"methods"`
+	Channels            []paymentChannelResponse `json:"channels"`
+}
+
+type paymentChannelResponse struct {
+	ID       string   `json:"id"`
+	Name     string   `json:"name"`
+	Provider string   `json:"provider"`
+	Methods  []string `json:"methods"`
 }
 
 type createPaymentOrderInput struct {
-	Amount string `json:"amount"`
-	Method string `json:"method"`
+	Amount    string `json:"amount"`
+	Method    string `json:"method"`
+	ChannelID string `json:"channel_id"`
 }
 
 type paymentOrderResponse struct {
@@ -120,14 +131,29 @@ func (api *PaymentAPI) Config(c *gin.Context) {
 		})
 		return
 	}
-	cfg := currentPaymentConfig()
+	channels := paymentChannels()
+	methods := make([]string, 0)
+	responses := make([]paymentChannelResponse, 0, len(channels))
+	seenMethods := map[string]struct{}{}
+	for _, channel := range channels {
+		responses = append(responses, paymentChannelResponse{ID: channel.ChannelID, Name: channel.ChannelName, Provider: channel.Provider, Methods: channel.Methods})
+		for _, method := range channel.Methods {
+			key := strings.ToLower(method)
+			if _, exists := seenMethods[key]; !exists {
+				seenMethods[key] = struct{}{}
+				methods = append(methods, method)
+			}
+		}
+	}
+	base := legacyPaymentConfig()
 	c.JSON(http.StatusOK, paymentConfigResponse{
-		Enabled:             cfg.Enabled,
-		CurrencyDisplayName: cfg.CurrencyDisplayName,
-		USDToRMBRate:        cfg.USDToRMBRate.String(),
-		MinRechargeAmount:   cfg.MinRechargeAmount.String(),
-		RechargePresets:     cfg.RechargePresets,
-		Methods:             cfg.Methods,
+		Enabled:             len(channels) > 0,
+		CurrencyDisplayName: base.CurrencyDisplayName,
+		USDToRMBRate:        base.USDToRMBRate.String(),
+		MinRechargeAmount:   base.MinRechargeAmount.String(),
+		RechargePresets:     base.RechargePresets,
+		Methods:             methods,
+		Channels:            responses,
 	})
 }
 
@@ -140,17 +166,17 @@ func (api *PaymentAPI) CreateOrder(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
 		return
 	}
-	cfg := currentPaymentConfig()
-	if !cfg.Enabled {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Payment is disabled"})
-		return
-	}
-	if err := validatePaymentGatewayConfig(cfg); err != nil {
+	var input createPaymentOrderInput
+	if err := c.ShouldBindJSON(&input); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	var input createPaymentOrderInput
-	if err := c.ShouldBindJSON(&input); err != nil {
+	cfg, found := paymentChannelConfig(strings.TrimSpace(input.ChannelID))
+	if !found || !cfg.Enabled {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Payment channel is not enabled"})
+		return
+	}
+	if err := validatePaymentGatewayConfig(cfg); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -187,6 +213,7 @@ func (api *PaymentAPI) CreateOrder(c *gin.Context) {
 		Method:          method,
 		Status:          paymentStatusPending,
 		GatewayProvider: cfg.Provider,
+		GatewayChannel:  cfg.ChannelID,
 	}
 	order.PaymentCurrency, order.GatewayAmount = paymentGatewayAmount(cfg, order)
 	if err := model.DB.Create(&order).Error; err != nil {
@@ -298,6 +325,14 @@ func (api *PaymentAPI) Return(c *gin.Context) {
 }
 
 func handlePaymentCallback(c *gin.Context) (bool, error) {
+	if strings.Contains(c.FullPath(), "/yipay/") {
+		params := paymentParams(c)
+		cfg, err := paymentCallbackChannel(strings.TrimSpace(params["out_trade_no"]), paymentProviderYipay)
+		if err != nil {
+			return false, err
+		}
+		return handleYipayCallback(c, cfg)
+	}
 	cfg := currentPaymentConfig()
 	if cfg.Provider == paymentProviderOpenPayment {
 		return handleOpenPaymentCallback(c, cfg)
@@ -305,11 +340,34 @@ func handlePaymentCallback(c *gin.Context) (bool, error) {
 	if isOfficialPaymentProvider(cfg.Provider) {
 		return false, errors.New("official payment providers require their dedicated callback endpoint")
 	}
-	return handleYipayCallback(c)
+	return handleYipayCallback(c, cfg)
 }
 
-func handleYipayCallback(c *gin.Context) (bool, error) {
-	cfg := currentPaymentConfig()
+func paymentCallbackChannel(orderNo, provider string) (paymentConfig, error) {
+	if orderNo == "" {
+		return paymentConfig{}, errors.New("missing order no")
+	}
+	var order model.PaymentOrder
+	if err := model.DB.Select("gateway_provider", "gateway_channel").Where("order_no = ?", orderNo).First(&order).Error; err != nil {
+		return paymentConfig{}, err
+	}
+	if order.GatewayProvider != provider {
+		return paymentConfig{}, errors.New("payment provider mismatch")
+	}
+	if order.GatewayChannel == "" {
+		legacy := legacyPaymentConfig()
+		if legacy.Provider == provider {
+			return legacy, nil
+		}
+	}
+	cfg, found := paymentChannelConfig(order.GatewayChannel)
+	if !found || cfg.Provider != provider {
+		return paymentConfig{}, errors.New("payment channel is not enabled")
+	}
+	return cfg, nil
+}
+
+func handleYipayCallback(c *gin.Context, cfg paymentConfig) (bool, error) {
 	if strings.TrimSpace(cfg.PID) == "" || strings.TrimSpace(cfg.Key) == "" {
 		return false, errors.New("payment gateway is not configured")
 	}
@@ -340,6 +398,9 @@ func handleYipayCallback(c *gin.Context) (bool, error) {
 		if order.Status == paymentStatusPaid {
 			return nil
 		}
+		if order.GatewayProvider != paymentProviderYipay || (order.GatewayChannel != "" && order.GatewayChannel != cfg.ChannelID) {
+			return errors.New("payment channel mismatch")
+		}
 		if !money.Round(2).Equal(order.RMBAmount.Round(2)) {
 			return errors.New("payment amount mismatch")
 		}
@@ -362,8 +423,14 @@ func handleYipayCallback(c *gin.Context) (bool, error) {
 }
 
 func currentPaymentConfig() paymentConfig {
+	return legacyPaymentConfig()
+}
+
+func legacyPaymentConfig() paymentConfig {
 	if !paymentFeatureEnabled || service.PersonalModeEnabled() {
 		return paymentConfig{
+			ChannelID:           "legacy",
+			ChannelName:         "Default payment channel",
 			Enabled:             false,
 			Provider:            paymentProviderYipay,
 			CurrencyDisplayName: firstNonEmptyString(settingString("payment_currency_display_name", "$"), "$"),
@@ -374,6 +441,8 @@ func currentPaymentConfig() paymentConfig {
 		}
 	}
 	cfg := paymentConfig{
+		ChannelID:             "legacy",
+		ChannelName:           "Default payment channel",
 		Enabled:               settingBool("payment_enabled", false),
 		Provider:              normalizePaymentProvider(settingString("payment_gateway_provider", paymentProviderYipay)),
 		CurrencyDisplayName:   firstNonEmptyString(settingString("payment_currency_display_name", "$"), "$"),
@@ -417,6 +486,102 @@ func currentPaymentConfig() paymentConfig {
 		cfg.Methods = []string{cfg.Provider}
 	}
 	return cfg
+}
+
+type storedPaymentChannel struct {
+	ID       string            `json:"id"`
+	Name     string            `json:"name"`
+	Provider string            `json:"provider"`
+	Enabled  bool              `json:"enabled"`
+	Methods  []string          `json:"methods"`
+	Currency string            `json:"currency"`
+	Config   map[string]string `json:"config"`
+}
+
+func paymentChannels() []paymentConfig {
+	legacy := legacyPaymentConfig()
+	if !legacy.Enabled {
+		return []paymentConfig{}
+	}
+	var stored []storedPaymentChannel
+	if err := json.Unmarshal([]byte(settingString("payment_channels", "[]")), &stored); err != nil || len(stored) == 0 {
+		return []paymentConfig{legacy}
+	}
+	channels := make([]paymentConfig, 0, len(stored))
+	seen := map[string]struct{}{}
+	for _, channel := range stored {
+		id := strings.TrimSpace(channel.ID)
+		if id == "" || !channel.Enabled {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		cfg := paymentConfigFromStoredChannel(legacy, channel)
+		if cfg.Provider == "" || len(cfg.Methods) == 0 {
+			continue
+		}
+		channels = append(channels, cfg)
+	}
+	return channels
+}
+
+func paymentChannelConfig(channelID string) (paymentConfig, bool) {
+	channels := paymentChannels()
+	if len(channels) == 0 {
+		return paymentConfig{}, false
+	}
+	if channelID == "" && len(channels) == 1 {
+		return channels[0], true
+	}
+	for _, channel := range channels {
+		if channel.ChannelID == channelID {
+			return channel, true
+		}
+	}
+	return paymentConfig{}, false
+}
+
+func paymentConfigFromStoredChannel(base paymentConfig, channel storedPaymentChannel) paymentConfig {
+	config := channel.Config
+	if config == nil {
+		config = map[string]string{}
+	}
+	base.ChannelID = strings.TrimSpace(channel.ID)
+	base.ChannelName = firstNonEmptyString(strings.TrimSpace(channel.Name), base.ChannelID)
+	base.Provider = normalizePaymentProvider(channel.Provider)
+	base.Methods = channel.Methods
+	base.OfficialCurrency = normalizeOfficialCurrency(firstNonEmptyString(channel.Currency, base.OfficialCurrency))
+	base.GatewayURL = firstNonEmptyString(config["gateway_url"], base.GatewayURL)
+	base.PID = firstNonEmptyString(config["pid"], base.PID)
+	base.Key = firstNonEmptyString(config["key"], base.Key)
+	base.NotifyURL = firstNonEmptyString(config["notify_url"], base.NotifyURL)
+	base.ReturnURL = firstNonEmptyString(config["return_url"], base.ReturnURL)
+	base.OpenPaymentBaseURL = firstNonEmptyString(config["openpayment_base_url"], base.OpenPaymentBaseURL)
+	base.OpenPaymentConfigURL = firstNonEmptyString(config["openpayment_config_url"], base.OpenPaymentConfigURL)
+	base.OpenPaymentMerchantID = firstNonEmptyString(config["openpayment_merchant_id"], base.OpenPaymentMerchantID)
+	base.OpenPaymentKey = firstNonEmptyString(config["openpayment_key"], base.OpenPaymentKey)
+	base.WeChatMchID = firstNonEmptyString(config["wechat_mch_id"], base.WeChatMchID)
+	base.WeChatAppID = firstNonEmptyString(config["wechat_app_id"], base.WeChatAppID)
+	base.WeChatSerialNo = firstNonEmptyString(config["wechat_serial_no"], base.WeChatSerialNo)
+	base.WeChatPrivateKey = firstNonEmptyString(config["wechat_private_key"], base.WeChatPrivateKey)
+	base.WeChatPlatformCert = firstNonEmptyString(config["wechat_platform_certificate"], base.WeChatPlatformCert)
+	base.WeChatAPIV3Key = firstNonEmptyString(config["wechat_api_v3_key"], base.WeChatAPIV3Key)
+	base.AlipayAppID = firstNonEmptyString(config["alipay_app_id"], base.AlipayAppID)
+	base.AlipayPrivateKey = firstNonEmptyString(config["alipay_private_key"], base.AlipayPrivateKey)
+	base.AlipayPublicKey = firstNonEmptyString(config["alipay_public_key"], base.AlipayPublicKey)
+	base.AlipayGatewayURL = firstNonEmptyString(config["alipay_gateway_url"], base.AlipayGatewayURL)
+	base.PayPalClientID = firstNonEmptyString(config["paypal_client_id"], base.PayPalClientID)
+	base.PayPalClientSecret = firstNonEmptyString(config["paypal_client_secret"], base.PayPalClientSecret)
+	base.PayPalBaseURL = firstNonEmptyString(config["paypal_base_url"], base.PayPalBaseURL)
+	base.PayPalWebhookID = firstNonEmptyString(config["paypal_webhook_id"], base.PayPalWebhookID)
+	base.StripeSecretKey = firstNonEmptyString(config["stripe_secret_key"], base.StripeSecretKey)
+	base.StripeWebhookSecret = firstNonEmptyString(config["stripe_webhook_secret"], base.StripeWebhookSecret)
+	if isOfficialPaymentProvider(base.Provider) {
+		base.Methods = []string{base.Provider}
+	}
+	return base
 }
 
 func requirePaymentFeature(c *gin.Context) bool {

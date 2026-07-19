@@ -311,21 +311,31 @@ func (api *PaymentAPI) officialNotify(c *gin.Context, provider string) {
 		c.String(http.StatusNotFound, "payment requires premium edition")
 		return
 	}
-	cfg := currentPaymentConfig()
-	if cfg.Provider != provider {
+	channels := make([]paymentConfig, 0)
+	for _, channel := range paymentChannels() {
+		if channel.Provider == provider {
+			channels = append(channels, channel)
+		}
+	}
+	if len(channels) == 0 {
 		c.String(http.StatusNotFound, "payment provider is not enabled")
 		return
 	}
 	var err error
-	switch provider {
-	case paymentProviderWeChatPay:
-		err = handleWeChatPayNotify(c, cfg)
-	case paymentProviderAlipay:
-		err = handleAlipayNotify(c, cfg)
-	case paymentProviderPayPal:
-		err = handlePayPalNotify(c, cfg)
-	case paymentProviderStripe:
-		err = handleStripeNotify(c, cfg)
+	for _, cfg := range channels {
+		switch provider {
+		case paymentProviderWeChatPay:
+			err = handleWeChatPayNotify(c, cfg)
+		case paymentProviderAlipay:
+			err = handleAlipayNotify(c, cfg)
+		case paymentProviderPayPal:
+			err = handlePayPalNotify(c, cfg)
+		case paymentProviderStripe:
+			err = handleStripeNotify(c, cfg)
+		}
+		if err == nil {
+			break
+		}
 	}
 	if err != nil {
 		if provider == paymentProviderWeChatPay {
@@ -398,7 +408,7 @@ func handleWeChatPayNotify(c *gin.Context, cfg paymentConfig) error {
 	if transaction.TradeState != "SUCCESS" || transaction.Amount.Currency != "CNY" {
 		return errors.New("WeChat Pay transaction is not successful")
 	}
-	return completeOfficialPayment(paymentProviderWeChatPay, transaction.OutTradeNo, transaction.TransactionID, decimal.NewFromInt(transaction.Amount.Total).Div(decimal.NewFromInt(100)), "CNY", string(plain))
+	return completeOfficialPayment(paymentProviderWeChatPay, cfg.ChannelID, transaction.OutTradeNo, transaction.TransactionID, decimal.NewFromInt(transaction.Amount.Total).Div(decimal.NewFromInt(100)), "CNY", string(plain))
 }
 
 func handleAlipayNotify(c *gin.Context, cfg paymentConfig) error {
@@ -417,7 +427,7 @@ func handleAlipayNotify(c *gin.Context, cfg paymentConfig) error {
 	if err != nil {
 		return err
 	}
-	return completeOfficialPayment(paymentProviderAlipay, params["out_trade_no"], params["trade_no"], amount, normalizeOfficialCurrency(cfg.OfficialCurrency), paramsJSON(params))
+	return completeOfficialPayment(paymentProviderAlipay, cfg.ChannelID, params["out_trade_no"], params["trade_no"], amount, normalizeOfficialCurrency(cfg.OfficialCurrency), paramsJSON(params))
 }
 
 func handlePayPalNotify(c *gin.Context, cfg paymentConfig) error {
@@ -448,7 +458,7 @@ func handlePayPalNotify(c *gin.Context, cfg paymentConfig) error {
 			orderNo = order.OrderNo
 		}
 	}
-	return completeOfficialPayment(paymentProviderPayPal, orderNo, tradeNo, amount, currency, string(body))
+	return completeOfficialPayment(paymentProviderPayPal, cfg.ChannelID, orderNo, tradeNo, amount, currency, string(body))
 }
 
 func handleStripeNotify(c *gin.Context, cfg paymentConfig) error {
@@ -479,10 +489,10 @@ func handleStripeNotify(c *gin.Context, cfg paymentConfig) error {
 	if event.Type != "checkout.session.completed" || event.Data.Object.PaymentStatus != "paid" {
 		return nil
 	}
-	return completeOfficialPayment(paymentProviderStripe, event.Data.Object.Metadata.OrderNo, event.Data.Object.ID, decimal.NewFromInt(event.Data.Object.AmountTotal).Div(decimal.NewFromInt(100)), strings.ToUpper(event.Data.Object.Currency), string(body))
+	return completeOfficialPayment(paymentProviderStripe, cfg.ChannelID, event.Data.Object.Metadata.OrderNo, event.Data.Object.ID, decimal.NewFromInt(event.Data.Object.AmountTotal).Div(decimal.NewFromInt(100)), strings.ToUpper(event.Data.Object.Currency), string(body))
 }
 
-func completeOfficialPayment(provider, orderNo, tradeNo string, amount decimal.Decimal, currency, payload string) error {
+func completeOfficialPayment(provider, channelID, orderNo, tradeNo string, amount decimal.Decimal, currency, payload string) error {
 	if strings.TrimSpace(orderNo) == "" {
 		return errors.New("missing payment order number")
 	}
@@ -491,7 +501,7 @@ func completeOfficialPayment(provider, orderNo, tradeNo string, amount decimal.D
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("order_no = ?", orderNo).First(&order).Error; err != nil {
 			return err
 		}
-		if order.GatewayProvider != provider {
+		if order.GatewayProvider != provider || (order.GatewayChannel != "" && order.GatewayChannel != channelID) {
 			return errors.New("payment provider mismatch")
 		}
 		if order.Status == paymentStatusPaid {
