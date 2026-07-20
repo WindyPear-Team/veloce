@@ -15,27 +15,29 @@ import (
 )
 
 type AdvancedChatAgent struct {
-	ID               uint       `gorm:"primaryKey" json:"id"`
-	UserID           uint       `gorm:"uniqueIndex:idx_advanced_chat_agent_user_name;uniqueIndex:idx_advanced_chat_agent_user_stable_id;not null" json:"user_id"`
-	User             model.User `gorm:"foreignKey:UserID" json:"-"`
-	OrganizationID   uint       `gorm:"index" json:"organization_id,omitempty"`
-	WorkspaceID      uint       `gorm:"index" json:"workspace_id,omitempty"`
-	OwnerUserID      uint       `gorm:"index" json:"owner_user_id,omitempty"`
-	Visibility       string     `gorm:"size:20;not null;default:'personal';index" json:"visibility"`
-	StableID         *string    `gorm:"uniqueIndex:idx_advanced_chat_agent_user_stable_id;size:80" json:"-"`
-	Name             string     `gorm:"uniqueIndex:idx_advanced_chat_agent_user_name;size:100;not null" json:"name"`
-	Prompt           string     `gorm:"type:text;not null" json:"prompt"`
-	DefaultModel     string     `gorm:"size:100;not null" json:"default_model"`
-	UserChannelID    uint       `gorm:"index" json:"user_channel_id"`
-	Stream           bool       `gorm:"not null;default:false" json:"stream"`
-	SkillIDs         string     `gorm:"type:text;not null;default:'[]'" json:"-"`
-	Skills           []string   `gorm:"-" json:"skill_ids"`
-	MCPServerIDs     string     `gorm:"type:text;not null;default:'[]'" json:"-"`
-	MCPServers       []string   `gorm:"-" json:"mcp_server_ids"`
-	KnowledgeBaseIDs string     `gorm:"type:text;not null;default:'[]'" json:"-"`
-	KnowledgeBases   []string   `gorm:"-" json:"knowledge_base_ids"`
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
+	ID               uint                             `gorm:"primaryKey" json:"id"`
+	UserID           uint                             `gorm:"uniqueIndex:idx_advanced_chat_agent_user_name;uniqueIndex:idx_advanced_chat_agent_user_stable_id;not null" json:"user_id"`
+	User             model.User                       `gorm:"foreignKey:UserID" json:"-"`
+	OrganizationID   uint                             `gorm:"index" json:"organization_id,omitempty"`
+	WorkspaceID      uint                             `gorm:"index" json:"workspace_id,omitempty"`
+	OwnerUserID      uint                             `gorm:"index" json:"owner_user_id,omitempty"`
+	Visibility       string                           `gorm:"size:20;not null;default:'personal';index" json:"visibility"`
+	StableID         *string                          `gorm:"uniqueIndex:idx_advanced_chat_agent_user_stable_id;size:80" json:"-"`
+	Name             string                           `gorm:"uniqueIndex:idx_advanced_chat_agent_user_name;size:100;not null" json:"name"`
+	Prompt           string                           `gorm:"type:text;not null" json:"prompt"`
+	DefaultModel     string                           `gorm:"size:100;not null" json:"default_model"`
+	UserChannelID    uint                             `gorm:"index" json:"user_channel_id"`
+	Stream           bool                             `gorm:"not null;default:false" json:"stream"`
+	SkillIDs         string                           `gorm:"type:text;not null;default:'[]'" json:"-"`
+	Skills           []string                         `gorm:"-" json:"skill_ids"`
+	MCPServerIDs     string                           `gorm:"type:text;not null;default:'[]'" json:"-"`
+	MCPServers       []string                         `gorm:"-" json:"mcp_server_ids"`
+	KnowledgeBaseIDs string                           `gorm:"type:text;not null;default:'[]'" json:"-"`
+	KnowledgeBases   []string                         `gorm:"-" json:"knowledge_base_ids"`
+	PresetMessages   string                           `gorm:"type:text;not null;default:'[]'" json:"-"`
+	Presets          []AdvancedChatAgentPresetMessage `gorm:"-" json:"preset_messages"`
+	CreatedAt        time.Time                        `json:"created_at"`
+	UpdatedAt        time.Time                        `json:"updated_at"`
 }
 
 const (
@@ -44,21 +46,27 @@ const (
 )
 
 type advancedChatAgentResponse struct {
-	ID               string    `json:"id"`
-	Name             string    `json:"name"`
-	OrganizationID   uint      `json:"organization_id,omitempty"`
-	WorkspaceID      uint      `json:"workspace_id,omitempty"`
-	OwnerUserID      uint      `json:"owner_user_id,omitempty"`
-	Visibility       string    `json:"visibility"`
-	Prompt           string    `json:"prompt"`
-	DefaultModel     string    `json:"default_model"`
-	UserChannelID    uint      `json:"user_channel_id,omitempty"`
-	Stream           bool      `json:"stream"`
-	SkillIDs         []string  `json:"skill_ids"`
-	MCPServerIDs     []string  `json:"mcp_server_ids"`
-	KnowledgeBaseIDs []string  `json:"knowledge_base_ids"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	ID               string                           `json:"id"`
+	Name             string                           `json:"name"`
+	OrganizationID   uint                             `json:"organization_id,omitempty"`
+	WorkspaceID      uint                             `json:"workspace_id,omitempty"`
+	OwnerUserID      uint                             `json:"owner_user_id,omitempty"`
+	Visibility       string                           `json:"visibility"`
+	Prompt           string                           `json:"prompt"`
+	DefaultModel     string                           `json:"default_model"`
+	UserChannelID    uint                             `json:"user_channel_id,omitempty"`
+	Stream           bool                             `json:"stream"`
+	SkillIDs         []string                         `json:"skill_ids"`
+	MCPServerIDs     []string                         `json:"mcp_server_ids"`
+	KnowledgeBaseIDs []string                         `json:"knowledge_base_ids"`
+	PresetMessages   []AdvancedChatAgentPresetMessage `json:"preset_messages"`
+	CreatedAt        time.Time                        `json:"created_at"`
+	UpdatedAt        time.Time                        `json:"updated_at"`
+}
+
+type AdvancedChatAgentPresetMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
 }
 
 type AdvancedChatAgentStudio struct {
@@ -128,15 +136,16 @@ type AdvancedChatMCPServer struct {
 type advancedChatAPI struct{}
 
 type advancedChatAgentInput struct {
-	Name             string   `json:"name"`
-	Prompt           string   `json:"prompt"`
-	DefaultModel     string   `json:"default_model"`
-	UserChannelID    uint     `json:"user_channel_id"`
-	Stream           bool     `json:"stream"`
-	SkillIDs         []string `json:"skill_ids"`
-	MCPServerIDs     []string `json:"mcp_server_ids"`
-	KnowledgeBaseIDs []string `json:"knowledge_base_ids"`
-	Visibility       string   `json:"visibility"`
+	Name             string                           `json:"name"`
+	Prompt           string                           `json:"prompt"`
+	DefaultModel     string                           `json:"default_model"`
+	UserChannelID    uint                             `json:"user_channel_id"`
+	Stream           bool                             `json:"stream"`
+	SkillIDs         []string                         `json:"skill_ids"`
+	MCPServerIDs     []string                         `json:"mcp_server_ids"`
+	KnowledgeBaseIDs []string                         `json:"knowledge_base_ids"`
+	PresetMessages   []AdvancedChatAgentPresetMessage `json:"preset_messages"`
+	Visibility       string                           `json:"visibility"`
 }
 
 type advancedChatAdminSettingsResponse struct {
@@ -692,6 +701,7 @@ func (api *advancedChatAPI) updateAgent(c *gin.Context) {
 		"skill_ids":          next.SkillIDs,
 		"mcp_server_ids":     next.MCPServerIDs,
 		"knowledge_base_ids": next.KnowledgeBaseIDs,
+		"preset_messages":    next.PresetMessages,
 	}).Error; err != nil {
 		if isAdvancedChatUniqueConstraintError(err) {
 			c.JSON(http.StatusConflict, gin.H{"error": "Agent name already exists"})
@@ -856,6 +866,11 @@ func advancedChatAgentFromInput(c *gin.Context, userID uint, input advancedChatA
 	skillIDsJSON, _ := json.Marshal(skillIDs)
 	mcpServerIDsJSON, _ := json.Marshal(mcpServerIDs)
 	knowledgeBaseIDsJSON, _ := json.Marshal(knowledgeBaseIDs)
+	presetMessages, ok := normalizeAdvancedChatAgentPresetMessages(c, input.PresetMessages)
+	if !ok {
+		return AdvancedChatAgent{}, false
+	}
+	presetMessagesJSON, _ := json.Marshal(presetMessages)
 	organizationID, workspaceID := advancedChatEnterpriseScope(c)
 	visibility := model.NormalizeResourceVisibility(input.Visibility)
 	if organizationID == 0 {
@@ -879,6 +894,7 @@ func advancedChatAgentFromInput(c *gin.Context, userID uint, input advancedChatA
 		SkillIDs:         string(skillIDsJSON),
 		MCPServerIDs:     string(mcpServerIDsJSON),
 		KnowledgeBaseIDs: string(knowledgeBaseIDsJSON),
+		PresetMessages:   string(presetMessagesJSON),
 	}, true
 }
 
@@ -889,6 +905,54 @@ func hydrateAdvancedChatAgentLists(agent *AdvancedChatAgent) {
 	agent.Skills = decodeStringList(agent.SkillIDs)
 	agent.MCPServers = decodeStringList(agent.MCPServerIDs)
 	agent.KnowledgeBases = decodeStringList(agent.KnowledgeBaseIDs)
+	agent.Presets = decodeAdvancedChatAgentPresetMessages(agent.PresetMessages)
+}
+
+func normalizeAdvancedChatAgentPresetMessages(c *gin.Context, input []AdvancedChatAgentPresetMessage) ([]AdvancedChatAgentPresetMessage, bool) {
+	if len(input) > 24 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Too many preset messages"})
+		return nil, false
+	}
+	result := make([]AdvancedChatAgentPresetMessage, 0, len(input))
+	totalRunes := 0
+	for _, item := range input {
+		role := strings.ToLower(strings.TrimSpace(item.Role))
+		if role != "system" && role != "user" && role != "assistant" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Preset message role must be system, user, or assistant"})
+			return nil, false
+		}
+		content := strings.TrimSpace(item.Content)
+		if content == "" {
+			continue
+		}
+		if len([]rune(content)) > 8000 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Preset message is too long"})
+			return nil, false
+		}
+		totalRunes += len([]rune(content))
+		if totalRunes > 30000 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Preset messages are too long"})
+			return nil, false
+		}
+		result = append(result, AdvancedChatAgentPresetMessage{Role: role, Content: content})
+	}
+	return result, true
+}
+
+func decodeAdvancedChatAgentPresetMessages(raw string) []AdvancedChatAgentPresetMessage {
+	var values []AdvancedChatAgentPresetMessage
+	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &values); err != nil {
+		return []AdvancedChatAgentPresetMessage{}
+	}
+	result := make([]AdvancedChatAgentPresetMessage, 0, len(values))
+	for _, item := range values {
+		role := strings.ToLower(strings.TrimSpace(item.Role))
+		content := strings.TrimSpace(item.Content)
+		if content != "" && (role == "system" || role == "user" || role == "assistant") {
+			result = append(result, AdvancedChatAgentPresetMessage{Role: role, Content: content})
+		}
+	}
+	return result
 }
 
 func advancedChatAgentResponseFromModel(agent *AdvancedChatAgent) advancedChatAgentResponse {
@@ -914,6 +978,7 @@ func advancedChatAgentResponseFromModel(agent *AdvancedChatAgent) advancedChatAg
 		SkillIDs:         agent.Skills,
 		MCPServerIDs:     agent.MCPServers,
 		KnowledgeBaseIDs: agent.KnowledgeBases,
+		PresetMessages:   agent.Presets,
 		CreatedAt:        agent.CreatedAt,
 		UpdatedAt:        agent.UpdatedAt,
 	}
@@ -961,15 +1026,17 @@ func ensureAdvancedChatDefaultAgent(userID uint) (*AdvancedChatAgent, error) {
 
 	skillIDsJSON, _ := json.Marshal([]string{})
 	agent = AdvancedChatAgent{
-		UserID:        userID,
-		StableID:      &stableID,
-		Name:          advancedChatDefaultAgentName,
-		Prompt:        "",
-		DefaultModel:  "",
-		UserChannelID: 0,
-		Stream:        false,
-		SkillIDs:      string(skillIDsJSON),
-		MCPServerIDs:  string(skillIDsJSON),
+		UserID:           userID,
+		StableID:         &stableID,
+		Name:             advancedChatDefaultAgentName,
+		Prompt:           "",
+		DefaultModel:     "",
+		UserChannelID:    0,
+		Stream:           false,
+		SkillIDs:         string(skillIDsJSON),
+		MCPServerIDs:     string(skillIDsJSON),
+		KnowledgeBaseIDs: string(skillIDsJSON),
+		PresetMessages:   string(skillIDsJSON),
 	}
 	if err := model.DB.Create(&agent).Error; err != nil {
 		return nil, err

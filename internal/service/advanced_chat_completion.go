@@ -302,7 +302,12 @@ func (api *advancedChatAPI) completeChat(c *gin.Context) {
 		}
 	}
 	tools = append(tools, extension.Tools...)
-	executorMessages := make([]ChatExecutorMessage, 0, len(messages)+maxToolRounds*2)
+	presetMessages := []AdvancedChatAgentPresetMessage{}
+	if agent != nil {
+		presetMessages = agent.Presets
+	}
+	executorMessages := make([]ChatExecutorMessage, 0, len(presetMessages)+len(messages)+maxToolRounds*2)
+	executorMessages = append(executorMessages, advancedChatPresetExecutorMessages(presetMessages)...)
 	for _, message := range messages {
 		executorMessages = append(executorMessages, advancedChatExecutorMessage(user.ID, message))
 	}

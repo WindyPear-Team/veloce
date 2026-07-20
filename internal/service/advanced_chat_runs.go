@@ -291,6 +291,7 @@ type preparedAdvancedChatAssistantRun struct {
 	runID                    string
 	maxToolRounds            int
 	agent                    *AdvancedChatAgent
+	presetMessages           []AdvancedChatAgentPresetMessage
 	skills                   []advancedChatRuntimeSkill
 	workspaceSkills          []advancedChatWorkspaceSkill
 	agentGroups              []advancedChatAgentGroup
@@ -1308,6 +1309,10 @@ func prepareAdvancedChatAssistantRun(ctx context.Context, userID uint, input adv
 	}
 	input.ConnectorAutoApprove = input.ConnectorApprovalMode == advancedChatConnectorApprovalFullAccess
 	input.Mode = mode
+	presetMessages := []AdvancedChatAgentPresetMessage{}
+	if agent != nil {
+		presetMessages = agent.Presets
+	}
 	return preparedAdvancedChatAssistantRun{
 		input:                    input,
 		messages:                 messages,
@@ -1315,6 +1320,7 @@ func prepareAdvancedChatAssistantRun(ctx context.Context, userID uint, input adv
 		mode:                     mode,
 		maxToolRounds:            advancedChatCompletionMaxToolRounds(mode),
 		agent:                    agent,
+		presetMessages:           presetMessages,
 		skills:                   skills,
 		workspaceSkills:          workspaceSkills,
 		agentGroups:              agentGroups,
@@ -2128,7 +2134,8 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 			systemPrompt = strings.Join([]string{systemPrompt, prepared.knowledgeContext}, "\n\n")
 		}
 	}
-	executorMessages := make([]ChatExecutorMessage, 0, len(prepared.messages)+prepared.maxToolRounds*2)
+	executorMessages := make([]ChatExecutorMessage, 0, len(prepared.presetMessages)+len(prepared.messages)+prepared.maxToolRounds*2)
+	executorMessages = append(executorMessages, advancedChatPresetExecutorMessages(prepared.presetMessages)...)
 	for _, message := range prepared.messages {
 		executorMessages = append(executorMessages, advancedChatExecutorMessageForPreparedRun(user.ID, message, prepared))
 	}
@@ -2564,6 +2571,17 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 		ToolCalls:       totalToolCalls,
 		ToolCallDetails: toolCallDetails,
 	}, nil
+}
+
+func advancedChatPresetExecutorMessages(values []AdvancedChatAgentPresetMessage) []ChatExecutorMessage {
+	messages := make([]ChatExecutorMessage, 0, len(values))
+	for _, value := range values {
+		if strings.TrimSpace(value.Content) == "" {
+			continue
+		}
+		messages = append(messages, ChatExecutorMessage{Role: value.Role, Content: value.Content})
+	}
+	return messages
 }
 
 func executeAdvancedChatModelRequestWithRetry(
