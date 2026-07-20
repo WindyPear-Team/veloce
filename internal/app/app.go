@@ -108,6 +108,8 @@ func Run() error {
 	r.GET("/api/public/models", modelAPI.PublicCatalog)
 	r.GET("/api/public/status", statusMonitorAPI.PublicStatus)
 	r.GET("/api/public/announcements", announcementAPI.PublicList)
+	r.GET("/api/community/characters", proxyCommunityCharacterAPI)
+	r.GET("/api/community/characters/:id", proxyCommunityCharacterAPI)
 	r.GET("/api/avatars/:id", userAPI.GetAvatar)
 	r.GET("/api/pricing", modelAPI.Pricing)
 	r.GET("/api/payment/yipay/return", paymentAPI.Return)
