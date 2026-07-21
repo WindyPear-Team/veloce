@@ -41,6 +41,36 @@ var configurationSections = map[string]struct{}{
 	configurationSectionPrices:   {},
 }
 
+var sensitiveSystemSettingKeys = map[string]struct{}{
+	"hcaptcha_secret":                     {},
+	"smtp_password":                       {},
+	"oidc_client_secret":                  {},
+	"sensitive_words":                     {},
+	"payment_yipay_key":                   {},
+	"payment_openpayment_key":             {},
+	"payment_wechat_private_key":          {},
+	"payment_wechat_platform_certificate": {},
+	"payment_wechat_api_v3_key":           {},
+	"payment_alipay_private_key":          {},
+	"payment_alipay_public_key":           {},
+	"payment_paypal_client_secret":        {},
+	"payment_stripe_secret_key":           {},
+	"payment_stripe_webhook_secret":       {},
+}
+
+var sensitivePaymentChannelConfigKeys = map[string]struct{}{
+	"key":                         {},
+	"openpayment_key":             {},
+	"wechat_private_key":          {},
+	"wechat_platform_certificate": {},
+	"wechat_api_v3_key":           {},
+	"alipay_private_key":          {},
+	"alipay_public_key":           {},
+	"paypal_client_secret":        {},
+	"stripe_secret_key":           {},
+	"stripe_webhook_secret":       {},
+}
+
 type configurationExportRequest struct {
 	Sections []string `json:"sections"`
 }
@@ -902,7 +932,8 @@ func (api *SystemAPI) UpdateSettings(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		oauthProvidersValue = &normalized
+		preserved := preserveOAuthProviderSecrets(normalized, settingString("oauth_providers", "[]"))
+		oauthProvidersValue = &preserved
 	}
 
 	if input.SiteName != nil {
@@ -1055,7 +1086,14 @@ func (api *SystemAPI) UpdateSettings(c *gin.Context) {
 		if value == nil {
 			continue
 		}
-		if err := model.SetSystemSetting(key, strings.TrimSpace(*value)); err != nil {
+		trimmed := strings.TrimSpace(*value)
+		if isSensitiveSystemSetting(key) && trimmed == "" {
+			continue
+		}
+		if key == "payment_channels" {
+			trimmed = preservePaymentChannelSecrets(trimmed, settingString("payment_channels", "[]"))
+		}
+		if err := model.SetSystemSetting(key, trimmed); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update system settings"})
 			return
 		}
@@ -1273,46 +1311,32 @@ func currentAdminSystemSettings() systemSettingsResponse {
 	settings := currentPublicSystemSettings()
 	settings.OIDCIssuer = settingString("oidc_issuer", "")
 	settings.OIDCClientID = settingString("oidc_client_id", "")
-	settings.OIDCClientSecret = settingString("oidc_client_secret", "")
 	settings.OIDCRedirectURL = settingString("oidc_redirect_url", "")
-	settings.OAuthProviders = settingString("oauth_providers", "[]")
-	settings.HCaptchaSecret = settingString("hcaptcha_secret", "")
+	settings.OAuthProviders = redactOAuthProviderSecrets(settingString("oauth_providers", "[]"))
 	settings.SMTPHost = settingString("smtp_host", "")
 	settings.SMTPPort = settingString("smtp_port", "587")
 	settings.SMTPUsername = settingString("smtp_username", "")
-	settings.SMTPPassword = settingString("smtp_password", "")
 	settings.SMTPFrom = settingString("smtp_from", "")
-	settings.SensitiveWords = settingString("sensitive_words", "")
 	settings.SSRFAllowedHosts = settingString("ssrf_allowed_hosts", "")
 	settings.PaymentYipayGatewayURL = settingString("payment_yipay_gateway_url", "")
-	settings.PaymentChannels = settingString("payment_channels", "[]")
+	settings.PaymentChannels = redactPaymentChannelSecrets(settingString("payment_channels", "[]"))
 	settings.PaymentYipayPID = settingString("payment_yipay_pid", "")
-	settings.PaymentYipayKey = settingString("payment_yipay_key", "")
 	settings.PaymentYipayNotifyURL = settingString("payment_yipay_notify_url", "")
 	settings.PaymentYipayReturnURL = settingString("payment_yipay_return_url", "")
 	settings.PaymentOpenPaymentBaseURL = settingString("payment_openpayment_base_url", "")
 	settings.PaymentOpenPaymentConfigURL = settingString("payment_openpayment_config_url", "")
 	settings.PaymentOpenPaymentMerchantID = settingString("payment_openpayment_merchant_id", "")
-	settings.PaymentOpenPaymentKey = settingString("payment_openpayment_key", "")
 	settings.PaymentOpenPaymentNotifyURL = callbackURLFromBaseURL(settings.BaseURL, "/api/payment/openpayment/notify")
 	settings.PaymentOpenPaymentReturnURL = callbackURLFromBaseURL(settings.BaseURL, "/api/payment/openpayment/return")
 	settings.PaymentOfficialCurrency = settingString("payment_official_currency", "CNY")
 	settings.PaymentWeChatMchID = settingString("payment_wechat_mch_id", "")
 	settings.PaymentWeChatAppID = settingString("payment_wechat_app_id", "")
 	settings.PaymentWeChatSerialNo = settingString("payment_wechat_serial_no", "")
-	settings.PaymentWeChatPrivateKey = settingString("payment_wechat_private_key", "")
-	settings.PaymentWeChatPlatformCertificate = settingString("payment_wechat_platform_certificate", "")
-	settings.PaymentWeChatAPIV3Key = settingString("payment_wechat_api_v3_key", "")
 	settings.PaymentAlipayAppID = settingString("payment_alipay_app_id", "")
-	settings.PaymentAlipayPrivateKey = settingString("payment_alipay_private_key", "")
-	settings.PaymentAlipayPublicKey = settingString("payment_alipay_public_key", "")
 	settings.PaymentAlipayGatewayURL = settingString("payment_alipay_gateway_url", "https://openapi.alipay.com/gateway.do")
 	settings.PaymentPayPalClientID = settingString("payment_paypal_client_id", "")
-	settings.PaymentPayPalClientSecret = settingString("payment_paypal_client_secret", "")
 	settings.PaymentPayPalBaseURL = settingString("payment_paypal_base_url", "https://api-m.sandbox.paypal.com")
 	settings.PaymentPayPalWebhookID = settingString("payment_paypal_webhook_id", "")
-	settings.PaymentStripeSecretKey = settingString("payment_stripe_secret_key", "")
-	settings.PaymentStripeWebhookSecret = settingString("payment_stripe_webhook_secret", "")
 	settings.RedisEnabled = settingBool("redis_enabled", false)
 	settings.RedisAddress = settingString("redis_address", "127.0.0.1:6379")
 	settings.RedisUsername = settingString("redis_username", "")
@@ -1320,6 +1344,102 @@ func currentAdminSystemSettings() systemSettingsResponse {
 	settings.RedisDatabase = settingString("redis_database", "0")
 	settings.RedisTLSEnabled = settingBool("redis_tls_enabled", false)
 	return settings
+}
+
+func isSensitiveSystemSetting(key string) bool {
+	_, ok := sensitiveSystemSettingKeys[key]
+	return ok
+}
+
+func redactOAuthProviderSecrets(raw string) string {
+	var providers []map[string]any
+	if err := json.Unmarshal([]byte(raw), &providers); err != nil {
+		return "[]"
+	}
+	for index := range providers {
+		delete(providers[index], "client_secret")
+	}
+	encoded, err := json.Marshal(providers)
+	if err != nil {
+		return "[]"
+	}
+	return string(encoded)
+}
+
+func preserveOAuthProviderSecrets(updatedRaw, existingRaw string) string {
+	var updated, existing []service.OAuthProviderConfig
+	if err := json.Unmarshal([]byte(updatedRaw), &updated); err != nil {
+		return updatedRaw
+	}
+	if err := json.Unmarshal([]byte(existingRaw), &existing); err != nil {
+		return updatedRaw
+	}
+	existingSecrets := make(map[string]string, len(existing))
+	for _, provider := range existing {
+		existingSecrets[provider.Key] = provider.ClientSecret
+	}
+	for index := range updated {
+		if strings.TrimSpace(updated[index].ClientSecret) == "" {
+			updated[index].ClientSecret = existingSecrets[updated[index].Key]
+		}
+	}
+	encoded, err := json.Marshal(updated)
+	if err != nil {
+		return updatedRaw
+	}
+	return string(encoded)
+}
+
+func redactPaymentChannelSecrets(raw string) string {
+	var channels []storedPaymentChannel
+	if err := json.Unmarshal([]byte(raw), &channels); err != nil {
+		return "[]"
+	}
+	for index := range channels {
+		for key := range sensitivePaymentChannelConfigKeys {
+			delete(channels[index].Config, key)
+		}
+	}
+	encoded, err := json.Marshal(channels)
+	if err != nil {
+		return "[]"
+	}
+	return string(encoded)
+}
+
+func preservePaymentChannelSecrets(updatedRaw, existingRaw string) string {
+	var updated, existing []storedPaymentChannel
+	if err := json.Unmarshal([]byte(updatedRaw), &updated); err != nil {
+		return updatedRaw
+	}
+	if err := json.Unmarshal([]byte(existingRaw), &existing); err != nil {
+		return updatedRaw
+	}
+	existingByID := make(map[string]storedPaymentChannel, len(existing))
+	for _, channel := range existing {
+		existingByID[channel.ID] = channel
+	}
+	for index := range updated {
+		existingChannel, found := existingByID[updated[index].ID]
+		if !found {
+			continue
+		}
+		if updated[index].Config == nil {
+			updated[index].Config = map[string]string{}
+		}
+		for key := range sensitivePaymentChannelConfigKeys {
+			if strings.TrimSpace(updated[index].Config[key]) == "" {
+				if value := existingChannel.Config[key]; value != "" {
+					updated[index].Config[key] = value
+				}
+			}
+		}
+	}
+	encoded, err := json.Marshal(updated)
+	if err != nil {
+		return updatedRaw
+	}
+	return string(encoded)
 }
 
 type publicOAuthProvider struct {
