@@ -50,7 +50,7 @@ func (s *SyncService) SyncScheduledPrices() []ChannelSyncResult {
 			continue
 		}
 		log.Printf("Running scheduled price sync for channel: %s", channel.Name)
-		results = append(results, s.SyncChannel(channel))
+		results = append(results, s.SyncChannelPrices(channel))
 	}
 	return results
 }

@@ -1367,6 +1367,7 @@ func calculateModelUsageCost(usage usageTokenCounts, modelConfig model.Model) de
 
 	metrics := PriceTierMetrics{
 		FullInputTokens:      usage.InputTokens,
+		FullRequestTokens:    usage.InputTokens + usage.OutputTokens,
 		BillableInputTokens:  billableInputTokens(usage),
 		BillableOutputTokens: usage.OutputTokens,
 	}

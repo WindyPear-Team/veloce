@@ -50,6 +50,7 @@ func CalculateCost(inputTokens, outputTokens int, inputPrice, outputPrice, group
 type PriceTierMetrics struct {
 	CurrentTokens        int
 	FullInputTokens      int
+	FullRequestTokens    int
 	BillableInputTokens  int
 	BillableOutputTokens int
 }
@@ -129,6 +130,9 @@ func withCurrentTokens(metrics PriceTierMetrics, tokens int) PriceTierMetrics {
 	if metrics.FullInputTokens == 0 {
 		metrics.FullInputTokens = tokens
 	}
+	if metrics.FullRequestTokens == 0 {
+		metrics.FullRequestTokens = tokens
+	}
 	if metrics.BillableInputTokens == 0 {
 		metrics.BillableInputTokens = tokens
 	}
@@ -142,6 +146,8 @@ func tierConditionValue(condition string, metrics PriceTierMetrics) int {
 	switch model.NormalizePriceTierCondition(condition) {
 	case model.PriceTierConditionFullInputTokens:
 		return metrics.FullInputTokens
+	case model.PriceTierConditionFullRequestTokens:
+		return metrics.FullRequestTokens
 	case model.PriceTierConditionBillableInputTokens:
 		return metrics.BillableInputTokens
 	case model.PriceTierConditionBillableOutputTokens:

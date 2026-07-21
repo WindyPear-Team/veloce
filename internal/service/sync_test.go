@@ -2,10 +2,14 @@ package service
 
 import (
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/WindyPear-Team/veloce/internal/model"
+	"github.com/glebarez/sqlite"
 	"github.com/shopspring/decimal"
+	"gorm.io/gorm"
 )
 
 func TestParseUpstreamPriceItemsSplitRatios(t *testing.T) {
@@ -197,9 +201,96 @@ func TestParseUpstreamPriceItemsNewAPITieredExpression(t *testing.T) {
 	prices := pricesByModel(items)
 	assertPrice(t, prices, "gpt-5.5", "5", "30")
 	assertCachedPrice(t, prices, "gpt-5.5", "0.5")
-	assertTier(t, prices["gpt-5.5"].InputPriceTiers, 272000, "10")
-	assertTier(t, prices["gpt-5.5"].OutputPriceTiers, 272000, "45")
-	assertTier(t, prices["gpt-5.5"].CachedInputPriceTiers, 272000, "1")
+	assertTier(t, prices["gpt-5.5"].InputPriceTiers, 272001, "10")
+	assertTier(t, prices["gpt-5.5"].OutputPriceTiers, 272001, "45")
+	assertTier(t, prices["gpt-5.5"].CachedInputPriceTiers, 272001, "1")
+}
+
+func TestParseUpstreamPriceItemsTieredExpressionWithTotalTokensAndCacheWrite(t *testing.T) {
+	body := []byte(`[
+		{
+			"model_name": "gpt-5.6-sol",
+			"quota_type": 0,
+			"billing_mode": "tiered_expr",
+			"billing_expr": "len <= 272000 ? tier(\"standard\", p * 5 + c * 30 + cr * 0.5 + cc * 6.25) : tier(\"long_context\", p * 10 + c * 45 + cr * 1 + cc * 12.5)"
+		}
+	]`)
+
+	items, err := parseUpstreamPriceItems(body)
+	if err != nil {
+		t.Fatalf("parseUpstreamPriceItems returned error: %v", err)
+	}
+
+	prices := pricesByModel(items)
+	item, ok := prices["gpt-5.6-sol"]
+	if !ok {
+		t.Fatal("missing gpt-5.6-sol")
+	}
+	assertDecimalString(t, item.InputPrice, "5")
+	assertDecimalString(t, item.OutputPrice, "30")
+	assertDecimalString(t, item.CachedInputPrice, "0.5")
+	assertDecimalString(t, item.CacheWriteInputPrice, "6.25")
+	assertTier(t, item.InputPriceTiers, 272001, "10")
+	assertTier(t, item.OutputPriceTiers, 272001, "45")
+	assertTier(t, item.CachedInputPriceTiers, 272001, "1")
+	assertTier(t, item.CacheWriteInputPriceTiers, 272001, "12.5")
+	if item.InputPriceTiers[0].Condition != model.PriceTierConditionFullRequestTokens {
+		t.Fatalf("tier condition = %q, want %q", item.InputPriceTiers[0].Condition, model.PriceTierConditionFullRequestTokens)
+	}
+}
+
+func TestSyncChannelPricesPersistsTieredExpressionAndCacheWritePrice(t *testing.T) {
+	previousDB := model.DB
+	database, err := gorm.Open(sqlite.Open("file:sync-channel-prices-test?mode=memory&cache=shared"), &gorm.Config{DisableForeignKeyConstraintWhenMigrating: true})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	if err := database.AutoMigrate(&model.Model{}); err != nil {
+		t.Fatalf("migrate database: %v", err)
+	}
+	model.DB = database
+	t.Cleanup(func() {
+		model.DB = previousDB
+		sqlDB, _ := database.DB()
+		_ = sqlDB.Close()
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/api/pricing" {
+			http.NotFound(writer, request)
+			return
+		}
+		_, _ = writer.Write([]byte(`[
+			{
+				"model_name": "gpt-5.6-sol",
+				"billing_mode": "tiered_expr",
+				"billing_expr": "len <= 272000 ? tier(\"standard\", p * 5 + c * 30 + cr * 0.5 + cc * 6.25) : tier(\"long_context\", p * 10 + c * 45 + cr * 1 + cc * 12.5)"
+			}
+		]`))
+	}))
+	defer server.Close()
+
+	result := NewSyncService().SyncChannelPrices(&model.Channel{ID: 1, Name: "upstream", BaseURL: server.URL})
+	if result.Error != "" {
+		t.Fatalf("SyncChannelPrices returned error: %s", result.Error)
+	}
+	if result.Source != "/api/pricing" || result.Created != 1 {
+		t.Fatalf("unexpected sync result: %+v", result)
+	}
+
+	var saved model.Model
+	if err := database.Where("model_name = ?", "gpt-5.6-sol").First(&saved).Error; err != nil {
+		t.Fatalf("load synced model: %v", err)
+	}
+	assertDecimalString(t, saved.InputPrice, "10")
+	assertDecimalString(t, saved.OutputPrice, "60")
+	assertDecimalString(t, saved.CachedInputPrice, "1")
+	assertDecimalString(t, saved.CacheWriteInputPrice, "12.5")
+	assertTier(t, saved.InputPriceTiers, 272001, "20")
+	assertTier(t, saved.CacheWriteInputPriceTiers, 272001, "25")
+	if saved.InputPriceTiers[0].Condition != model.PriceTierConditionFullRequestTokens {
+		t.Fatalf("stored tier condition = %q, want %q", saved.InputPriceTiers[0].Condition, model.PriceTierConditionFullRequestTokens)
+	}
 }
 
 func TestUpstreamURLForPathAvoidsDuplicateV1(t *testing.T) {
@@ -271,6 +362,30 @@ func TestCalculateTieredTokenCostWithFullInputCondition(t *testing.T) {
 	want := decimal.RequireFromString("0.02")
 	if !got.Equal(want) {
 		t.Fatalf("CalculateTieredTokenCostWithMetrics() = %s, want %s", got.String(), want.String())
+	}
+}
+
+func TestCalculateModelUsageCostUsesTotalTokensForExpressionTiers(t *testing.T) {
+	tiers := model.PriceTierList{{
+		MinTokens: 272001,
+		Price:     decimal.NewFromInt(10),
+		Condition: model.PriceTierConditionFullRequestTokens,
+	}}
+	got := calculateModelUsageCost(usageTokenCounts{
+		InputTokens:           272000,
+		OutputTokens:          1,
+		CacheWriteInputTokens: 10,
+	}, model.Model{
+		InputPrice:                decimal.NewFromInt(5),
+		OutputPrice:               decimal.NewFromInt(30),
+		CacheWriteInputPrice:      decimal.RequireFromString("6.25"),
+		InputPriceTiers:           tiers,
+		OutputPriceTiers:          model.PriceTierList{{MinTokens: 272001, Price: decimal.NewFromInt(45), Condition: model.PriceTierConditionFullRequestTokens}},
+		CacheWriteInputPriceTiers: model.PriceTierList{{MinTokens: 272001, Price: decimal.RequireFromString("12.5"), Condition: model.PriceTierConditionFullRequestTokens}},
+	})
+	want := decimal.RequireFromString("2.72007")
+	if !got.Equal(want) {
+		t.Fatalf("calculateModelUsageCost() = %s, want %s", got.String(), want.String())
 	}
 }
 

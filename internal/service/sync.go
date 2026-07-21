@@ -23,7 +23,7 @@ type SyncService struct {
 }
 
 var (
-	tieredExprThresholdPattern = regexp.MustCompile(`(?i)\bp\s*(<=|<|>=|>)\s*([0-9]+)`)
+	tieredExprThresholdPattern = regexp.MustCompile(`(?i)\b(p|len)\s*(<=|<|>=|>)\s*([0-9]+)`)
 	tieredExprTierPattern      = regexp.MustCompile(`(?is)tier\s*\(\s*"[^"]*"\s*,\s*(.*?)\s*\)`)
 )
 
@@ -53,15 +53,17 @@ type ChannelSyncResult struct {
 }
 
 type upstreamModelPrice struct {
-	Model                 string
-	EndpointTypes         []string
-	QuotaType             int
-	InputPrice            decimal.Decimal
-	OutputPrice           decimal.Decimal
-	CachedInputPrice      decimal.Decimal
-	InputPriceTiers       model.PriceTierList
-	OutputPriceTiers      model.PriceTierList
-	CachedInputPriceTiers model.PriceTierList
+	Model                     string
+	EndpointTypes             []string
+	QuotaType                 int
+	InputPrice                decimal.Decimal
+	OutputPrice               decimal.Decimal
+	CachedInputPrice          decimal.Decimal
+	CacheWriteInputPrice      decimal.Decimal
+	InputPriceTiers           model.PriceTierList
+	OutputPriceTiers          model.PriceTierList
+	CachedInputPriceTiers     model.PriceTierList
+	CacheWriteInputPriceTiers model.PriceTierList
 }
 
 type ModelSyncOptions struct {
@@ -77,18 +79,20 @@ type ModelSyncPreview struct {
 }
 
 type ModelSyncItem struct {
-	ModelName             string              `json:"model_name"`
-	QuotaType             int                 `json:"quota_type"`
-	InputPrice            decimal.Decimal     `json:"input_price"`
-	OutputPrice           decimal.Decimal     `json:"output_price"`
-	CachedInputPrice      decimal.Decimal     `json:"cached_input_price"`
-	InputPriceTiers       model.PriceTierList `json:"input_price_tiers"`
-	OutputPriceTiers      model.PriceTierList `json:"output_price_tiers"`
-	CachedInputPriceTiers model.PriceTierList `json:"cached_input_price_tiers"`
-	Provider              string              `json:"provider"`
-	ProviderName          string              `json:"provider_name"`
-	ProviderIconURL       string              `json:"provider_icon_url"`
-	Exists                bool                `json:"exists"`
+	ModelName                 string              `json:"model_name"`
+	QuotaType                 int                 `json:"quota_type"`
+	InputPrice                decimal.Decimal     `json:"input_price"`
+	OutputPrice               decimal.Decimal     `json:"output_price"`
+	CachedInputPrice          decimal.Decimal     `json:"cached_input_price"`
+	CacheWriteInputPrice      decimal.Decimal     `json:"cache_write_input_price"`
+	InputPriceTiers           model.PriceTierList `json:"input_price_tiers"`
+	OutputPriceTiers          model.PriceTierList `json:"output_price_tiers"`
+	CachedInputPriceTiers     model.PriceTierList `json:"cached_input_price_tiers"`
+	CacheWriteInputPriceTiers model.PriceTierList `json:"cache_write_input_price_tiers"`
+	Provider                  string              `json:"provider"`
+	ProviderName              string              `json:"provider_name"`
+	ProviderIconURL           string              `json:"provider_icon_url"`
+	Exists                    bool                `json:"exists"`
 }
 
 func (s *SyncService) SyncAll() []ChannelSyncResult {
@@ -183,6 +187,37 @@ func (s *SyncService) SyncChannel(channel *model.Channel) ChannelSyncResult {
 	return result
 }
 
+// SyncChannelPrices pulls upstream pricing and applies it to the global model catalog.
+// Channel model discovery remains separate because it uses a different upstream endpoint.
+func (s *SyncService) SyncChannelPrices(channel *model.Channel) ChannelSyncResult {
+	result := ChannelSyncResult{
+		ChannelID:   channel.ID,
+		ChannelName: channel.Name,
+	}
+
+	items, source, err := s.fetchUpstreamModelPrices(channel, ModelSyncOptions{})
+	if err != nil {
+		result.Error = err.Error()
+		log.Printf("Failed to sync prices for %s: %v", channel.Name, err)
+		return result
+	}
+	result.Source = source
+
+	for _, item := range multiplyTokenPricedModelPrices(items) {
+		modelName := strings.TrimSpace(item.Model)
+		if modelName == "" {
+			continue
+		}
+		provider := ResolveModelProvider(modelName, "", "")
+		if err := upsertGlobalModelPrice(modelName, item.QuotaType, item.InputPrice, item.OutputPrice, item.CachedInputPrice, item.CacheWriteInputPrice, item.InputPriceTiers, item.OutputPriceTiers, item.CachedInputPriceTiers, item.CacheWriteInputPriceTiers, provider, &result); err != nil {
+			result.Error = err.Error()
+			return result
+		}
+	}
+
+	return result
+}
+
 func (s *SyncService) PreviewChannelModels(channelID uint, options ModelSyncOptions) (ModelSyncPreview, error) {
 	var channel model.Channel
 	if err := model.DB.First(&channel, channelID).Error; err != nil {
@@ -239,17 +274,19 @@ func (s *SyncService) buildModelSyncPreview(channel *model.Channel, source strin
 		provider := ResolveModelProvider(modelName, "", "")
 		_, exists := existingModels[modelName]
 		previewItems = append(previewItems, ModelSyncItem{
-			ModelName:             modelName,
-			InputPrice:            decimal.Zero,
-			OutputPrice:           decimal.Zero,
-			CachedInputPrice:      decimal.Zero,
-			InputPriceTiers:       nil,
-			OutputPriceTiers:      nil,
-			CachedInputPriceTiers: nil,
-			Provider:              provider.ID,
-			ProviderName:          provider.Name,
-			ProviderIconURL:       provider.IconURL,
-			Exists:                exists,
+			ModelName:                 modelName,
+			InputPrice:                decimal.Zero,
+			OutputPrice:               decimal.Zero,
+			CachedInputPrice:          decimal.Zero,
+			CacheWriteInputPrice:      decimal.Zero,
+			InputPriceTiers:           nil,
+			OutputPriceTiers:          nil,
+			CachedInputPriceTiers:     nil,
+			CacheWriteInputPriceTiers: nil,
+			Provider:                  provider.ID,
+			ProviderName:              provider.Name,
+			ProviderIconURL:           provider.IconURL,
+			Exists:                    exists,
 		})
 	}
 	sort.Slice(previewItems, func(i, j int) bool {
@@ -349,18 +386,20 @@ func (s *SyncService) buildGlobalPriceSyncPreview(channel *model.Channel, source
 		provider := ResolveModelProvider(modelName, "", "")
 		_, exists := existingModels[modelName]
 		previewItems = append(previewItems, ModelSyncItem{
-			ModelName:             modelName,
-			QuotaType:             item.QuotaType,
-			InputPrice:            item.InputPrice,
-			OutputPrice:           item.OutputPrice,
-			CachedInputPrice:      item.CachedInputPrice,
-			InputPriceTiers:       item.InputPriceTiers,
-			OutputPriceTiers:      item.OutputPriceTiers,
-			CachedInputPriceTiers: item.CachedInputPriceTiers,
-			Provider:              provider.ID,
-			ProviderName:          provider.Name,
-			ProviderIconURL:       provider.IconURL,
-			Exists:                exists,
+			ModelName:                 modelName,
+			QuotaType:                 item.QuotaType,
+			InputPrice:                item.InputPrice,
+			OutputPrice:               item.OutputPrice,
+			CachedInputPrice:          item.CachedInputPrice,
+			CacheWriteInputPrice:      item.CacheWriteInputPrice,
+			InputPriceTiers:           item.InputPriceTiers,
+			OutputPriceTiers:          item.OutputPriceTiers,
+			CachedInputPriceTiers:     item.CachedInputPriceTiers,
+			CacheWriteInputPriceTiers: item.CacheWriteInputPriceTiers,
+			Provider:                  provider.ID,
+			ProviderName:              provider.Name,
+			ProviderIconURL:           provider.IconURL,
+			Exists:                    exists,
 		})
 	}
 	sort.Slice(previewItems, func(i, j int) bool {
@@ -393,7 +432,7 @@ func (s *SyncService) ApplyGlobalModelPrices(channelID uint, items []ModelSyncIt
 			continue
 		}
 		provider := ResolveModelProvider(modelName, item.Provider, item.ProviderIconURL)
-		if err := upsertGlobalModelPrice(modelName, item.QuotaType, item.InputPrice, item.OutputPrice, item.CachedInputPrice, item.InputPriceTiers, item.OutputPriceTiers, item.CachedInputPriceTiers, provider, &result); err != nil {
+		if err := upsertGlobalModelPrice(modelName, item.QuotaType, item.InputPrice, item.OutputPrice, item.CachedInputPrice, item.CacheWriteInputPrice, item.InputPriceTiers, item.OutputPriceTiers, item.CachedInputPriceTiers, item.CacheWriteInputPriceTiers, provider, &result); err != nil {
 			result.Error = err.Error()
 			return result, err
 		}
@@ -440,23 +479,25 @@ func upsertChannelModel(channel *model.Channel, modelName string, provider Model
 	return err
 }
 
-func upsertGlobalModelPrice(modelName string, quotaType int, inputPrice decimal.Decimal, outputPrice decimal.Decimal, cachedInputPrice decimal.Decimal, inputPriceTiers model.PriceTierList, outputPriceTiers model.PriceTierList, cachedInputPriceTiers model.PriceTierList, provider ModelProvider, result *ChannelSyncResult) error {
+func upsertGlobalModelPrice(modelName string, quotaType int, inputPrice decimal.Decimal, outputPrice decimal.Decimal, cachedInputPrice decimal.Decimal, cacheWriteInputPrice decimal.Decimal, inputPriceTiers model.PriceTierList, outputPriceTiers model.PriceTierList, cachedInputPriceTiers model.PriceTierList, cacheWriteInputPriceTiers model.PriceTierList, provider ModelProvider, result *ChannelSyncResult) error {
 	quotaType = normalizeQuotaType(quotaType)
 	var globalModel model.Model
 	err := model.DB.Where(&model.Model{ModelName: modelName}).First(&globalModel).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		if err := model.DB.Create(&model.Model{
-			ModelName:             modelName,
-			Provider:              provider.ID,
-			ProviderIconURL:       provider.IconURL,
-			QuotaType:             quotaType,
-			InputPrice:            inputPrice,
-			OutputPrice:           outputPrice,
-			CachedInputPrice:      cachedInputPrice,
-			InputPriceTiers:       model.NormalizePriceTiers(inputPriceTiers),
-			OutputPriceTiers:      model.NormalizePriceTiers(outputPriceTiers),
-			CachedInputPriceTiers: model.NormalizePriceTiers(cachedInputPriceTiers),
-			Enabled:               true,
+			ModelName:                 modelName,
+			Provider:                  provider.ID,
+			ProviderIconURL:           provider.IconURL,
+			QuotaType:                 quotaType,
+			InputPrice:                inputPrice,
+			OutputPrice:               outputPrice,
+			CachedInputPrice:          cachedInputPrice,
+			CacheWriteInputPrice:      cacheWriteInputPrice,
+			InputPriceTiers:           model.NormalizePriceTiers(inputPriceTiers),
+			OutputPriceTiers:          model.NormalizePriceTiers(outputPriceTiers),
+			CachedInputPriceTiers:     model.NormalizePriceTiers(cachedInputPriceTiers),
+			CacheWriteInputPriceTiers: model.NormalizePriceTiers(cacheWriteInputPriceTiers),
+			Enabled:                   true,
 		}).Error; err != nil {
 			return err
 		}
@@ -468,13 +509,15 @@ func upsertGlobalModelPrice(modelName string, quotaType int, inputPrice decimal.
 	}
 
 	updates := map[string]interface{}{
-		"quota_type":               quotaType,
-		"input_price":              inputPrice,
-		"output_price":             outputPrice,
-		"cached_input_price":       cachedInputPrice,
-		"input_price_tiers":        model.NormalizePriceTiers(inputPriceTiers),
-		"output_price_tiers":       model.NormalizePriceTiers(outputPriceTiers),
-		"cached_input_price_tiers": model.NormalizePriceTiers(cachedInputPriceTiers),
+		"quota_type":                    quotaType,
+		"input_price":                   inputPrice,
+		"output_price":                  outputPrice,
+		"cached_input_price":            cachedInputPrice,
+		"cache_write_input_price":       cacheWriteInputPrice,
+		"input_price_tiers":             model.NormalizePriceTiers(inputPriceTiers),
+		"output_price_tiers":            model.NormalizePriceTiers(outputPriceTiers),
+		"cached_input_price_tiers":      model.NormalizePriceTiers(cachedInputPriceTiers),
+		"cache_write_input_price_tiers": model.NormalizePriceTiers(cacheWriteInputPriceTiers),
 	}
 	if strings.TrimSpace(provider.ID) != "" && (strings.TrimSpace(globalModel.Provider) == "" || strings.TrimSpace(provider.ID) != "custom") {
 		updates["provider"] = provider.ID
@@ -855,14 +898,16 @@ func splitPriceItemsFromMap(value map[string]interface{}) []upstreamModelPrice {
 	inputPrices, hasInputPrices := firstMapValue(value, "input_price", "inputPrice", "input_prices", "inputPrices", "prompt_price", "promptPrice", "prompt_prices", "promptPrices", "prompt_token_price", "promptTokenPrice")
 	outputPrices, hasOutputPrices := firstMapValue(value, "output_price", "outputPrice", "output_prices", "outputPrices", "completion_price", "completionPrice", "completion_prices", "completionPrices", "completion_token_price", "completionTokenPrice")
 	cachedInputPrices, hasCachedInputPrices := firstMapValue(value, cachedInputPriceKeys()...)
+	cacheWriteInputPrices, hasCacheWriteInputPrices := firstMapValue(value, cacheWriteInputPriceKeys()...)
 	inputPriceTiers, hasInputPriceTiers := firstMapValue(value, inputPriceTierKeys()...)
 	outputPriceTiers, hasOutputPriceTiers := firstMapValue(value, outputPriceTierKeys()...)
 	cachedInputPriceTiers, hasCachedInputPriceTiers := firstMapValue(value, cachedInputPriceTierKeys()...)
+	cacheWriteInputPriceTiers, hasCacheWriteInputPriceTiers := firstMapValue(value, cacheWriteInputPriceTierKeys()...)
 	modelRatios, hasModelRatios := firstMapValue(value, "model_ratio", "modelRatio", "model_ratios", "modelRatios")
 	completionRatios, hasCompletionRatios := firstMapValue(value, "completion_ratio", "completionRatio", "completion_ratios", "completionRatios")
 	genericPrices, hasGenericPrices := firstMapValue(value, "price", "prices", "ratio", "ratios", "model_price", "modelPrice", "model_prices", "modelPrices")
 	quotaTypes, hasQuotaTypes := firstMapValue(value, "quota_type", "quotaType", "quota_types", "quotaTypes")
-	if !hasInputPrices && !hasOutputPrices && !hasCachedInputPrices && !hasInputPriceTiers && !hasOutputPriceTiers && !hasCachedInputPriceTiers && !hasModelRatios && !hasCompletionRatios && !hasGenericPrices && !hasQuotaTypes {
+	if !hasInputPrices && !hasOutputPrices && !hasCachedInputPrices && !hasCacheWriteInputPrices && !hasInputPriceTiers && !hasOutputPriceTiers && !hasCachedInputPriceTiers && !hasCacheWriteInputPriceTiers && !hasModelRatios && !hasCompletionRatios && !hasGenericPrices && !hasQuotaTypes {
 		return nil
 	}
 
@@ -877,9 +922,11 @@ func splitPriceItemsFromMap(value map[string]interface{}) []upstreamModelPrice {
 	addMapKeys(inputPrices)
 	addMapKeys(outputPrices)
 	addMapKeys(cachedInputPrices)
+	addMapKeys(cacheWriteInputPrices)
 	addMapKeys(inputPriceTiers)
 	addMapKeys(outputPriceTiers)
 	addMapKeys(cachedInputPriceTiers)
+	addMapKeys(cacheWriteInputPriceTiers)
 	addMapKeys(modelRatios)
 	addMapKeys(completionRatios)
 	addMapKeys(genericPrices)
@@ -899,9 +946,11 @@ func splitPriceItemsFromMap(value map[string]interface{}) []upstreamModelPrice {
 		inputPrice, inputOK := decimalFromMapValue(inputPrices, name)
 		outputPrice, outputOK := decimalFromMapValue(outputPrices, name)
 		cachedInputPrice, cachedInputOK := cachedDecimalFromMapValue(cachedInputPrices, name)
+		cacheWriteInputPrice, cacheWriteInputOK := decimalFromMapValue(cacheWriteInputPrices, name)
 		inputTiers, inputTiersOK := priceTiersFromMapValue(inputPriceTiers, name)
 		outputTiers, outputTiersOK := priceTiersFromMapValue(outputPriceTiers, name)
 		cachedInputTiers, cachedInputTiersOK := priceTiersFromMapValue(cachedInputPriceTiers, name)
+		cacheWriteInputTiers, _ := priceTiersFromMapValue(cacheWriteInputPriceTiers, name)
 		modelRatio, modelRatioOK := decimalFromMapValue(modelRatios, name)
 		completionRatio, completionRatioOK := decimalFromMapValue(completionRatios, name)
 		genericPrice, genericPriceOK := priceItemFromMapValue(genericPrices, name)
@@ -955,19 +1004,24 @@ func splitPriceItemsFromMap(value map[string]interface{}) []upstreamModelPrice {
 		if !cachedInputTiersOK && genericPriceOK {
 			cachedInputTiers = genericPrice.CachedInputPriceTiers
 		}
-		if !inputOK && !outputOK && len(inputTiers) == 0 && len(outputTiers) == 0 && len(cachedInputTiers) == 0 {
+		if !cacheWriteInputOK && genericPriceOK {
+			cacheWriteInputPrice = genericPrice.CacheWriteInputPrice
+		}
+		if !inputOK && !outputOK && len(inputTiers) == 0 && len(outputTiers) == 0 && len(cachedInputTiers) == 0 && len(cacheWriteInputTiers) == 0 {
 			continue
 		}
 
 		items = append(items, upstreamModelPrice{
-			Model:                 name,
-			QuotaType:             quotaType,
-			InputPrice:            inputPrice,
-			OutputPrice:           outputPrice,
-			CachedInputPrice:      cachedInputPrice,
-			InputPriceTiers:       model.NormalizePriceTiers(inputTiers),
-			OutputPriceTiers:      model.NormalizePriceTiers(outputTiers),
-			CachedInputPriceTiers: model.NormalizePriceTiers(cachedInputTiers),
+			Model:                     name,
+			QuotaType:                 quotaType,
+			InputPrice:                inputPrice,
+			OutputPrice:               outputPrice,
+			CachedInputPrice:          cachedInputPrice,
+			CacheWriteInputPrice:      cacheWriteInputPrice,
+			InputPriceTiers:           model.NormalizePriceTiers(inputTiers),
+			OutputPriceTiers:          model.NormalizePriceTiers(outputTiers),
+			CachedInputPriceTiers:     model.NormalizePriceTiers(cachedInputTiers),
+			CacheWriteInputPriceTiers: model.NormalizePriceTiers(cacheWriteInputTiers),
 		})
 	}
 	return items
@@ -1050,22 +1104,27 @@ func priceItemFromMap(modelName string, value map[string]interface{}) (upstreamM
 	inputPrice, inputOK := firstDecimalValue(value, "input_price", "inputPrice", "prompt_price", "promptPrice", "prompt_token_price", "promptTokenPrice", "input_token_price", "inputTokenPrice", "input", "prompt", "input_ratio", "inputRatio", "prompt_ratio", "promptRatio")
 	outputPrice, outputOK := firstDecimalValue(value, "output_price", "outputPrice", "completion_price", "completionPrice", "completion_token_price", "completionTokenPrice", "output_token_price", "outputTokenPrice", "completion", "output", "output_ratio", "outputRatio")
 	cachedInputPrice, cachedInputOK := firstDecimalValue(value, cachedInputPriceKeys()...)
+	cacheWriteInputPrice, cacheWriteInputOK := firstDecimalValue(value, cacheWriteInputPriceKeys()...)
 	inputPriceTiers, inputTiersOK := firstPriceTierListValue(value, inputPriceTierKeys()...)
 	outputPriceTiers, outputTiersOK := firstPriceTierListValue(value, outputPriceTierKeys()...)
 	cachedInputPriceTiers, cachedInputTiersOK := firstPriceTierListValue(value, cachedInputPriceTierKeys()...)
+	cacheWriteInputPriceTiers, _ := firstPriceTierListValue(value, cacheWriteInputPriceTierKeys()...)
 	if exprPrice, ok := priceItemFromBillingExpression(modelName, value); ok {
 		inputPrice = exprPrice.InputPrice
 		outputPrice = exprPrice.OutputPrice
 		cachedInputPrice = exprPrice.CachedInputPrice
+		cacheWriteInputPrice = exprPrice.CacheWriteInputPrice
 		inputPriceTiers = exprPrice.InputPriceTiers
 		outputPriceTiers = exprPrice.OutputPriceTiers
 		cachedInputPriceTiers = exprPrice.CachedInputPriceTiers
+		cacheWriteInputPriceTiers = exprPrice.CacheWriteInputPriceTiers
 		inputOK = true
 		outputOK = true
 		cachedInputOK = true
 		inputTiersOK = len(inputPriceTiers) > 0
 		outputTiersOK = len(outputPriceTiers) > 0
 		cachedInputTiersOK = len(cachedInputPriceTiers) > 0
+		cacheWriteInputOK = true
 	}
 	genericPriceTiers, genericTiersOK := firstPriceTierListValue(value, "price_tiers", "priceTiers", "prices_tiers", "pricesTiers", "model_price_tiers", "modelPriceTiers", "model_tiers", "modelTiers", "tiers")
 	modelRatio, modelRatioOK := firstDecimalValue(value, "model_ratio", "modelRatio")
@@ -1092,6 +1151,10 @@ func priceItemFromMap(modelName string, value map[string]interface{}) (upstreamM
 		if !cachedInputOK {
 			cachedInputPrice = decimal.Zero
 			cachedInputOK = true
+		}
+		if !cacheWriteInputOK {
+			cacheWriteInputPrice = decimal.Zero
+			cacheWriteInputOK = true
 		}
 	} else {
 		if !inputOK && modelRatioOK {
@@ -1131,22 +1194,25 @@ func priceItemFromMap(modelName string, value map[string]interface{}) (upstreamM
 	}
 
 	return upstreamModelPrice{
-		Model:                 modelName,
-		EndpointTypes:         endpointTypes,
-		QuotaType:             quotaType,
-		InputPrice:            inputPrice,
-		OutputPrice:           outputPrice,
-		CachedInputPrice:      cachedInputPrice,
-		InputPriceTiers:       model.NormalizePriceTiers(inputPriceTiers),
-		OutputPriceTiers:      model.NormalizePriceTiers(outputPriceTiers),
-		CachedInputPriceTiers: model.NormalizePriceTiers(cachedInputPriceTiers),
+		Model:                     modelName,
+		EndpointTypes:             endpointTypes,
+		QuotaType:                 quotaType,
+		InputPrice:                inputPrice,
+		OutputPrice:               outputPrice,
+		CachedInputPrice:          cachedInputPrice,
+		CacheWriteInputPrice:      cacheWriteInputPrice,
+		InputPriceTiers:           model.NormalizePriceTiers(inputPriceTiers),
+		OutputPriceTiers:          model.NormalizePriceTiers(outputPriceTiers),
+		CachedInputPriceTiers:     model.NormalizePriceTiers(cachedInputPriceTiers),
+		CacheWriteInputPriceTiers: model.NormalizePriceTiers(cacheWriteInputPriceTiers),
 	}, true
 }
 
 type tieredExprPrices struct {
-	Input       decimal.Decimal
-	Output      decimal.Decimal
-	CachedInput decimal.Decimal
+	Input           decimal.Decimal
+	Output          decimal.Decimal
+	CachedInput     decimal.Decimal
+	CacheWriteInput decimal.Decimal
 }
 
 func priceItemFromBillingExpression(modelName string, value map[string]interface{}) (upstreamModelPrice, bool) {
@@ -1167,13 +1233,15 @@ func priceItemFromBillingExpression(modelName string, value map[string]interface
 	basePrices := firstPrices
 	var tierPrices *tieredExprPrices
 	threshold := 0
+	condition := model.PriceTierConditionFullInputTokens
 
 	if len(tierMatches) > 1 {
 		secondPrices, secondOK := tieredExprPricesFromSegment(tierMatches[1][1])
 		if secondOK {
-			operator, parsedThreshold, thresholdOK := tieredExprThreshold(expr)
+			variable, operator, parsedThreshold, thresholdOK := tieredExprThreshold(expr)
 			if thresholdOK {
-				threshold = parsedThreshold
+				threshold = tieredExprTierStart(operator, parsedThreshold)
+				condition = tieredExprTierCondition(variable)
 				if operator == ">" || operator == ">=" {
 					basePrices = secondPrices
 					tierPrices = &firstPrices
@@ -1185,52 +1253,74 @@ func priceItemFromBillingExpression(modelName string, value map[string]interface
 	}
 
 	item := upstreamModelPrice{
-		Model:            modelName,
-		InputPrice:       basePrices.Input,
-		OutputPrice:      basePrices.Output,
-		CachedInputPrice: basePrices.CachedInput,
+		Model:                modelName,
+		InputPrice:           basePrices.Input,
+		OutputPrice:          basePrices.Output,
+		CachedInputPrice:     basePrices.CachedInput,
+		CacheWriteInputPrice: basePrices.CacheWriteInput,
 	}
 	if tierPrices != nil {
 		item.InputPriceTiers = model.NormalizePriceTiers(model.PriceTierList{{
 			MinTokens: threshold,
 			Price:     tierPrices.Input,
-			Condition: model.PriceTierConditionFullInputTokens,
+			Condition: condition,
 		}})
 		item.OutputPriceTiers = model.NormalizePriceTiers(model.PriceTierList{{
 			MinTokens: threshold,
 			Price:     tierPrices.Output,
-			Condition: model.PriceTierConditionFullInputTokens,
+			Condition: condition,
 		}})
 		item.CachedInputPriceTiers = model.NormalizePriceTiers(model.PriceTierList{{
 			MinTokens: threshold,
 			Price:     tierPrices.CachedInput,
-			Condition: model.PriceTierConditionFullInputTokens,
+			Condition: condition,
+		}})
+		item.CacheWriteInputPriceTiers = model.NormalizePriceTiers(model.PriceTierList{{
+			MinTokens: threshold,
+			Price:     tierPrices.CacheWriteInput,
+			Condition: condition,
 		}})
 	}
 	return item, true
 }
 
-func tieredExprThreshold(expr string) (string, int, bool) {
+func tieredExprThreshold(expr string) (string, string, int, bool) {
 	match := tieredExprThresholdPattern.FindStringSubmatch(expr)
-	if len(match) != 3 {
-		return "", 0, false
+	if len(match) != 4 {
+		return "", "", 0, false
 	}
-	threshold, ok := intFromValue(match[2])
-	return strings.TrimSpace(match[1]), threshold, ok
+	threshold, ok := intFromValue(match[3])
+	return strings.ToLower(strings.TrimSpace(match[1])), strings.TrimSpace(match[2]), threshold, ok
+}
+
+func tieredExprTierStart(operator string, threshold int) int {
+	if operator == "<=" || operator == ">" {
+		return threshold + 1
+	}
+	return threshold
+}
+
+func tieredExprTierCondition(variable string) string {
+	if strings.EqualFold(strings.TrimSpace(variable), "len") {
+		return model.PriceTierConditionFullRequestTokens
+	}
+	return model.PriceTierConditionFullInputTokens
 }
 
 func tieredExprPricesFromSegment(segment string) (tieredExprPrices, bool) {
 	input, inputOK := tieredExprCoefficient(segment, "p")
 	output, outputOK := tieredExprCoefficient(segment, "c")
 	cachedInput, cachedOK := tieredExprCoefficient(segment, "cr")
+	cacheWriteInput, cacheWriteOK := tieredExprCoefficient(segment, "cc")
 	if !cachedOK {
 		cachedInput = input
 	}
 	return tieredExprPrices{
-		Input:       input,
-		Output:      output,
-		CachedInput: cachedInput,
-	}, inputOK || outputOK || cachedOK
+		Input:           input,
+		Output:          output,
+		CachedInput:     cachedInput,
+		CacheWriteInput: cacheWriteInput,
+	}, inputOK || outputOK || cachedOK || cacheWriteOK
 }
 
 func tieredExprCoefficient(segment string, variable string) (decimal.Decimal, bool) {
@@ -1348,9 +1438,11 @@ func multiplyTokenPricedModelPrices(items []upstreamModelPrice) []upstreamModelP
 		item.InputPrice = item.InputPrice.Mul(multiplier)
 		item.OutputPrice = item.OutputPrice.Mul(multiplier)
 		item.CachedInputPrice = item.CachedInputPrice.Mul(multiplier)
+		item.CacheWriteInputPrice = item.CacheWriteInputPrice.Mul(multiplier)
 		item.InputPriceTiers = model.MultiplyPriceTiers(item.InputPriceTiers, multiplier)
 		item.OutputPriceTiers = model.MultiplyPriceTiers(item.OutputPriceTiers, multiplier)
 		item.CachedInputPriceTiers = model.MultiplyPriceTiers(item.CachedInputPriceTiers, multiplier)
+		item.CacheWriteInputPriceTiers = model.MultiplyPriceTiers(item.CacheWriteInputPriceTiers, multiplier)
 		result[index] = item
 	}
 	return result
@@ -1609,6 +1701,15 @@ func cachedInputPriceTierKeys() []string {
 	}
 }
 
+func cacheWriteInputPriceTierKeys() []string {
+	return []string{
+		"cache_write_input_price_tiers", "cacheWriteInputPriceTiers",
+		"cache_write_price_tiers", "cacheWritePriceTiers",
+		"cache_creation_input_price_tiers", "cacheCreationInputPriceTiers",
+		"cache_creation_price_tiers", "cacheCreationPriceTiers",
+	}
+}
+
 func cachedInputPriceKeys() []string {
 	return []string{
 		"cached_input_price", "cachedInputPrice", "cached_input_prices", "cachedInputPrices",
@@ -1620,6 +1721,15 @@ func cachedInputPriceKeys() []string {
 		"cached_prompt_price", "cachedPromptPrice", "cached_prompt_prices", "cachedPromptPrices",
 		"prompt_cache_price", "promptCachePrice", "prompt_cache_prices", "promptCachePrices",
 		"cached_tokens_price", "cachedTokensPrice", "cached_tokens_prices", "cachedTokensPrices",
+	}
+}
+
+func cacheWriteInputPriceKeys() []string {
+	return []string{
+		"cache_write_input_price", "cacheWriteInputPrice",
+		"cache_write_price", "cacheWritePrice",
+		"cache_creation_input_price", "cacheCreationInputPrice",
+		"cache_creation_price", "cacheCreationPrice",
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 const (
 	PriceTierConditionCurrentTokens        = "current_tokens"
 	PriceTierConditionFullInputTokens      = "full_input_tokens"
+	PriceTierConditionFullRequestTokens    = "full_request_tokens"
 	PriceTierConditionBillableInputTokens  = "billable_input_tokens"
 	PriceTierConditionBillableOutputTokens = "billable_output_tokens"
 )
@@ -127,6 +128,8 @@ func NormalizePriceTierCondition(condition string) string {
 		return ""
 	case PriceTierConditionFullInputTokens, "full_input", "complete_input", "complete_input_tokens", "total_input", "total_input_tokens", "context", "context_tokens", "prompt_tokens":
 		return PriceTierConditionFullInputTokens
+	case PriceTierConditionFullRequestTokens, "full_request", "complete_request", "total_tokens", "request_tokens", "all_tokens", "len":
+		return PriceTierConditionFullRequestTokens
 	case PriceTierConditionBillableInputTokens, "billable_input", "pricing_input", "pricing_input_tokens", "priced_input", "priced_input_tokens", "chargeable_input", "chargeable_input_tokens":
 		return PriceTierConditionBillableInputTokens
 	case PriceTierConditionBillableOutputTokens, "billable_output", "pricing_output", "pricing_output_tokens", "priced_output", "priced_output_tokens", "chargeable_output", "chargeable_output_tokens", "completion_tokens":
@@ -142,10 +145,12 @@ func priceTierConditionSortValue(condition string) int {
 		return 0
 	case PriceTierConditionFullInputTokens:
 		return 1
-	case PriceTierConditionBillableInputTokens:
+	case PriceTierConditionFullRequestTokens:
 		return 2
-	case PriceTierConditionBillableOutputTokens:
+	case PriceTierConditionBillableInputTokens:
 		return 3
+	case PriceTierConditionBillableOutputTokens:
+		return 4
 	default:
 		return 4
 	}
