@@ -13,10 +13,10 @@ import (
 
 const communityAPIBaseURL = "https://veloce-community.flweb.cn"
 
-// proxyCommunityCharacterAPI exposes only the public read endpoints used by
+// proxyCommunityAPI exposes only the public read endpoints used by
 // the embedded community browser. Keeping this request same-origin avoids a
 // browser CORS dependency on the community deployment.
-func proxyCommunityCharacterAPI(c *gin.Context) {
+func proxyCommunityAPI(c *gin.Context) {
 	requestContext, cancel := context.WithTimeout(c.Request.Context(), 12*time.Second)
 	defer cancel()
 	c.Request = c.Request.WithContext(requestContext)
