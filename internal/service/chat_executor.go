@@ -11,7 +11,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/WindyPear-Team/veloce/internal/cache"
 	"github.com/WindyPear-Team/veloce/internal/model"
@@ -181,12 +180,14 @@ func ExecuteServerChatCompletion(c *gin.Context, user *model.User, req ChatExecu
 	if prepared.Context == nil && c != nil && c.Request != nil {
 		prepared.Context = c.Request.Context()
 	}
+	beginTokenLogTiming(c)
 
 	resp, err := executor.doUpstreamRequest(prepared, &channel)
 	if err != nil {
 		logUpstreamRequestFailure(c, &channel, prepared.URL, prepared.Body, err)
 		return nil, withChatExecutorChannel(newChatExecutorError(http.StatusBadGateway, "Upstream request failed"), channel, modelName, upstreamModelName, prepared.URL)
 	}
+	markTokenLogFirstResponse(c)
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= http.StatusBadRequest {
@@ -278,9 +279,9 @@ func (s *ProxyService) billServerUsage(c *gin.Context, user *model.User, apiKey 
 	}
 	usage = normalizeUsageTokenCounts(usage)
 	billingModel := modelConfig.Model
-	cost := calculateModelUsageCost(usage, billingModel).
-		Mul(groupMultiplier).
-		Mul(userChannelMultiplier(channel))
+	baseCost := calculateModelUsageCost(usage, billingModel)
+	channelMultiplier := userChannelMultiplier(channel)
+	cost := baseCost.Mul(groupMultiplier).Mul(channelMultiplier)
 	referralRate := referralCommissionRate(user, cost)
 
 	billingContext := billingContext(c)
@@ -305,27 +306,7 @@ func (s *ProxyService) billServerUsage(c *gin.Context, user *model.User, apiKey 
 		}
 		return decimal.Zero, http.StatusInternalServerError, "Failed to update balance", err
 	}
-	tokenLog := model.TokenLog{
-		ID:                      model.NextLogID(),
-		UserID:                  user.ID,
-		APIKeyID:                apiKeyID(apiKey),
-		UserChannelID:           channel.UserChannelID,
-		ChannelID:               channel.ID,
-		ModelName:               modelName,
-		InputTokens:             usage.InputTokens,
-		OutputTokens:            usage.OutputTokens,
-		CachedInputTokens:       usage.CachedInputTokens,
-		CacheWriteInputTokens:   usage.CacheWriteInputTokens,
-		CacheWrite1hInputTokens: usage.CacheWrite1hInputTokens,
-		ImageInputTokens:        usage.ImageInputTokens,
-		ImageOutputTokens:       usage.ImageOutputTokens,
-		AudioInputTokens:        usage.AudioInputTokens,
-		AudioOutputTokens:       usage.AudioOutputTokens,
-		Cost:                    cost,
-		IP:                      clientIPForLog(c),
-		UserAgent:               userAgentForLog(c),
-		CreatedAt:               time.Now(),
-	}
+	tokenLog := newUsageTokenLog(c, user, apiKey, channel, modelConfig, modelName, usage, billingModel, baseCost, groupMultiplier, channelMultiplier, cost)
 	if err := applyReferralCommission(tx, user, tokenLog.ID, cost, referralRate); err != nil {
 		tx.Rollback()
 		cache.InvalidateUserBillingBalance(billingContext, user.ID)

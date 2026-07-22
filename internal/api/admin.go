@@ -4660,6 +4660,12 @@ func auditLogToResponse(logItem model.AuditLog, users map[uint]model.User) audit
 
 func tokenLogFilterFromRequest(c *gin.Context, userID *uint) (model.TokenLogFilter, error) {
 	filter := model.TokenLogFilter{UserID: userID}
+	if userID == nil {
+		if value := positiveIntQuery(c, "user_id", 0); value > 0 {
+			parsed := uint(value)
+			filter.UserID = &parsed
+		}
+	}
 	if value := positiveIntQuery(c, "api_key_id", 0); value > 0 {
 		parsed := uint(value)
 		filter.APIKeyID = &parsed

@@ -441,6 +441,7 @@ type TokenLog struct {
 	APIKeyID                *uint           `gorm:"index" json:"api_key_id,omitempty"`
 	UserChannelID           *uint           `gorm:"index" json:"user_channel_id,omitempty"`
 	ChannelID               uint            `gorm:"index" json:"channel_id"`
+	ModelConfigID           uint            `gorm:"index" json:"model_config_id"`
 	ModelName               string          `gorm:"size:100" json:"model_name"`
 	InputTokens             int             `json:"input_tokens"`
 	OutputTokens            int             `json:"output_tokens"`
@@ -451,6 +452,17 @@ type TokenLog struct {
 	ImageOutputTokens       int             `gorm:"default:0" json:"image_output_tokens"`
 	AudioInputTokens        int             `gorm:"default:0" json:"audio_input_tokens"`
 	AudioOutputTokens       int             `gorm:"default:0" json:"audio_output_tokens"`
+	ResponseTimeMs          int64           `gorm:"default:0" json:"response_time_ms"`
+	FirstResponseTimeMs     int64           `gorm:"default:0" json:"first_response_time_ms"`
+	BaseCost                decimal.Decimal `gorm:"type:decimal(20,10);default:0" json:"base_cost"`
+	GroupMultiplier         decimal.Decimal `gorm:"type:decimal(20,10);default:1" json:"group_multiplier"`
+	UserChannelMultiplier   decimal.Decimal `gorm:"type:decimal(20,10);default:1" json:"user_channel_multiplier"`
+	InputPrice              decimal.Decimal `gorm:"type:decimal(20,10);default:0" json:"input_price"`
+	OutputPrice             decimal.Decimal `gorm:"type:decimal(20,10);default:0" json:"output_price"`
+	CachedInputPrice        decimal.Decimal `gorm:"type:decimal(20,10);default:0" json:"cached_input_price"`
+	CacheWriteInputPrice    decimal.Decimal `gorm:"type:decimal(20,10);default:0" json:"cache_write_input_price"`
+	CacheWrite1hInputPrice  decimal.Decimal `gorm:"type:decimal(20,10);default:0" json:"cache_write_1h_input_price"`
+	PricingFormula          string          `gorm:"type:text" json:"pricing_formula"`
 	Cost                    decimal.Decimal `gorm:"type:decimal(20,10)" json:"cost"`
 	IP                      string          `gorm:"size:45" json:"ip"`
 	UserAgent               string          `json:"user_agent"`

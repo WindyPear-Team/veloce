@@ -911,6 +911,7 @@ func readProxyJSONBody(c *gin.Context) (map[string]interface{}, []byte, bool) {
 }
 
 func (s *ProxyService) handleConvertedProviderRequest(c *gin.Context, clientProtocol proxyProtocol, modelName string, requestBody map[string]interface{}, originalBody []byte) {
+	beginTokenLogTiming(c)
 	metaResolution, err := ResolveMetaModel(c, MetaModelResolveInput{
 		ModelName:    modelName,
 		RequestBody:  requestBody,
@@ -975,6 +976,7 @@ func (s *ProxyService) handleConvertedProviderRequest(c *gin.Context, clientProt
 		c.JSON(http.StatusBadGateway, gin.H{"error": "Upstream request failed", "type": "upstream_error"})
 		return
 	}
+	markTokenLogFirstResponse(c)
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= http.StatusBadRequest {
@@ -1270,11 +1272,10 @@ func (s *ProxyService) billUsageAndReturnCost(c *gin.Context, user *model.User, 
 	}
 	usage = normalizeUsageTokenCounts(usage)
 
-	// Final cost calculation
 	// Prices are stored per 1M tokens.
-	cost := calculateModelUsageCost(usage, billingModel).
-		Mul(groupMultiplier).
-		Mul(userChannelMultiplier(channel))
+	baseCost := calculateModelUsageCost(usage, billingModel)
+	channelMultiplier := userChannelMultiplier(channel)
+	cost := baseCost.Mul(groupMultiplier).Mul(channelMultiplier)
 	referralRate := referralCommissionRate(user, cost)
 
 	// 7. Deduct balance and log
@@ -1303,27 +1304,7 @@ func (s *ProxyService) billUsageAndReturnCost(c *gin.Context, user *model.User, 
 		return decimal.Zero, http.StatusInternalServerError, "Failed to update balance", err
 	}
 
-	tokenLog := model.TokenLog{
-		ID:                      model.NextLogID(),
-		UserID:                  user.ID,
-		APIKeyID:                apiKeyID(apiKey),
-		UserChannelID:           channel.UserChannelID,
-		ChannelID:               channel.ID,
-		ModelName:               modelName,
-		InputTokens:             usage.InputTokens,
-		OutputTokens:            usage.OutputTokens,
-		CachedInputTokens:       usage.CachedInputTokens,
-		CacheWriteInputTokens:   usage.CacheWriteInputTokens,
-		CacheWrite1hInputTokens: usage.CacheWrite1hInputTokens,
-		ImageInputTokens:        usage.ImageInputTokens,
-		ImageOutputTokens:       usage.ImageOutputTokens,
-		AudioInputTokens:        usage.AudioInputTokens,
-		AudioOutputTokens:       usage.AudioOutputTokens,
-		Cost:                    cost,
-		IP:                      c.ClientIP(),
-		UserAgent:               c.Request.UserAgent(),
-		CreatedAt:               time.Now(),
-	}
+	tokenLog := newUsageTokenLog(c, user, apiKey, channel, modelConfig, modelName, usage, billingModel, baseCost, groupMultiplier, channelMultiplier, cost)
 	if err := applyReferralCommission(tx, user, tokenLog.ID, cost, referralRate); err != nil {
 		tx.Rollback()
 		cache.InvalidateUserBillingBalance(billingContext, user.ID)
@@ -1345,6 +1326,91 @@ func (s *ProxyService) billUsageAndReturnCost(c *gin.Context, user *model.User, 
 	}
 
 	return cost, 0, "", nil
+}
+
+const (
+	tokenLogStartKey         = "token_log_started_at"
+	tokenLogFirstResponseKey = "token_log_first_response_at"
+)
+
+func beginTokenLogTiming(c *gin.Context) {
+	if c == nil {
+		return
+	}
+	if _, exists := c.Get(tokenLogStartKey); !exists {
+		c.Set(tokenLogStartKey, time.Now())
+	}
+}
+
+func markTokenLogFirstResponse(c *gin.Context) {
+	if c == nil {
+		return
+	}
+	if _, exists := c.Get(tokenLogFirstResponseKey); !exists {
+		c.Set(tokenLogFirstResponseKey, time.Now())
+	}
+}
+
+func newUsageTokenLog(c *gin.Context, user *model.User, apiKey *model.APIKey, channel *model.Channel, modelConfig *model.ModelConfig, modelName string, usage usageTokenCounts, billingModel model.Model, baseCost, groupMultiplier, channelMultiplier, cost decimal.Decimal) model.TokenLog {
+	responseTimeMS, firstResponseTimeMS := tokenLogTiming(c)
+	modelConfigID := uint(0)
+	if modelConfig != nil {
+		modelConfigID = modelConfig.ID
+	}
+	return model.TokenLog{
+		ID:                      model.NextLogID(),
+		UserID:                  user.ID,
+		APIKeyID:                apiKeyID(apiKey),
+		UserChannelID:           channel.UserChannelID,
+		ChannelID:               channel.ID,
+		ModelConfigID:           modelConfigID,
+		ModelName:               modelName,
+		InputTokens:             usage.InputTokens,
+		OutputTokens:            usage.OutputTokens,
+		CachedInputTokens:       usage.CachedInputTokens,
+		CacheWriteInputTokens:   usage.CacheWriteInputTokens,
+		CacheWrite1hInputTokens: usage.CacheWrite1hInputTokens,
+		ImageInputTokens:        usage.ImageInputTokens,
+		ImageOutputTokens:       usage.ImageOutputTokens,
+		AudioInputTokens:        usage.AudioInputTokens,
+		AudioOutputTokens:       usage.AudioOutputTokens,
+		ResponseTimeMs:          responseTimeMS,
+		FirstResponseTimeMs:     firstResponseTimeMS,
+		BaseCost:                baseCost,
+		GroupMultiplier:         groupMultiplier,
+		UserChannelMultiplier:   channelMultiplier,
+		InputPrice:              billingModel.InputPrice,
+		OutputPrice:             billingModel.OutputPrice,
+		CachedInputPrice:        billingModel.CachedInputPrice,
+		CacheWriteInputPrice:    billingModel.CacheWriteInputPrice,
+		CacheWrite1hInputPrice:  billingModel.CacheWrite1hInputPrice,
+		PricingFormula:          usagePricingFormula(usage, baseCost, groupMultiplier, channelMultiplier, cost),
+		Cost:                    cost,
+		IP:                      clientIPForLog(c),
+		UserAgent:               userAgentForLog(c),
+		CreatedAt:               time.Now(),
+	}
+}
+
+func tokenLogTiming(c *gin.Context) (int64, int64) {
+	if c == nil {
+		return 0, 0
+	}
+	now := time.Now()
+	start, _ := c.Get(tokenLogStartKey)
+	first, _ := c.Get(tokenLogFirstResponseKey)
+	var responseTimeMS, firstResponseTimeMS int64
+	if startedAt, ok := start.(time.Time); ok {
+		responseTimeMS = now.Sub(startedAt).Milliseconds()
+		if firstResponseAt, ok := first.(time.Time); ok {
+			firstResponseTimeMS = firstResponseAt.Sub(startedAt).Milliseconds()
+		}
+	}
+	return responseTimeMS, firstResponseTimeMS
+}
+
+func usagePricingFormula(usage usageTokenCounts, baseCost, groupMultiplier, channelMultiplier, cost decimal.Decimal) string {
+	return fmt.Sprintf("base=%s (input=%d, output=%d, cache_read=%d, cache_write=%d, cache_write_1h=%d) × group=%s × user_channel=%s = %s", baseCost.String(), usage.InputTokens, usage.OutputTokens, usage.CachedInputTokens, usage.CacheWriteInputTokens, usage.CacheWrite1hInputTokens, groupMultiplier.String(), channelMultiplier.String(), cost.String())
 }
 
 func calculateModelUsageCost(usage usageTokenCounts, modelConfig model.Model) decimal.Decimal {
