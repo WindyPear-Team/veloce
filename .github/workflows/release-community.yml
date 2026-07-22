@@ -5,6 +5,12 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      build_frontend:
+        description: Build the shared frontend before compiling the backend
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: write
@@ -53,6 +59,7 @@ jobs:
           fetch-depth: 0
 
       - name: Checkout shared web
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_frontend }}
         uses: actions/checkout@v4
         with:
           repository: ${{ env.WEB_REPOSITORY }}
@@ -67,11 +74,13 @@ jobs:
           cache-dependency-path: community/go.sum
 
       - name: Set up Node
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_frontend }}
         uses: actions/setup-node@v4
         with:
           node-version: 22
 
       - name: Build shared web
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.build_frontend }}
         working-directory: web
         run: |
           corepack enable
