@@ -56,6 +56,7 @@ type upstreamModelPrice struct {
 	Model                     string
 	EndpointTypes             []string
 	QuotaType                 int
+	UsesBillingExpression     bool
 	InputPrice                decimal.Decimal
 	OutputPrice               decimal.Decimal
 	CachedInputPrice          decimal.Decimal
@@ -954,6 +955,7 @@ func splitPriceItemsFromMap(value map[string]interface{}) []upstreamModelPrice {
 		modelRatio, modelRatioOK := decimalFromMapValue(modelRatios, name)
 		completionRatio, completionRatioOK := decimalFromMapValue(completionRatios, name)
 		genericPrice, genericPriceOK := priceItemFromMapValue(genericPrices, name)
+		usesBillingExpression := genericPriceOK && genericPrice.UsesBillingExpression
 		quotaType, _ := intFromMapValue(quotaTypes, name)
 		quotaType = normalizeQuotaType(quotaType)
 
@@ -1014,6 +1016,7 @@ func splitPriceItemsFromMap(value map[string]interface{}) []upstreamModelPrice {
 		items = append(items, upstreamModelPrice{
 			Model:                     name,
 			QuotaType:                 quotaType,
+			UsesBillingExpression:     usesBillingExpression,
 			InputPrice:                inputPrice,
 			OutputPrice:               outputPrice,
 			CachedInputPrice:          cachedInputPrice,
@@ -1109,7 +1112,9 @@ func priceItemFromMap(modelName string, value map[string]interface{}) (upstreamM
 	outputPriceTiers, outputTiersOK := firstPriceTierListValue(value, outputPriceTierKeys()...)
 	cachedInputPriceTiers, cachedInputTiersOK := firstPriceTierListValue(value, cachedInputPriceTierKeys()...)
 	cacheWriteInputPriceTiers, _ := firstPriceTierListValue(value, cacheWriteInputPriceTierKeys()...)
+	usesBillingExpression := false
 	if exprPrice, ok := priceItemFromBillingExpression(modelName, value); ok {
+		usesBillingExpression = true
 		inputPrice = exprPrice.InputPrice
 		outputPrice = exprPrice.OutputPrice
 		cachedInputPrice = exprPrice.CachedInputPrice
@@ -1197,6 +1202,7 @@ func priceItemFromMap(modelName string, value map[string]interface{}) (upstreamM
 		Model:                     modelName,
 		EndpointTypes:             endpointTypes,
 		QuotaType:                 quotaType,
+		UsesBillingExpression:     usesBillingExpression,
 		InputPrice:                inputPrice,
 		OutputPrice:               outputPrice,
 		CachedInputPrice:          cachedInputPrice,
@@ -1253,11 +1259,12 @@ func priceItemFromBillingExpression(modelName string, value map[string]interface
 	}
 
 	item := upstreamModelPrice{
-		Model:                modelName,
-		InputPrice:           basePrices.Input,
-		OutputPrice:          basePrices.Output,
-		CachedInputPrice:     basePrices.CachedInput,
-		CacheWriteInputPrice: basePrices.CacheWriteInput,
+		Model:                 modelName,
+		UsesBillingExpression: true,
+		InputPrice:            basePrices.Input,
+		OutputPrice:           basePrices.Output,
+		CachedInputPrice:      basePrices.CachedInput,
+		CacheWriteInputPrice:  basePrices.CacheWriteInput,
 	}
 	if tierPrices != nil {
 		item.InputPriceTiers = model.NormalizePriceTiers(model.PriceTierList{{
@@ -1431,7 +1438,7 @@ func multiplyTokenPricedModelPrices(items []upstreamModelPrice) []upstreamModelP
 	multiplier := decimal.NewFromInt(2)
 	result := make([]upstreamModelPrice, len(items))
 	for index, item := range items {
-		if normalizeQuotaType(item.QuotaType) == 1 {
+		if normalizeQuotaType(item.QuotaType) == 1 || item.UsesBillingExpression {
 			result[index] = item
 			continue
 		}

@@ -179,6 +179,26 @@ func TestMultiplyTokenPricedModelPricesSkipsPerCallPrices(t *testing.T) {
 	assertTier(t, items[1].OutputPriceTiers, 1, "0.2")
 }
 
+func TestMultiplyTokenPricedModelPricesSkipsBillingExpressions(t *testing.T) {
+	items := multiplyTokenPricedModelPrices([]upstreamModelPrice{{
+		Model:                     "tiered-model",
+		UsesBillingExpression:     true,
+		InputPrice:                decimal.NewFromInt(5),
+		OutputPrice:               decimal.NewFromInt(30),
+		CachedInputPrice:          decimal.RequireFromString("0.5"),
+		CacheWriteInputPrice:      decimal.RequireFromString("6.25"),
+		InputPriceTiers:           model.PriceTierList{{MinTokens: 272001, Price: decimal.NewFromInt(10)}},
+		CacheWriteInputPriceTiers: model.PriceTierList{{MinTokens: 272001, Price: decimal.RequireFromString("12.5")}},
+	}})
+
+	assertDecimalString(t, items[0].InputPrice, "5")
+	assertDecimalString(t, items[0].OutputPrice, "30")
+	assertDecimalString(t, items[0].CachedInputPrice, "0.5")
+	assertDecimalString(t, items[0].CacheWriteInputPrice, "6.25")
+	assertTier(t, items[0].InputPriceTiers, 272001, "10")
+	assertTier(t, items[0].CacheWriteInputPriceTiers, 272001, "12.5")
+}
+
 func TestParseUpstreamPriceItemsNewAPITieredExpression(t *testing.T) {
 	body := []byte(`{
 		"success": true,
@@ -282,12 +302,12 @@ func TestSyncChannelPricesPersistsTieredExpressionAndCacheWritePrice(t *testing.
 	if err := database.Where("model_name = ?", "gpt-5.6-sol").First(&saved).Error; err != nil {
 		t.Fatalf("load synced model: %v", err)
 	}
-	assertDecimalString(t, saved.InputPrice, "10")
-	assertDecimalString(t, saved.OutputPrice, "60")
-	assertDecimalString(t, saved.CachedInputPrice, "1")
-	assertDecimalString(t, saved.CacheWriteInputPrice, "12.5")
-	assertTier(t, saved.InputPriceTiers, 272001, "20")
-	assertTier(t, saved.CacheWriteInputPriceTiers, 272001, "25")
+	assertDecimalString(t, saved.InputPrice, "5")
+	assertDecimalString(t, saved.OutputPrice, "30")
+	assertDecimalString(t, saved.CachedInputPrice, "0.5")
+	assertDecimalString(t, saved.CacheWriteInputPrice, "6.25")
+	assertTier(t, saved.InputPriceTiers, 272001, "10")
+	assertTier(t, saved.CacheWriteInputPriceTiers, 272001, "12.5")
 	if saved.InputPriceTiers[0].Condition != model.PriceTierConditionFullRequestTokens {
 		t.Fatalf("stored tier condition = %q, want %q", saved.InputPriceTiers[0].Condition, model.PriceTierConditionFullRequestTokens)
 	}
