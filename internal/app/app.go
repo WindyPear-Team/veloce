@@ -651,6 +651,10 @@ func Run() error {
 		service.ApplyAdminRouteHooks(admin)
 	}
 
+	adminTickets := r.Group("/api/admin")
+	adminTickets.Use(middleware.AuthMiddleware(authService), middleware.AdminMiddleware())
+	service.RegisterTicketAdminRoutes(adminTickets)
+
 	// User Self APIs
 	publicAPI := r.Group("/api")
 	service.RegisterCommunityAdvancedChatPublicRoutes(publicAPI)
@@ -711,6 +715,7 @@ func Run() error {
 		userGroup.POST("/api-keys/:id/reset-usage", userAPI.ResetAPIKeyUsage)
 		userGroup.DELETE("/api-keys/:id", userAPI.DeleteAPIKey)
 		userGroup.POST("/api-key/rotate", userAPI.RotateAPIKey)
+		service.RegisterTicketUserRoutes(userGroup)
 		userGroup.GET("/enterprise/organization", enterpriseAPI.GetOrganization)
 		userGroup.PUT("/enterprise/organization", middleware.PermissionMiddleware("organization.manage"), enterpriseAPI.UpdateOrganization)
 		userGroup.GET("/enterprise/portal", enterpriseAPI.GetPortal)

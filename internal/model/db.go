@@ -73,6 +73,8 @@ func InitDB() {
 		&UserPluginState{},
 		&UserPluginConfig{},
 		&PluginKV{},
+		&Ticket{},
+		&TicketMessage{},
 		&PersonalCompany{},
 		&CompanyCharterRevision{},
 		&PersonalCompanyEmployee{},
