@@ -142,7 +142,7 @@ func ExecuteServerChatCompletion(c *gin.Context, user *model.User, req ChatExecu
 		return nil, newChatExecutorError(http.StatusPaymentRequired, "Insufficient balance")
 	}
 
-	candidates, err := serverChatCandidates(modelName, req.UserChannelID)
+	candidates, err := serverChatCandidates(user, modelName, req.UserChannelID)
 	if err != nil {
 		return nil, newChatExecutorError(http.StatusInternalServerError, "Failed to find available channels")
 	}
@@ -251,7 +251,7 @@ func serverChatExecutor() *ProxyService {
 
 var serverChatProxyService = NewProxyService()
 
-func serverChatCandidates(modelName string, userChannelID uint) ([]model.ModelConfig, error) {
+func serverChatCandidates(user *model.User, modelName string, userChannelID uint) ([]model.ModelConfig, error) {
 	var candidates []model.ModelConfig
 	query := model.DB.
 		Preload("Channel.UserChannel").
@@ -262,6 +262,10 @@ func serverChatCandidates(modelName string, userChannelID uint) ([]model.ModelCo
 		Where("channels.enabled = ? AND model_configs.enabled = ? AND models.enabled = ? AND models.model_name = ? AND user_channels.enabled = ?", true, true, true, modelName, true)
 	if userChannelID != 0 {
 		query = query.Where("channels.user_channel_id = ?", userChannelID)
+	}
+	query, err := filterUserChannelGroupAccess(query, user)
+	if err != nil {
+		return nil, err
 	}
 	if err := query.Order("channels.priority DESC, channels.weight DESC, channels.id ASC").Find(&candidates).Error; err != nil {
 		return nil, err

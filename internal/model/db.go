@@ -62,6 +62,7 @@ func InitDB() {
 		&ModelGroupMultiplier{},
 		&ReferralCommissionLog{},
 		&UserChannel{},
+		&UserChannelGroupAccess{},
 		&Channel{},
 		&Model{},
 		&ModelConfig{},

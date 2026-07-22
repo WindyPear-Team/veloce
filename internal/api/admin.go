@@ -3705,7 +3705,7 @@ type userChannelCatalogItem struct {
 
 func (api *UserChannelAPI) List(c *gin.Context) {
 	var channels []model.UserChannel
-	model.DB.Preload("Channels.Models.Model").Find(&channels)
+	model.DB.Preload("Channels.Models.Model").Preload("AllowedGroups.Group").Find(&channels)
 	c.JSON(http.StatusOK, channels)
 }
 
@@ -3751,6 +3751,68 @@ func (api *UserChannelAPI) Delete(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "User channel deleted"})
+}
+
+func (api *UserChannelAPI) SetAllowedGroups(c *gin.Context) {
+	var channel model.UserChannel
+	if err := model.DB.First(&channel, c.Param("id")).Error; err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "User channel not found"})
+		return
+	}
+	var input struct {
+		GroupIDs []uint `json:"group_ids"`
+	}
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	groupIDs := uniquePositiveUintIDs(input.GroupIDs)
+	if len(groupIDs) > 0 {
+		var count int64
+		if err := model.DB.Model(&model.Group{}).Where("id IN ?", groupIDs).Count(&count).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to validate groups"})
+			return
+		}
+		if count != int64(len(groupIDs)) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "One or more groups do not exist"})
+			return
+		}
+	}
+	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("user_channel_id = ?", channel.ID).Delete(&model.UserChannelGroupAccess{}).Error; err != nil {
+			return err
+		}
+		for _, groupID := range groupIDs {
+			if err := tx.Create(&model.UserChannelGroupAccess{UserChannelID: channel.ID, GroupID: groupID}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update allowed groups"})
+		return
+	}
+	if err := model.DB.Preload("AllowedGroups.Group").First(&channel, channel.ID).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to load allowed groups"})
+		return
+	}
+	c.JSON(http.StatusOK, channel.AllowedGroups)
+}
+
+func uniquePositiveUintIDs(values []uint) []uint {
+	seen := make(map[uint]struct{}, len(values))
+	result := make([]uint, 0, len(values))
+	for _, value := range values {
+		if value == 0 {
+			continue
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }
 
 func (api *UserChannelAPI) Catalog(c *gin.Context) {

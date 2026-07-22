@@ -139,6 +139,12 @@ type videoGenerationResult struct {
 
 func (s *ProxyService) ListModels(c *gin.Context) {
 	var modelNames []string
+	value, _ := c.Get("user")
+	user, ok := value.(*model.User)
+	if !ok || user == nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
 	apiKey := currentAPIKey(c)
 	query := model.DB.Table("model_configs").
 		Joins("JOIN models ON models.id = model_configs.model_id").
@@ -152,6 +158,11 @@ func (s *ProxyService) ListModels(c *gin.Context) {
 	}
 	if len(allowedUserChannels) > 0 {
 		query = query.Where("channels.user_channel_id IN ?", allowedUserChannels)
+	}
+	query, err := filterUserChannelGroupAccess(query, user)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to evaluate user channel access"})
+		return
 	}
 	if err := query.
 		Distinct("models.model_name").
@@ -1062,6 +1073,11 @@ func (s *ProxyService) resolveTarget(c *gin.Context, modelName string) (*proxyTa
 	if len(allowedUserChannels) > 0 {
 		query = query.Where("channels.user_channel_id IN ?", allowedUserChannels)
 	}
+	query, err = filterUserChannelGroupAccess(query, user)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to evaluate user channel access"})
+		return nil, false
+	}
 	if err := query.Order("channels.priority DESC, channels.weight DESC, channels.id ASC").Find(&candidates).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to find available channels"})
 		return nil, false
@@ -1580,6 +1596,61 @@ func effectiveUserGroupMultiplier(user *model.User, channelID uint, modelConfigI
 		return decimal.Zero, err
 	}
 	return selected.Mul(departmentMultiplier), nil
+}
+
+// filterUserChannelGroupAccess keeps unrestricted user channels and channels
+// explicitly granted to at least one active group of the user.
+func filterUserChannelGroupAccess(query *gorm.DB, user *model.User) (*gorm.DB, error) {
+	groupIDs, err := activeUserGroupIDs(user)
+	if err != nil {
+		return nil, err
+	}
+	if len(groupIDs) == 0 {
+		return query.Where(`NOT EXISTS (
+			SELECT 1 FROM user_channel_group_accesses access
+			WHERE access.user_channel_id = user_channels.id
+		)`), nil
+	}
+	return query.Where(`NOT EXISTS (
+		SELECT 1 FROM user_channel_group_accesses access
+		WHERE access.user_channel_id = user_channels.id
+	) OR EXISTS (
+		SELECT 1 FROM user_channel_group_accesses access
+		WHERE access.user_channel_id = user_channels.id AND access.group_id IN ?
+	)`, groupIDs), nil
+}
+
+func activeUserGroupIDs(user *model.User) ([]uint, error) {
+	if user == nil {
+		return nil, errors.New("User is required")
+	}
+	now := time.Now()
+	var memberships []model.UserGroupMembership
+	if err := model.DB.
+		Where("user_id = ? AND (expires_at IS NULL OR expires_at > ?)", user.ID, now).
+		Find(&memberships).Error; err != nil {
+		return nil, err
+	}
+	if len(memberships) == 0 && user.GroupID != 0 {
+		var group model.Group
+		if err := model.DB.First(&group, user.GroupID).Error; err != nil {
+			return nil, err
+		}
+		memberships = append(memberships, model.UserGroupMembership{GroupID: group.ID})
+	}
+	seen := make(map[uint]struct{}, len(memberships))
+	groupIDs := make([]uint, 0, len(memberships))
+	for _, membership := range memberships {
+		if membership.GroupID == 0 {
+			continue
+		}
+		if _, exists := seen[membership.GroupID]; exists {
+			continue
+		}
+		seen[membership.GroupID] = struct{}{}
+		groupIDs = append(groupIDs, membership.GroupID)
+	}
+	return groupIDs, nil
 }
 
 func activeGroupMultipliers(user *model.User, channelID uint, modelConfigID uint) ([]decimal.Decimal, error) {

@@ -239,7 +239,7 @@ func createAdvancedChatKnowledgeEmbeddings(ctx context.Context, requestContext *
 	if user == nil {
 		return nil, errors.New("Knowledge owner is required")
 	}
-	candidates, err := serverChatCandidates(cfg.ModelName, cfg.UserChannelID)
+	candidates, err := serverChatCandidates(user, cfg.ModelName, cfg.UserChannelID)
 	if err != nil || len(candidates) == 0 {
 		return nil, errors.New("No available channel for the configured embedding model")
 	}
