@@ -16,7 +16,6 @@ import (
 	communityservice "github.com/WindyPear-Team/veloce/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/shopspring/decimal"
-	"gorm.io/gorm"
 )
 
 const (
@@ -370,11 +369,12 @@ func listMetaModelCatalog(c *gin.Context) ([]communityservice.MetaModelCatalogIt
 
 func resolveMetaModel(c *gin.Context, input communityservice.MetaModelResolveInput) (communityservice.MetaModelResolveResult, error) {
 	var meta MetaModel
-	if err := model.DB.Where("name = ? AND enabled = ?", strings.TrimSpace(input.ModelName), true).First(&meta).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return communityservice.MetaModelResolveResult{}, nil
-		}
-		return communityservice.MetaModelResolveResult{}, err
+	queryResult := model.DB.Where("name = ? AND enabled = ?", strings.TrimSpace(input.ModelName), true).Limit(1).Find(&meta)
+	if queryResult.Error != nil {
+		return communityservice.MetaModelResolveResult{}, queryResult.Error
+	}
+	if queryResult.RowsAffected == 0 {
+		return communityservice.MetaModelResolveResult{}, nil
 	}
 	if !metaModelAllowedByAPIKey(c, meta.Name) {
 		return communityservice.MetaModelResolveResult{
