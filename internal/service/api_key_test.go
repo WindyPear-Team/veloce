@@ -102,6 +102,39 @@ func TestParseUsageTokensClaudeCacheRead(t *testing.T) {
 	}
 }
 
+func TestParseUsageTokensDoesNotDoubleCountIncludedCache(t *testing.T) {
+	usage, ok := parseUsageTokens(map[string]interface{}{
+		"usage": map[string]interface{}{
+			"input_tokens":            float64(10244),
+			"output_tokens":           float64(169),
+			"total_tokens":            float64(10413),
+			"cache_read_input_tokens": float64(10240),
+		},
+	})
+	if !ok {
+		t.Fatal("expected usage tokens")
+	}
+	if usage.InputTokens != 10244 || usage.OutputTokens != 169 || usage.CachedInputTokens != 10240 {
+		t.Fatalf("unexpected usage: input=%d output=%d cached=%d", usage.InputTokens, usage.OutputTokens, usage.CachedInputTokens)
+	}
+}
+
+func TestParseUsageTokensDoesNotDoubleCountOpenAICacheWithoutTotal(t *testing.T) {
+	usage, ok := parseUsageTokens(map[string]interface{}{
+		"usage": map[string]interface{}{
+			"prompt_tokens":           float64(10244),
+			"completion_tokens":       float64(169),
+			"cache_read_input_tokens": float64(10240),
+		},
+	})
+	if !ok {
+		t.Fatal("expected usage tokens")
+	}
+	if usage.InputTokens != 10244 || usage.OutputTokens != 169 || usage.CachedInputTokens != 10240 {
+		t.Fatalf("unexpected usage: input=%d output=%d cached=%d", usage.InputTokens, usage.OutputTokens, usage.CachedInputTokens)
+	}
+}
+
 func TestParseUsageTokensCacheWriteAndModalities(t *testing.T) {
 	usage, ok := parseUsageTokens(map[string]interface{}{
 		"usage": map[string]interface{}{

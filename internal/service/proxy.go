@@ -3409,7 +3409,19 @@ func parseUsageTokens(responseData map[string]interface{}) (usageTokenCounts, bo
 	cacheWriteTokens, cacheWriteOK := cacheWriteInputTokensFromUsage(usage)
 	cacheWrite1hTokens, cacheWrite1hOK := cacheWrite1hInputTokensFromUsage(usage)
 	if explicitCacheReadOK || cacheWriteOK || cacheWrite1hOK {
-		inputTokens += cacheReadTokens + cacheWriteTokens + cacheWrite1hTokens
+		// OpenAI-compatible providers report prompt_tokens as the complete input,
+		// including cached tokens. Anthropic-style providers report input_tokens
+		// separately from cache reads/writes. Prefer the declared total when it is
+		// available, then fall back to the field convention.
+		cacheTokens := cacheReadTokens + cacheWriteTokens + cacheWrite1hTokens
+		totalTokens, totalOK := firstTokenValue(usage, "total_tokens", "totalTokens")
+		inputIncludesCache := totalOK && totalTokens == inputTokens+outputTokens
+		if !totalOK {
+			_, inputIncludesCache = firstTokenValue(usage, "prompt_tokens", "promptTokens")
+		}
+		if !inputIncludesCache {
+			inputTokens += cacheTokens
+		}
 	}
 
 	imageInputTokens := inputModalityTokensFromUsage(usage, "image")
