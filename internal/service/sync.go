@@ -483,8 +483,11 @@ func upsertChannelModel(channel *model.Channel, modelName string, provider Model
 func upsertGlobalModelPrice(modelName string, quotaType int, inputPrice decimal.Decimal, outputPrice decimal.Decimal, cachedInputPrice decimal.Decimal, cacheWriteInputPrice decimal.Decimal, inputPriceTiers model.PriceTierList, outputPriceTiers model.PriceTierList, cachedInputPriceTiers model.PriceTierList, cacheWriteInputPriceTiers model.PriceTierList, provider ModelProvider, result *ChannelSyncResult) error {
 	quotaType = normalizeQuotaType(quotaType)
 	var globalModel model.Model
-	err := model.DB.Where(&model.Model{ModelName: modelName}).First(&globalModel).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
+	queryResult := model.DB.Where(&model.Model{ModelName: modelName}).Limit(1).Find(&globalModel)
+	if queryResult.Error != nil {
+		return queryResult.Error
+	}
+	if queryResult.RowsAffected == 0 {
 		if err := model.DB.Create(&model.Model{
 			ModelName:                 modelName,
 			Provider:                  provider.ID,
@@ -504,9 +507,6 @@ func upsertGlobalModelPrice(modelName string, quotaType int, inputPrice decimal.
 		}
 		result.Created++
 		return nil
-	}
-	if err != nil {
-		return err
 	}
 
 	updates := map[string]interface{}{

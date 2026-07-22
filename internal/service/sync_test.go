@@ -313,6 +313,84 @@ func TestSyncChannelPricesPersistsTieredExpressionAndCacheWritePrice(t *testing.
 	}
 }
 
+func TestPriceSyncPreviewAndApplyDoesNotMultiplyTieredExpression(t *testing.T) {
+	previousDB := model.DB
+	database, err := gorm.Open(sqlite.Open("file:price-sync-preview-apply-test?mode=memory&cache=shared"), &gorm.Config{DisableForeignKeyConstraintWhenMigrating: true})
+	if err != nil {
+		t.Fatalf("open database: %v", err)
+	}
+	if err := database.AutoMigrate(&model.Channel{}, &model.Model{}); err != nil {
+		t.Fatalf("migrate database: %v", err)
+	}
+	model.DB = database
+	t.Cleanup(func() {
+		model.DB = previousDB
+		sqlDB, _ := database.DB()
+		_ = sqlDB.Close()
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/api/pricing" {
+			http.NotFound(writer, request)
+			return
+		}
+		_, _ = writer.Write([]byte(`[
+			{
+				"model_name": "gpt-5.6-sol",
+				"vendor_id": 1,
+				"quota_type": 0,
+				"model_ratio": 37.5,
+				"model_price": 0,
+				"owner_by": "",
+				"completion_ratio": 6,
+				"supported_endpoint_types": ["openai"],
+				"billing_mode": "tiered_expr",
+				"billing_expr": "len \u003C= 272000 ? tier(\"standard\", p * 5 + c * 30 + cr * 0.5 + cc * 6.25) : tier(\"long_context\", p * 10 + c * 45 + cr * 1 + cc * 12.5)"
+			}
+		]`))
+	}))
+	defer server.Close()
+
+	channel := model.Channel{Name: "upstream", BaseURL: server.URL, Enabled: true}
+	if err := database.Create(&channel).Error; err != nil {
+		t.Fatalf("create channel: %v", err)
+	}
+
+	service := NewSyncService()
+	preview, err := service.PreviewGlobalModelPrices(channel.ID, ModelSyncOptions{})
+	if err != nil {
+		t.Fatalf("PreviewGlobalModelPrices returned error: %v", err)
+	}
+	if len(preview.Models) != 1 {
+		t.Fatalf("preview model count = %d, want 1", len(preview.Models))
+	}
+	item := preview.Models[0]
+	assertDecimalString(t, item.InputPrice, "5")
+	assertDecimalString(t, item.OutputPrice, "30")
+	assertDecimalString(t, item.CachedInputPrice, "0.5")
+	assertDecimalString(t, item.CacheWriteInputPrice, "6.25")
+	assertTier(t, item.InputPriceTiers, 272001, "10")
+	assertTier(t, item.OutputPriceTiers, 272001, "45")
+	assertTier(t, item.CachedInputPriceTiers, 272001, "1")
+	assertTier(t, item.CacheWriteInputPriceTiers, 272001, "12.5")
+
+	if _, err := service.ApplyGlobalModelPrices(channel.ID, preview.Models); err != nil {
+		t.Fatalf("ApplyGlobalModelPrices returned error: %v", err)
+	}
+	var saved model.Model
+	if err := database.Where("model_name = ?", "gpt-5.6-sol").First(&saved).Error; err != nil {
+		t.Fatalf("load synced model: %v", err)
+	}
+	assertDecimalString(t, saved.InputPrice, "5")
+	assertDecimalString(t, saved.OutputPrice, "30")
+	assertDecimalString(t, saved.CachedInputPrice, "0.5")
+	assertDecimalString(t, saved.CacheWriteInputPrice, "6.25")
+	assertTier(t, saved.InputPriceTiers, 272001, "10")
+	assertTier(t, saved.OutputPriceTiers, 272001, "45")
+	assertTier(t, saved.CachedInputPriceTiers, 272001, "1")
+	assertTier(t, saved.CacheWriteInputPriceTiers, 272001, "12.5")
+}
+
 func TestUpstreamURLForPathAvoidsDuplicateV1(t *testing.T) {
 	tests := []struct {
 		name    string
