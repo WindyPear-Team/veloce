@@ -290,10 +290,6 @@ func (s *AuthService) RegisterWithPassword(input PasswordRegisterInput) (*model.
 	if !settingBool("password_registration_enabled", true) {
 		return nil, "", errors.New("password registration is disabled")
 	}
-	if err := verifyHCaptcha(input.CaptchaToken); err != nil {
-		return nil, "", err
-	}
-
 	username := truncateUsername(strings.TrimSpace(input.Username))
 	email := strings.ToLower(strings.TrimSpace(input.Email))
 	if username == "" {
@@ -308,8 +304,16 @@ func (s *AuthService) RegisterWithPassword(input PasswordRegisterInput) (*model.
 	if len(input.Password) < 8 {
 		return nil, "", errors.New("password must be at least 8 characters")
 	}
+	var registrationCode *model.EmailVerificationCode
 	if settingBool("email_verification_required", false) {
-		if err := verifyEmailCode(email, emailCodePurposeRegistration, input.EmailCode); err != nil {
+		var err error
+		registrationCode, err = emailVerificationCode(email, emailCodePurposeRegistration, input.EmailCode)
+		if err != nil {
+			return nil, "", err
+		}
+	}
+	if hCaptchaRequired() && (registrationCode == nil || !registrationCode.HCaptchaVerified) {
+		if err := verifyHCaptcha(input.CaptchaToken); err != nil {
 			return nil, "", err
 		}
 	}
@@ -391,6 +395,7 @@ func (s *AuthService) SendRegistrationEmailCode(email string, captchaToken strin
 	if !settingBool("password_registration_enabled", true) {
 		return errors.New("password registration is disabled")
 	}
+	hCaptchaVerified := hCaptchaRequired()
 	if err := verifyHCaptcha(captchaToken); err != nil {
 		return err
 	}
@@ -412,10 +417,11 @@ func (s *AuthService) SendRegistrationEmailCode(email string, captchaToken strin
 		return err
 	}
 	record := model.EmailVerificationCode{
-		Email:     email,
-		CodeHash:  hashEmailCode(email, emailCodePurposeRegistration, code),
-		Purpose:   emailCodePurposeRegistration,
-		ExpiresAt: time.Now().Add(10 * time.Minute),
+		Email:            email,
+		CodeHash:         hashEmailCode(email, emailCodePurposeRegistration, code),
+		Purpose:          emailCodePurposeRegistration,
+		HCaptchaVerified: hCaptchaVerified,
+		ExpiresAt:        time.Now().Add(10 * time.Minute),
 	}
 	if err := model.DB.Create(&record).Error; err != nil {
 		return err
@@ -644,7 +650,16 @@ func verifyHCaptcha(token string) error {
 	return nil
 }
 
+func hCaptchaRequired() bool {
+	return settingBool("password_hcaptcha_enabled", false)
+}
+
 func verifyEmailCode(email string, purpose string, code string) error {
+	_, err := emailVerificationCode(email, purpose, code)
+	return err
+}
+
+func emailVerificationCode(email string, purpose string, code string) (*model.EmailVerificationCode, error) {
 	codeHash := hashEmailCode(email, purpose, code)
 	now := time.Now()
 	var records []model.EmailVerificationCode
@@ -653,14 +668,14 @@ func verifyEmailCode(email string, purpose string, code string) error {
 		Order("created_at DESC").
 		Limit(5).
 		Find(&records).Error; err != nil {
-		return err
+		return nil, err
 	}
 	for _, record := range records {
 		if record.CodeHash == codeHash {
-			return nil
+			return &record, nil
 		}
 	}
-	return errors.New("invalid or expired email verification code")
+	return nil, errors.New("invalid or expired email verification code")
 }
 
 func initialSetupValidationError(message string) error {

@@ -92,13 +92,14 @@ type PaymentOrder struct {
 
 // EmailVerificationCode stores short-lived codes for password registration.
 type EmailVerificationCode struct {
-	ID        uint       `gorm:"primaryKey" json:"id"`
-	Email     string     `gorm:"index;size:100;not null" json:"email"`
-	CodeHash  string     `gorm:"size:64;not null" json:"-"`
-	Purpose   string     `gorm:"size:32;not null" json:"purpose"`
-	ExpiresAt time.Time  `gorm:"index" json:"expires_at"`
-	UsedAt    *time.Time `json:"used_at"`
-	CreatedAt time.Time  `json:"created_at"`
+	ID               uint       `gorm:"primaryKey" json:"id"`
+	Email            string     `gorm:"index;size:100;not null" json:"email"`
+	CodeHash         string     `gorm:"size:64;not null" json:"-"`
+	Purpose          string     `gorm:"size:32;not null" json:"purpose"`
+	HCaptchaVerified bool       `gorm:"default:false" json:"-"`
+	ExpiresAt        time.Time  `gorm:"index" json:"expires_at"`
+	UsedAt           *time.Time `json:"used_at"`
+	CreatedAt        time.Time  `json:"created_at"`
 }
 
 // OIDCBindRequest tracks a pending authenticated OIDC binding flow.
