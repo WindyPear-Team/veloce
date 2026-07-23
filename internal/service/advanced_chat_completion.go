@@ -54,6 +54,7 @@ type advancedChatCompletionInput struct {
 	MaxTokens                int                             `json:"max_tokens"`
 	Temperature              *float64                        `json:"temperature"`
 	ReasoningEffort          string                          `json:"reasoning_effort"`
+	AutoCompressContext      bool                            `json:"auto_compress_context"`
 	Stream                   bool                            `json:"stream"`
 	ChargeBalance            bool                            `json:"-"`
 }
@@ -308,7 +309,9 @@ func (api *advancedChatAPI) completeChat(c *gin.Context) {
 	}
 	executorMessages := make([]ChatExecutorMessage, 0, len(presetMessages)+len(messages)+maxToolRounds*2)
 	executorMessages = append(executorMessages, advancedChatPresetExecutorMessages(presetMessages)...)
-	for _, message := range messages {
+	modelMessages := messages
+	if input.AutoCompressContext { modelMessages = compressAdvancedChatMessages(modelMessages) }
+	for _, message := range modelMessages {
 		executorMessages = append(executorMessages, advancedChatExecutorMessage(user.ID, message))
 	}
 
@@ -517,6 +520,24 @@ func normalizeAdvancedChatCompletionMessages(input []advancedChatCompletionMessa
 		return messages[len(messages)-50:]
 	}
 	return messages
+}
+
+const advancedChatContextCompressionChars = 48000
+
+func compressAdvancedChatMessages(messages []advancedChatCompletionMessage) []advancedChatCompletionMessage {
+	total := 0
+	for _, message := range messages { total += len([]rune(message.Content)) }
+	if total <= advancedChatContextCompressionChars || len(messages) <= 8 { return messages }
+	keep := 12
+	dropped := messages[:len(messages)-keep]
+	parts := make([]string, 0, len(dropped))
+	for _, message := range dropped {
+		content := strings.Join(strings.Fields(message.Content), " ")
+		if len([]rune(content)) > 240 { content = string([]rune(content)[:240]) + "..." }
+		if content != "" { parts = append(parts, message.Role+": "+content) }
+	}
+	summary := "[Earlier conversation compressed for context]\n" + strings.Join(parts, "\n")
+	return append([]advancedChatCompletionMessage{{Role: "assistant", Content: summary}}, messages[len(messages)-keep:]...)
 }
 
 func loadAdvancedChatAgent(userID uint, rawID string) (*AdvancedChatAgent, error) {

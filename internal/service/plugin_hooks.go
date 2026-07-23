@@ -191,7 +191,7 @@ func invokePluginHook(ctx context.Context, plugin model.Plugin, hook PluginHook,
 			payload["config"] = cfg
 		}
 	}
-	stdout, err := runPluginWASM(ctx, plugin, "plugin_handle_hook", []byte(mustJSON(payload)))
+	stdout, err := runPluginWASM(ctx, plugin, "plugin_handle_hook", []byte(mustJSON(payload)), pluginRuntimeInvocation{UserID: input.UserID})
 	if err != nil {
 		model.DB.Model(&plugin).Update("last_error", err.Error())
 		recordPluginLog(input.UserID, plugin.ID, "warn", "hook_failed", err.Error(), mustJSON(gin.H{"point": input.Point, "action": input.Action}))

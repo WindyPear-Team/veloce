@@ -90,6 +90,40 @@ type PaymentOrder struct {
 	UpdatedAt       time.Time       `json:"updated_at"`
 }
 
+// WalletTransaction is an immutable balance settlement record. Debit and
+// credit are retained separately so a single atomic operation can represent a
+// paid action and its reward without losing either side of the audit trail.
+type WalletTransaction struct {
+	ID             uint            `gorm:"primaryKey" json:"id"`
+	UserID         uint            `gorm:"uniqueIndex:idx_wallet_transaction_idempotency,priority:1;index;not null" json:"user_id"`
+	User           User            `gorm:"foreignKey:UserID" json:"-"`
+	Source         string          `gorm:"uniqueIndex:idx_wallet_transaction_idempotency,priority:2;size:100;not null" json:"source"`
+	IdempotencyKey string          `gorm:"uniqueIndex:idx_wallet_transaction_idempotency,priority:3;size:160;not null" json:"idempotency_key"`
+	PluginID       string          `gorm:"index;size:80" json:"plugin_id,omitempty"`
+	DebitAmount    decimal.Decimal `gorm:"type:decimal(20,6);not null;default:0" json:"debit_amount"`
+	CreditAmount   decimal.Decimal `gorm:"type:decimal(20,6);not null;default:0" json:"credit_amount"`
+	BalanceBefore  decimal.Decimal `gorm:"type:decimal(20,6);not null" json:"balance_before"`
+	BalanceAfter   decimal.Decimal `gorm:"type:decimal(20,6);not null" json:"balance_after"`
+	ReferenceType  string          `gorm:"index;size:80" json:"reference_type,omitempty"`
+	ReferenceID    string          `gorm:"index;size:160" json:"reference_id,omitempty"`
+	Description    string          `gorm:"size:500" json:"description,omitempty"`
+	RequestHash    string          `gorm:"size:64;not null" json:"-"`
+	MetadataJSON   string          `gorm:"type:text" json:"metadata_json,omitempty"`
+	CreatedAt      time.Time       `gorm:"index" json:"created_at"`
+}
+
+// WalletLimitUsage records which configured participation limits were consumed
+// by a wallet transaction. Rows are created in the same transaction as the
+// balance settlement.
+type WalletLimitUsage struct {
+	ID                  uint      `gorm:"primaryKey" json:"id"`
+	WalletTransactionID uint      `gorm:"uniqueIndex:idx_wallet_limit_usage_transaction,priority:1;not null" json:"wallet_transaction_id"`
+	UserID              uint      `gorm:"index:idx_wallet_limit_usage_counter,priority:1;not null" json:"user_id"`
+	Source              string    `gorm:"index:idx_wallet_limit_usage_counter,priority:2;size:100;not null" json:"source"`
+	LimitKey            string    `gorm:"uniqueIndex:idx_wallet_limit_usage_transaction,priority:2;index:idx_wallet_limit_usage_counter,priority:3;size:160;not null" json:"limit_key"`
+	CreatedAt           time.Time `gorm:"index" json:"created_at"`
+}
+
 // EmailVerificationCode stores short-lived codes for password registration.
 type EmailVerificationCode struct {
 	ID               uint       `gorm:"primaryKey" json:"id"`
@@ -359,22 +393,23 @@ type SystemSetting struct {
 
 // Plugin stores an installed WASM plugin package.
 type Plugin struct {
-	ID              string    `gorm:"primaryKey;size:80" json:"id"`
-	Name            string    `gorm:"size:120;not null" json:"name"`
-	Version         string    `gorm:"size:50;not null" json:"version"`
-	Description     string    `gorm:"type:text" json:"description"`
-	Author          string    `gorm:"size:120" json:"author"`
-	Enabled         bool      `gorm:"default:false" json:"enabled"`
-	ManifestJSON    string    `gorm:"type:text;not null" json:"manifest_json"`
-	PermissionsJSON string    `gorm:"type:text" json:"permissions_json"`
-	HooksJSON       string    `gorm:"type:text" json:"hooks_json"`
-	FrontendJSON    string    `gorm:"type:text" json:"frontend_json"`
-	SettingsJSON    string    `gorm:"type:text" json:"settings_json"`
-	Path            string    `gorm:"size:500;not null" json:"path"`
-	WASMPath        string    `gorm:"size:500" json:"wasm_path"`
-	LastError       string    `gorm:"type:text" json:"last_error"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	ID               string    `gorm:"primaryKey;size:80" json:"id"`
+	Name             string    `gorm:"size:120;not null" json:"name"`
+	Version          string    `gorm:"size:50;not null" json:"version"`
+	Description      string    `gorm:"type:text" json:"description"`
+	Author           string    `gorm:"size:120" json:"author"`
+	Enabled          bool      `gorm:"default:false" json:"enabled"`
+	ManifestJSON     string    `gorm:"type:text;not null" json:"manifest_json"`
+	PermissionsJSON  string    `gorm:"type:text" json:"permissions_json"`
+	HooksJSON        string    `gorm:"type:text" json:"hooks_json"`
+	FrontendJSON     string    `gorm:"type:text" json:"frontend_json"`
+	SettingsJSON     string    `gorm:"type:text" json:"settings_json"`
+	GlobalConfigJSON string    `gorm:"type:text" json:"-"`
+	Path             string    `gorm:"size:500;not null" json:"path"`
+	WASMPath         string    `gorm:"size:500" json:"wasm_path"`
+	LastError        string    `gorm:"type:text" json:"last_error"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 // UserPluginState stores a user's enabled state for an installed plugin.

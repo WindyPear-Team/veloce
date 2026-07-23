@@ -64,6 +64,7 @@ type AdvancedChatSession struct {
 	MaxTokens                int        `gorm:"default:0" json:"max_tokens"`
 	Temperature              *float64   `json:"temperature"`
 	ReasoningEffort          string     `gorm:"size:20" json:"reasoning_effort"`
+	AutoCompressContext      bool       `gorm:"default:true" json:"auto_compress_context"`
 	CreatedAt                time.Time  `json:"created_at"`
 	UpdatedAt                time.Time  `json:"updated_at"`
 }
@@ -172,6 +173,7 @@ type advancedChatSessionResponse struct {
 	MaxTokens                int                           `json:"max_tokens,omitempty"`
 	Temperature              *float64                      `json:"temperature,omitempty"`
 	ReasoningEffort          string                        `json:"reasoning_effort,omitempty"`
+	AutoCompressContext      bool                          `json:"auto_compress_context"`
 	LatestRun                *advancedChatRunResponse      `json:"latest_run,omitempty"`
 	CreatedAt                time.Time                     `json:"created_at"`
 	UpdatedAt                time.Time                     `json:"updated_at"`
@@ -272,6 +274,7 @@ type advancedChatSessionInput struct {
 	MaxTokens                int                               `json:"max_tokens"`
 	Temperature              *float64                          `json:"temperature"`
 	ReasoningEffort          string                            `json:"reasoning_effort"`
+	AutoCompressContext      bool                              `json:"auto_compress_context"`
 	Messages                 []advancedChatSessionMessageInput `json:"messages"`
 }
 
@@ -1580,6 +1583,7 @@ func saveAdvancedChatSessionSnapshot(userID uint, sessionID string, input advanc
 			MaxTokens:                maxTokens,
 			Temperature:              temperature,
 			ReasoningEffort:          reasoningEffort,
+			AutoCompressContext:      input.AutoCompressContext,
 		}
 		var existing AdvancedChatSession
 		if err := tx.Where("id = ? AND user_id = ?", sessionID, userID).Limit(1).Find(&existing).Error; err != nil {
@@ -1605,6 +1609,7 @@ func saveAdvancedChatSessionSnapshot(userID uint, sessionID string, input advanc
 				"max_tokens":                 session.MaxTokens,
 				"temperature":                session.Temperature,
 				"reasoning_effort":           session.ReasoningEffort,
+				"auto_compress_context":      session.AutoCompressContext,
 			}).Error; err != nil {
 				return err
 			}
@@ -1738,6 +1743,7 @@ func createAdvancedChatAssistantRun(userID uint, prepared preparedAdvancedChatAs
 			MaxTokens:                normalizeAdvancedChatMaxTokens(prepared.input.MaxTokens),
 			Temperature:              normalizeAdvancedChatTemperature(prepared.input.Temperature),
 			ReasoningEffort:          normalizeAdvancedChatReasoningEffort(prepared.input.ReasoningEffort),
+			AutoCompressContext:      prepared.input.AutoCompressContext,
 		}
 		var existing AdvancedChatSession
 		if err := tx.Where("id = ? AND user_id = ?", sessionID, userID).Limit(1).Find(&existing).Error; err != nil {
@@ -1763,6 +1769,7 @@ func createAdvancedChatAssistantRun(userID uint, prepared preparedAdvancedChatAs
 				"max_tokens":                 session.MaxTokens,
 				"temperature":                session.Temperature,
 				"reasoning_effort":           session.ReasoningEffort,
+				"auto_compress_context":      session.AutoCompressContext,
 			}).Error; err != nil {
 				return err
 			}
@@ -2136,7 +2143,9 @@ func executePreparedAdvancedChatCompletion(ctx context.Context, user *model.User
 	}
 	executorMessages := make([]ChatExecutorMessage, 0, len(prepared.presetMessages)+len(prepared.messages)+prepared.maxToolRounds*2)
 	executorMessages = append(executorMessages, advancedChatPresetExecutorMessages(prepared.presetMessages)...)
-	for _, message := range prepared.messages {
+	modelMessages := prepared.messages
+	if prepared.input.AutoCompressContext { modelMessages = compressAdvancedChatMessages(modelMessages) }
+	for _, message := range modelMessages {
 		executorMessages = append(executorMessages, advancedChatExecutorMessageForPreparedRun(user.ID, message, prepared))
 	}
 
@@ -2883,6 +2892,7 @@ func createPersistedAdvancedChatCompletionSession(userID uint, input advancedCha
 		MaxTokens:                normalizeAdvancedChatMaxTokens(input.MaxTokens),
 		Temperature:              normalizeAdvancedChatTemperature(input.Temperature),
 		ReasoningEffort:          normalizeAdvancedChatReasoningEffort(input.ReasoningEffort),
+		AutoCompressContext:      input.AutoCompressContext,
 		Messages:                 sessionMessages,
 	}
 	if _, status, message, err := saveAdvancedChatSessionSnapshot(userID, sessionID, snapshot, true); err != nil {
@@ -3348,6 +3358,7 @@ func advancedChatSessionResponseFromModel(session AdvancedChatSession) (advanced
 		MaxTokens:                session.MaxTokens,
 		Temperature:              session.Temperature,
 		ReasoningEffort:          normalizeAdvancedChatReasoningEffort(session.ReasoningEffort),
+			AutoCompressContext:      session.AutoCompressContext,
 		LatestRun:                latestRun,
 		CreatedAt:                session.CreatedAt,
 		UpdatedAt:                session.UpdatedAt,

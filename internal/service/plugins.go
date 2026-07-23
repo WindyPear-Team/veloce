@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -225,6 +226,10 @@ func (api *pluginAPI) installPlugin(c *gin.Context) {
 		Path:            filepath.Dir(wasmPath),
 		WASMPath:        wasmPath,
 	}
+	var existingPlugin model.Plugin
+	if err := model.DB.Select("global_config_json").Where("id = ?", plugin.ID).Limit(1).Find(&existingPlugin).Error; err == nil {
+		plugin.GlobalConfigJSON = existingPlugin.GlobalConfigJSON
+	}
 	if err := model.DB.Where(&model.Plugin{ID: plugin.ID}).Assign(plugin).FirstOrCreate(&plugin).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save plugin"})
 		return
@@ -364,11 +369,11 @@ func (api *pluginAPI) getPluginSettings(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"error": "Plugin is disabled"})
 		return
 	}
-	var cfg model.UserPluginConfig
-	_ = model.DB.Where("user_id = ? AND plugin_id = ?", user.ID, plugin.ID).Limit(1).Find(&cfg).Error
+	config := pluginConfigForUser(user.ID, plugin.ID)
 	c.JSON(http.StatusOK, gin.H{
 		"schema": json.RawMessage(nonEmptyJSON(plugin.SettingsJSON, "{}")),
-		"config": json.RawMessage(nonEmptyJSON(cfg.ConfigJSON, "{}")),
+		"config": config,
+		"scope":  pluginSettingsScope(plugin),
 	})
 }
 
@@ -399,20 +404,30 @@ func (api *pluginAPI) updatePluginSettings(c *gin.Context) {
 		}
 	}
 	raw := mustJSON(payload)
-	cfg := model.UserPluginConfig{UserID: user.ID, PluginID: plugin.ID}
-	if err := model.DB.Where(&model.UserPluginConfig{UserID: user.ID, PluginID: plugin.ID}).
-		Assign(model.UserPluginConfig{ConfigJSON: raw}).
-		FirstOrCreate(&cfg).Error; err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save settings"})
-		return
+	if pluginUsesGlobalSettings(plugin) {
+		if !requirePluginAdmin(c, user) {
+			return
+		}
+		if err := model.DB.Model(&model.Plugin{}).Where("id = ?", plugin.ID).Update("global_config_json", raw).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save settings"})
+			return
+		}
+	} else {
+		cfg := model.UserPluginConfig{UserID: user.ID, PluginID: plugin.ID}
+		if err := model.DB.Where(&model.UserPluginConfig{UserID: user.ID, PluginID: plugin.ID}).
+			Assign(model.UserPluginConfig{ConfigJSON: raw}).
+			FirstOrCreate(&cfg).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save settings"})
+			return
+		}
 	}
 	DispatchPluginHooks(c.Request.Context(), PluginHookInput{
 		Point:   PluginHookPointPluginSettingsUpdated,
 		UserID:  user.ID,
 		Source:  "plugin_settings",
-		Payload: map[string]interface{}{"plugin_id": plugin.ID, "config": payload},
+		Payload: map[string]interface{}{"plugin_id": plugin.ID, "config": payload, "scope": pluginSettingsScope(plugin)},
 	})
-	c.JSON(http.StatusOK, gin.H{"config": json.RawMessage(nonEmptyJSON(cfg.ConfigJSON, "{}"))})
+	c.JSON(http.StatusOK, gin.H{"config": payload, "scope": pluginSettingsScope(plugin)})
 }
 
 func (api *pluginAPI) runPluginAction(c *gin.Context) {
@@ -433,18 +448,27 @@ func (api *pluginAPI) runPluginAction(c *gin.Context) {
 	var payload map[string]interface{}
 	_ = c.ShouldBindJSON(&payload)
 	action := strings.TrimSpace(c.Param("action"))
+	requestID := strings.TrimSpace(c.GetHeader("Idempotency-Key"))
+	if requestID == "" {
+		requestID = newPluginRequestID()
+	}
+	if len(requestID) > 160 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Idempotency-Key is too long"})
+		return
+	}
+	c.Header("Idempotency-Key", requestID)
 	beforeResults := DispatchPluginHooks(c.Request.Context(), PluginHookInput{
 		Point:   PluginHookPointPluginActionBefore,
 		Action:  action,
 		UserID:  user.ID,
 		Source:  "plugin_action",
-		Payload: map[string]interface{}{"plugin_id": plugin.ID, "values": payload},
+		Payload: map[string]interface{}{"plugin_id": plugin.ID, "request_id": requestID, "values": payload},
 	})
 	if err := pluginActionAllowed(beforeResults); err != nil {
 		c.JSON(http.StatusForbidden, gin.H{"error": err.Error()})
 		return
 	}
-	result, err := InvokePluginAction(c.Request.Context(), plugin, user.ID, action, payload)
+	result, err := InvokePluginAction(c.Request.Context(), plugin, user.ID, requestID, action, payload)
 	if err != nil {
 		recordPluginLog(user.ID, plugin.ID, "error", "action_failed", err.Error(), mustJSON(gin.H{"action": action}))
 		DispatchPluginHooks(c.Request.Context(), PluginHookInput{
@@ -452,9 +476,9 @@ func (api *pluginAPI) runPluginAction(c *gin.Context) {
 			Action:  action,
 			UserID:  user.ID,
 			Source:  "plugin_action",
-			Payload: map[string]interface{}{"plugin_id": plugin.ID, "values": payload, "error": err.Error()},
+			Payload: map[string]interface{}{"plugin_id": plugin.ID, "request_id": requestID, "values": payload, "error": err.Error()},
 		})
-		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+		c.JSON(pluginActionErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 	DispatchPluginHooks(c.Request.Context(), PluginHookInput{
@@ -462,9 +486,42 @@ func (api *pluginAPI) runPluginAction(c *gin.Context) {
 		Action:  action,
 		UserID:  user.ID,
 		Source:  "plugin_action",
-		Payload: map[string]interface{}{"plugin_id": plugin.ID, "values": payload, "result": result},
+		Payload: map[string]interface{}{"plugin_id": plugin.ID, "request_id": requestID, "values": payload, "result": result},
 	})
 	c.JSON(http.StatusOK, result)
+}
+
+func newPluginRequestID() string {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err == nil {
+		return fmt.Sprintf("%x", raw[:])
+	}
+	return fmt.Sprintf("plugin-%d", time.Now().UnixNano())
+}
+
+func pluginActionErrorStatus(err error) int {
+	var actionErr *PluginActionError
+	if !errors.As(err, &actionErr) {
+		return http.StatusBadGateway
+	}
+	switch actionErr.Code {
+	case "insufficient_balance":
+		return http.StatusPaymentRequired
+	case "permission_denied":
+		return http.StatusForbidden
+	case "idempotency_conflict":
+		return http.StatusConflict
+	case "participation_limit":
+		return http.StatusTooManyRequests
+	case "lottery_closed", "lottery_not_started", "lottery_ended":
+		return http.StatusConflict
+	case "invalid_lottery_config":
+		return http.StatusUnprocessableEntity
+	case "invalid_request", "invalid_amount", "invalid_settlement", "invalid_limit", "action_not_found":
+		return http.StatusBadRequest
+	default:
+		return http.StatusBadGateway
+	}
 }
 
 func loadPlugin(c *gin.Context) (model.Plugin, bool) {
@@ -517,6 +574,17 @@ func pluginConfigForUser(userID uint, pluginID string) map[string]interface{} {
 	if userID == 0 || strings.TrimSpace(pluginID) == "" {
 		return map[string]interface{}{}
 	}
+	var plugin model.Plugin
+	if err := model.DB.Select("id", "permissions_json", "global_config_json").Where("id = ?", pluginID).Limit(1).Find(&plugin).Error; err != nil || plugin.ID == "" {
+		return map[string]interface{}{}
+	}
+	if pluginUsesGlobalSettings(plugin) {
+		values := map[string]interface{}{}
+		if strings.TrimSpace(plugin.GlobalConfigJSON) != "" {
+			_ = json.Unmarshal([]byte(plugin.GlobalConfigJSON), &values)
+		}
+		return values
+	}
 	var config model.UserPluginConfig
 	if err := model.DB.Where("user_id = ? AND plugin_id = ?", userID, pluginID).Limit(1).Find(&config).Error; err != nil {
 		return map[string]interface{}{}
@@ -526,6 +594,17 @@ func pluginConfigForUser(userID uint, pluginID string) map[string]interface{} {
 		_ = json.Unmarshal([]byte(config.ConfigJSON), &values)
 	}
 	return values
+}
+
+func pluginUsesGlobalSettings(plugin model.Plugin) bool {
+	return pluginHasPermission(plugin, "plugin.settings.global")
+}
+
+func pluginSettingsScope(plugin model.Plugin) string {
+	if pluginUsesGlobalSettings(plugin) {
+		return "global"
+	}
+	return "user"
 }
 
 func pluginUserEnabled(plugin model.Plugin, states map[string]bool) bool {
@@ -574,6 +653,10 @@ func loadPluginsOnStartup() error {
 			SettingsJSON:    string(manifest.Settings),
 			Path:            root,
 			WASMPath:        filePath,
+		}
+		var existingPlugin model.Plugin
+		if err := model.DB.Select("global_config_json").Where("id = ?", plugin.ID).Limit(1).Find(&existingPlugin).Error; err == nil {
+			plugin.GlobalConfigJSON = existingPlugin.GlobalConfigJSON
 		}
 		if err := model.DB.Where(&model.Plugin{ID: plugin.ID}).Assign(plugin).FirstOrCreate(&plugin).Error; err != nil {
 			recordPluginLog(0, manifest.ID, "warn", "startup_load_failed", err.Error(), mustJSON(gin.H{"path": filePath}))

@@ -56,6 +56,8 @@ func InitDB() {
 		&PasskeyCredential{},
 		&CheckInRecord{},
 		&PaymentOrder{},
+		&WalletTransaction{},
+		&WalletLimitUsage{},
 		&Group{},
 		&UserGroupMembership{},
 		&ChannelGroupMultiplier{},
