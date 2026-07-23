@@ -508,6 +508,15 @@ func (api *SystemAPI) CheckForUpdate(c *gin.Context) {
 	c.JSON(http.StatusOK, status)
 }
 
+func (api *SystemAPI) StartAutoUpdate(c *gin.Context) {
+	status, err := service.StartManualAutoUpdate()
+	if err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error(), "status": status})
+		return
+	}
+	c.JSON(http.StatusAccepted, status)
+}
+
 func (api *SystemAPI) DeleteLogs(c *gin.Context) {
 	deleted, err := model.DeleteLogs()
 	if err != nil {

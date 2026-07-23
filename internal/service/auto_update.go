@@ -49,6 +49,21 @@ type AutoUpdateStatus struct {
 	Supported       bool   `json:"supported"`
 	LastCheckedAt   string `json:"last_checked_at"`
 	LastError       string `json:"last_error"`
+	InProgress      bool   `json:"in_progress"`
+	Phase           string `json:"phase"`
+	Progress        int    `json:"progress"`
+	DownloadedBytes int64  `json:"downloaded_bytes"`
+	TotalBytes      int64  `json:"total_bytes"`
+	Message         string `json:"message"`
+}
+
+type autoUpdateProgress struct {
+	InProgress      bool
+	Phase           string
+	Progress        int
+	DownloadedBytes int64
+	TotalBytes      int64
+	Message         string
 }
 
 type githubRelease struct {
@@ -77,6 +92,12 @@ type AutoUpdateService struct {
 	started sync.Once
 }
 
+var autoUpdateRuntime struct {
+	sync.Mutex
+	service  *AutoUpdateService
+	progress autoUpdateProgress
+}
+
 func NewAutoUpdateService() *AutoUpdateService {
 	return &AutoUpdateService{client: &http.Client{Timeout: 2 * time.Minute}}
 }
@@ -98,6 +119,38 @@ func (s *AutoUpdateService) Start(apply func(stagedBinary string) error) {
 	})
 }
 
+// RegisterAutoUpdateService makes the application-owned updater available to
+// the admin API so manual updates use the same safe restart callback.
+func RegisterAutoUpdateService(service *AutoUpdateService) {
+	autoUpdateRuntime.Lock()
+	defer autoUpdateRuntime.Unlock()
+	autoUpdateRuntime.service = service
+}
+
+func StartManualAutoUpdate() (AutoUpdateStatus, error) {
+	autoUpdateRuntime.Lock()
+	updater := autoUpdateRuntime.service
+	autoUpdateRuntime.Unlock()
+	if updater == nil {
+		return CurrentAutoUpdateStatus(), errors.New("automatic restart is unavailable")
+	}
+	return updater.StartManualUpdate()
+}
+
+func (s *AutoUpdateService) StartManualUpdate() (AutoUpdateStatus, error) {
+	if s == nil || s.apply == nil {
+		return CurrentAutoUpdateStatus(), errors.New("automatic restart is unavailable")
+	}
+	if !updatableBuild() {
+		return CurrentAutoUpdateStatus(), errors.New("this build has no release version; install an official release binary")
+	}
+	if !beginAutoUpdate("checking", "Checking for updates") {
+		return CurrentAutoUpdateStatus(), errors.New("an update is already in progress")
+	}
+	go s.runUpdate(context.Background())
+	return CurrentAutoUpdateStatus(), nil
+}
+
 func (s *AutoUpdateService) CheckNow(ctx context.Context) (AutoUpdateStatus, error) {
 	if s == nil {
 		return CurrentAutoUpdateStatus(), errors.New("auto-update service is unavailable")
@@ -117,35 +170,59 @@ func (s *AutoUpdateService) RunDue(ctx context.Context) {
 	if s == nil || !AutoUpdateEnabled() || !autoUpdateDue() {
 		return
 	}
-	s.runMu.Lock()
-	defer s.runMu.Unlock()
 	if !AutoUpdateEnabled() || !autoUpdateDue() {
 		return
 	}
+	if !beginAutoUpdate("checking", "Checking for updates") {
+		return
+	}
+	s.runUpdate(ctx)
+}
+
+func (s *AutoUpdateService) runUpdate(ctx context.Context) {
+	s.runMu.Lock()
+	defer s.runMu.Unlock()
+	completed := false
+	defer func() {
+		if !completed {
+			finishAutoUpdate("error", "Update failed")
+		}
+	}()
 
 	candidate, err := s.fetchCandidate(ctx)
 	if err != nil {
 		recordAutoUpdateCheck("", err)
+		setAutoUpdateProgress("error", 0, 0, 0, err.Error())
 		return
 	}
 	recordAutoUpdateCheck(candidate.Version, nil)
 	if !isNewerRelease(candidate.Version, CurrentBuildVersion()) {
-		return
-	}
-	if s.apply == nil {
-		recordAutoUpdateError(errors.New("automatic restart is unavailable"))
+		finishAutoUpdate("up_to_date", "Already up to date")
+		completed = true
 		return
 	}
 
-	staged, err := s.downloadAndStage(ctx, candidate)
+	setAutoUpdateProgress("downloading", 0, 0, 0, "Downloading update")
+	staged, err := s.downloadAndStage(ctx, candidate, func(downloaded, total int64) {
+		progress := 0
+		if total > 0 {
+			progress = int(downloaded * 100 / total)
+		}
+		setAutoUpdateProgress("downloading", progress, downloaded, total, "Downloading update")
+	})
 	if err != nil {
 		recordAutoUpdateError(err)
+		setAutoUpdateProgress("error", 0, 0, 0, err.Error())
 		return
 	}
+	setAutoUpdateProgress("restarting", 100, 0, 0, "Restarting with update")
 	if err := s.apply(staged); err != nil {
 		_ = os.Remove(staged)
 		recordAutoUpdateError(err)
+		setAutoUpdateProgress("error", 0, 0, 0, err.Error())
+		return
 	}
+	completed = true
 }
 
 func CurrentBuildVersion() string {
@@ -155,6 +232,7 @@ func CurrentBuildVersion() string {
 func CurrentAutoUpdateStatus() AutoUpdateStatus {
 	latest := model.GetSystemSetting("auto_update_latest_version", "")
 	current := CurrentBuildVersion()
+	progress := currentAutoUpdateProgress()
 	return AutoUpdateStatus{
 		Enabled:         AutoUpdateEnabled(),
 		IntervalHours:   strconv.Itoa(autoUpdateIntervalHours()),
@@ -165,6 +243,12 @@ func CurrentAutoUpdateStatus() AutoUpdateStatus {
 		Supported:       updatableBuild(),
 		LastCheckedAt:   model.GetSystemSetting("auto_update_last_checked_at", ""),
 		LastError:       model.GetSystemSetting("auto_update_last_error", ""),
+		InProgress:      progress.InProgress,
+		Phase:           progress.Phase,
+		Progress:        progress.Progress,
+		DownloadedBytes: progress.DownloadedBytes,
+		TotalBytes:      progress.TotalBytes,
+		Message:         progress.Message,
 	}
 }
 
@@ -240,7 +324,7 @@ func (s *AutoUpdateService) fetchCandidate(ctx context.Context) (releaseCandidat
 	return releaseCandidate{}, fmt.Errorf("no release asset for %s-%s", runtime.GOOS, runtime.GOARCH)
 }
 
-func (s *AutoUpdateService) downloadAndStage(ctx context.Context, candidate releaseCandidate) (string, error) {
+func (s *AutoUpdateService) downloadAndStage(ctx context.Context, candidate releaseCandidate, onProgress func(downloaded, total int64)) (string, error) {
 	executable, err := os.Executable()
 	if err != nil {
 		return "", fmt.Errorf("locate executable: %w", err)
@@ -275,7 +359,15 @@ func (s *AutoUpdateService) downloadAndStage(ctx context.Context, candidate rele
 		return "", fmt.Errorf("update download returned HTTP %d", resp.StatusCode)
 	}
 	hash := sha256.New()
-	written, err := io.Copy(io.MultiWriter(archive, hash), io.LimitReader(resp.Body, autoUpdateMaxArchive+1))
+	reader := &autoUpdateProgressReader{
+		Reader:   io.LimitReader(resp.Body, autoUpdateMaxArchive+1),
+		total:    resp.ContentLength,
+		onUpdate: onProgress,
+	}
+	if onProgress != nil {
+		onProgress(0, resp.ContentLength)
+	}
+	written, err := io.Copy(io.MultiWriter(archive, hash), reader)
 	if closeErr := archive.Close(); closeErr != nil && err == nil {
 		err = closeErr
 	}
@@ -298,6 +390,24 @@ func (s *AutoUpdateService) downloadAndStage(ctx context.Context, candidate rele
 		return "", err
 	}
 	return staged, nil
+}
+
+type autoUpdateProgressReader struct {
+	io.Reader
+	read     int64
+	total    int64
+	onUpdate func(downloaded, total int64)
+}
+
+func (r *autoUpdateProgressReader) Read(buffer []byte) (int, error) {
+	n, err := r.Reader.Read(buffer)
+	if n > 0 {
+		r.read += int64(n)
+		if r.onUpdate != nil {
+			r.onUpdate(r.read, r.total)
+		}
+	}
+	return n, err
 }
 
 func extractReleaseBinary(archivePath, assetName, target string) error {
@@ -484,6 +594,41 @@ func recordAutoUpdateError(err error) {
 		}
 	}
 	_ = model.SetSystemSetting("auto_update_last_error", message)
+}
+
+func beginAutoUpdate(phase, message string) bool {
+	autoUpdateRuntime.Lock()
+	defer autoUpdateRuntime.Unlock()
+	if autoUpdateRuntime.progress.InProgress {
+		return false
+	}
+	autoUpdateRuntime.progress = autoUpdateProgress{InProgress: true, Phase: phase, Message: message}
+	return true
+}
+
+func finishAutoUpdate(phase, message string) {
+	autoUpdateRuntime.Lock()
+	defer autoUpdateRuntime.Unlock()
+	autoUpdateRuntime.progress = autoUpdateProgress{Phase: phase, Progress: 100, Message: message}
+}
+
+func setAutoUpdateProgress(phase string, progress int, downloaded, total int64, message string) {
+	autoUpdateRuntime.Lock()
+	defer autoUpdateRuntime.Unlock()
+	autoUpdateRuntime.progress = autoUpdateProgress{
+		InProgress:      phase != "error" && phase != "up_to_date",
+		Phase:           phase,
+		Progress:        progress,
+		DownloadedBytes: downloaded,
+		TotalBytes:      total,
+		Message:         message,
+	}
+}
+
+func currentAutoUpdateProgress() autoUpdateProgress {
+	autoUpdateRuntime.Lock()
+	defer autoUpdateRuntime.Unlock()
+	return autoUpdateRuntime.progress
 }
 
 func updatableBuild() bool {

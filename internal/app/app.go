@@ -586,6 +586,7 @@ func Run() error {
 		admin.DELETE("/logs", systemAPI.DeleteLogs)
 		admin.GET("/updates", systemAPI.GetAutoUpdateStatus)
 		admin.POST("/updates/check", systemAPI.CheckForUpdate)
+		admin.POST("/updates/apply", systemAPI.StartAutoUpdate)
 		admin.GET("/status-monitors", statusMonitorAPI.List)
 		admin.POST("/status-monitors", statusMonitorAPI.Create)
 		admin.PUT("/status-monitors/:id", statusMonitorAPI.Update)
@@ -819,6 +820,7 @@ func Run() error {
 
 	updateRestartDone := make(chan error, 1)
 	updater := service.NewAutoUpdateService()
+	service.RegisterAutoUpdateService(updater)
 	updater.Start(func(stagedBinary string) error {
 		go func() {
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
