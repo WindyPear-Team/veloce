@@ -8,9 +8,13 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/WindyPear-Team/veloce/internal/model"
+	communityservice "github.com/WindyPear-Team/veloce/internal/service"
 )
 
 var providerHTTPClient = &http.Client{Timeout: 15 * time.Second}
@@ -38,13 +42,122 @@ var providerAdapters = map[string]providerAdapter{
 	providerTencentChannel: tencentChannelProvider{},
 }
 
-func supportedProviders() []string {
-	return []string{providerTelegram, providerDiscord, providerQQ, providerOneBot, providerWeixin, providerTencentChannel}
+var pluginProviderPattern = regexp.MustCompile(`^plugin--([A-Za-z0-9][A-Za-z0-9_-]{1,79})--([A-Za-z0-9][A-Za-z0-9_-]{0,39})$`)
+
+type providerDefinition struct {
+	ID          string      `json:"id"`
+	Name        string      `json:"name"`
+	Description string      `json:"description,omitempty"`
+	PluginID    string      `json:"plugin_id,omitempty"`
+	Config      interface{} `json:"config,omitempty"`
+}
+
+type pluginChannelDescriptor struct {
+	Provider      string
+	Plugin        model.Plugin
+	TypeID        string
+	Name          string
+	Description   string
+	InboundAction string
+	SendAction    string
+	Config        interface{}
+}
+
+func supportedProviders() []providerDefinition {
+	return supportedProvidersForUser(0)
+}
+
+func supportedProvidersForUser(userID uint) []providerDefinition {
+	providers := []providerDefinition{
+		{ID: providerTelegram, Name: "Telegram"},
+		{ID: providerDiscord, Name: "Discord"},
+		{ID: providerQQ, Name: "QQ Official Bot"},
+		{ID: providerOneBot, Name: "OneBot"},
+		{ID: providerWeixin, Name: "Weixin Bot"},
+		{ID: providerTencentChannel, Name: "Tencent Channel Gateway"},
+	}
+	for _, descriptor := range installedPluginChannelDescriptors() {
+		if userID != 0 && !communityservice.PluginEnabledForUser(descriptor.Plugin, userID) {
+			continue
+		}
+		providers = append(providers, providerDefinition{ID: descriptor.Provider, Name: descriptor.Name, Description: descriptor.Description, PluginID: descriptor.Plugin.ID, Config: descriptor.Config})
+	}
+	return providers
 }
 
 func providerFor(provider string) (providerAdapter, bool) {
-	adapter, ok := providerAdapters[normalizeProvider(provider)]
-	return adapter, ok
+	if adapter, ok := providerAdapters[normalizeProvider(provider)]; ok {
+		return adapter, true
+	}
+	descriptor, ok := pluginChannelDescriptorFor(provider)
+	if !ok {
+		return nil, false
+	}
+	return pluginChannelProvider{descriptor: descriptor}, true
+}
+
+func pluginChannelProviderID(pluginID, typeID string) string {
+	return "plugin--" + pluginID + "--" + typeID
+}
+
+func pluginChannelDescriptorFor(provider string) (pluginChannelDescriptor, bool) {
+	parts := pluginProviderPattern.FindStringSubmatch(strings.TrimSpace(provider))
+	if len(parts) != 3 || model.DB == nil {
+		return pluginChannelDescriptor{}, false
+	}
+	var plugin model.Plugin
+	if err := model.DB.Where("id = ? AND enabled = ?", parts[1], true).First(&plugin).Error; err != nil {
+		return pluginChannelDescriptor{}, false
+	}
+	return pluginChannelDescriptorFromPlugin(plugin, parts[2])
+}
+
+func installedPluginChannelDescriptors() []pluginChannelDescriptor {
+	if model.DB == nil {
+		return nil
+	}
+	var plugins []model.Plugin
+	if err := model.DB.Where("enabled = ?", true).Find(&plugins).Error; err != nil {
+		return nil
+	}
+	result := make([]pluginChannelDescriptor, 0)
+	for _, plugin := range plugins {
+		var manifest communityservice.PluginManifest
+		if json.Unmarshal([]byte(plugin.ManifestJSON), &manifest) != nil {
+			continue
+		}
+		for _, channel := range manifest.Channels {
+			descriptor, ok := pluginChannelDescriptorFromManifest(plugin, channel)
+			if ok {
+				result = append(result, descriptor)
+			}
+		}
+	}
+	return result
+}
+
+func pluginChannelDescriptorFromPlugin(plugin model.Plugin, typeID string) (pluginChannelDescriptor, bool) {
+	var manifest communityservice.PluginManifest
+	if json.Unmarshal([]byte(plugin.ManifestJSON), &manifest) != nil {
+		return pluginChannelDescriptor{}, false
+	}
+	for _, channel := range manifest.Channels {
+		if channel.ID == typeID {
+			return pluginChannelDescriptorFromManifest(plugin, channel)
+		}
+	}
+	return pluginChannelDescriptor{}, false
+}
+
+func pluginChannelDescriptorFromManifest(plugin model.Plugin, channel communityservice.PluginChannelType) (pluginChannelDescriptor, bool) {
+	if strings.TrimSpace(channel.ID) == "" || strings.TrimSpace(channel.InboundAction) == "" || strings.TrimSpace(channel.SendAction) == "" {
+		return pluginChannelDescriptor{}, false
+	}
+	var config interface{}
+	if len(channel.Config) > 0 && json.Unmarshal(channel.Config, &config) != nil {
+		return pluginChannelDescriptor{}, false
+	}
+	return pluginChannelDescriptor{Provider: pluginChannelProviderID(plugin.ID, channel.ID), Plugin: plugin, TypeID: channel.ID, Name: channel.Name, Description: channel.Description, InboundAction: channel.InboundAction, SendAction: channel.SendAction, Config: config}, true
 }
 
 func sendProviderReply(ctx context.Context, integration MessageChannelIntegration, externalChatID string, content string) error {

@@ -26,21 +26,34 @@ const pluginMaxPackageBytes int64 = 100 << 20
 var (
 	pluginIDPattern        = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{1,79}$`)
 	pluginHookPointPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.:-]{1,120}$`)
+	pluginChannelTypeID    = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$`)
 )
 
 type pluginAPI struct{}
 
 type PluginManifest struct {
-	ID          string          `json:"id"`
-	Name        string          `json:"name"`
-	Version     string          `json:"version"`
-	Description string          `json:"description"`
-	Author      string          `json:"author"`
-	WASM        string          `json:"wasm"`
-	Permissions []string        `json:"permissions"`
-	Hooks       []PluginHook    `json:"hooks"`
-	Frontend    json.RawMessage `json:"frontend"`
-	Settings    json.RawMessage `json:"settings"`
+	ID          string              `json:"id"`
+	Name        string              `json:"name"`
+	Version     string              `json:"version"`
+	Description string              `json:"description"`
+	Author      string              `json:"author"`
+	WASM        string              `json:"wasm"`
+	Permissions []string            `json:"permissions"`
+	Hooks       []PluginHook        `json:"hooks"`
+	Frontend    json.RawMessage     `json:"frontend"`
+	Settings    json.RawMessage     `json:"settings"`
+	Channels    []PluginChannelType `json:"channels"`
+}
+
+// PluginChannelType declares a message-channel provider implemented by a WASM
+// plugin. The channel package reads this persisted manifest at runtime.
+type PluginChannelType struct {
+	ID            string          `json:"id"`
+	Name          string          `json:"name"`
+	Description   string          `json:"description"`
+	InboundAction string          `json:"inbound_action"`
+	SendAction    string          `json:"send_action"`
+	Config        json.RawMessage `json:"config"`
 }
 
 type PluginHook struct {
@@ -615,6 +628,15 @@ func pluginUserEnabled(plugin model.Plugin, states map[string]bool) bool {
 	return !ok || enabled
 }
 
+// PluginEnabledForUser reports whether an installed plugin remains available to
+// a particular user. Channel integrations use it before invoking plugin code.
+func PluginEnabledForUser(plugin model.Plugin, userID uint) bool {
+	if userID == 0 {
+		return false
+	}
+	return pluginUserEnabled(plugin, userPluginStates(userID))
+}
+
 func loadPluginsOnStartup() error {
 	root := filepath.Join(config.DataPath, "plugins")
 	if err := os.MkdirAll(root, 0o755); err != nil {
@@ -712,6 +734,28 @@ func validatePluginManifest(manifest PluginManifest) error {
 			return fmt.Errorf("unsupported plugin hook mode: %s", hook.Mode)
 		}
 	}
+	seenChannels := map[string]struct{}{}
+	for _, channel := range manifest.Channels {
+		if !pluginChannelTypeID.MatchString(strings.TrimSpace(channel.ID)) {
+			return fmt.Errorf("invalid plugin channel type id: %s", channel.ID)
+		}
+		if strings.TrimSpace(channel.Name) == "" || len([]rune(strings.TrimSpace(channel.Name))) > 120 {
+			return fmt.Errorf("plugin channel type %s requires a name up to 120 characters", channel.ID)
+		}
+		if strings.TrimSpace(channel.InboundAction) == "" || strings.TrimSpace(channel.SendAction) == "" {
+			return fmt.Errorf("plugin channel type %s requires inbound_action and send_action", channel.ID)
+		}
+		if len(channel.Config) > 0 {
+			var config map[string]interface{}
+			if err := json.Unmarshal(channel.Config, &config); err != nil || config == nil {
+				return fmt.Errorf("plugin channel type %s config must be a JSON object", channel.ID)
+			}
+		}
+		if _, exists := seenChannels[channel.ID]; exists {
+			return fmt.Errorf("duplicate plugin channel type id: %s", channel.ID)
+		}
+		seenChannels[channel.ID] = struct{}{}
+	}
 	return nil
 }
 
@@ -733,6 +777,16 @@ func normalizePluginManifest(manifest PluginManifest) PluginManifest {
 		}
 		if len(manifest.Hooks[i].Config) == 0 {
 			manifest.Hooks[i].Config = nil
+		}
+	}
+	for i := range manifest.Channels {
+		manifest.Channels[i].ID = strings.TrimSpace(manifest.Channels[i].ID)
+		manifest.Channels[i].Name = strings.TrimSpace(manifest.Channels[i].Name)
+		manifest.Channels[i].Description = strings.TrimSpace(manifest.Channels[i].Description)
+		manifest.Channels[i].InboundAction = strings.TrimSpace(manifest.Channels[i].InboundAction)
+		manifest.Channels[i].SendAction = strings.TrimSpace(manifest.Channels[i].SendAction)
+		if len(manifest.Channels[i].Config) == 0 {
+			manifest.Channels[i].Config = nil
 		}
 	}
 	sort.SliceStable(manifest.Hooks, func(i, j int) bool {

@@ -4,8 +4,21 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/WindyPear-Team/veloce/internal/model"
 	communityservice "github.com/WindyPear-Team/veloce/internal/service"
 )
+
+func TestPluginChannelDescriptorAndWebhookSummary(t *testing.T) {
+	plugin := model.Plugin{ID: "acme-plugin", Enabled: true, ManifestJSON: `{"channels":[{"id":"acme","name":"Acme Chat","inbound_action":"channel.inbound","send_action":"channel.send","config":{"fields":[{"name":"token","type":"secret"}]}}]}`}
+	descriptor, ok := pluginChannelDescriptorFromPlugin(plugin, "acme")
+	if !ok || descriptor.Provider != "plugin--acme-plugin--acme" || descriptor.InboundAction != "channel.inbound" {
+		t.Fatalf("descriptor = %#v, ok=%v", descriptor, ok)
+	}
+	summary := pluginWebhookSummary(map[string]interface{}{"external_chat_id": "chat-1", "external_user_id": "user-1", "external_user_name": "Ada", "external_message_id": "message-1", "content": "hello"})
+	if summary.ExternalChatID != "chat-1" || summary.ExternalUserID != "user-1" || summary.Content != "hello" {
+		t.Fatalf("summary = %#v", summary)
+	}
+}
 
 func TestParseMessageChannelApprovalDecision(t *testing.T) {
 	tests := []struct {

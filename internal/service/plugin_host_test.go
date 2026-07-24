@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"net"
 	"testing"
 
 	"github.com/WindyPear-Team/veloce/internal/model"
@@ -40,6 +41,25 @@ func TestPluginHostWalletSettlementUsesPermissionsAndIdempotency(t *testing.T) {
 	noCredit.PermissionsJSON = mustJSON([]string{"wallet.balance.debit"})
 	if _, status := executePluginHostCall(context.Background(), noCredit, pluginRuntimeInvocation{UserID: user.ID, RequestID: "request-2"}, "wallet.settle", map[string]interface{}{"debit": "1", "credit": "1"}); status != pluginHostDenied {
 		t.Fatalf("credit without permission status=%d", status)
+	}
+}
+
+func TestPluginChannelHTTPRequiresPermission(t *testing.T) {
+	plugin := model.Plugin{ID: "channel-plugin"}
+	_, status := executePluginHostCall(context.Background(), plugin, pluginRuntimeInvocation{}, "plugin.channel.http", map[string]interface{}{"url": "https://example.com"})
+	if status != pluginHostDenied {
+		t.Fatalf("HTTP without permission status=%d", status)
+	}
+}
+
+func TestPluginChannelHTTPRejectsNonPublicAddresses(t *testing.T) {
+	for _, raw := range []string{"0.0.0.0", "127.0.0.1", "10.0.0.1", "100.64.0.1", "169.254.1.1", "198.18.0.1", "::1"} {
+		if pluginChannelHTTPPublicIP(net.ParseIP(raw)) {
+			t.Fatalf("expected %s to be rejected", raw)
+		}
+	}
+	if !pluginChannelHTTPPublicIP(net.ParseIP("8.8.8.8")) {
+		t.Fatal("expected public address to be accepted")
 	}
 }
 

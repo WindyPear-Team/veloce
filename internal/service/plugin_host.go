@@ -4,7 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
 	"strings"
+	"time"
 
 	"github.com/WindyPear-Team/veloce/internal/model"
 	"github.com/shopspring/decimal"
@@ -18,6 +23,17 @@ const (
 	pluginHostCallExport = "host_call"
 	pluginHostMaxRequest = 1 << 20
 )
+
+const pluginChannelHTTPMaxResponse = 1 << 20
+
+var pluginChannelHTTPClient = &http.Client{
+	Timeout: 15 * time.Second,
+	Transport: &http.Transport{
+		Proxy:       nil,
+		DialContext: pluginChannelHTTPDialContext,
+	},
+	CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse },
+}
 
 const (
 	pluginHostOK uint32 = iota
@@ -118,9 +134,119 @@ func executePluginHostCall(ctx context.Context, plugin model.Plugin, invocation 
 		return executePluginKVDelete(ctx, plugin, invocation, request)
 	case "plugin.log":
 		return executePluginLog(invocation, plugin, request)
+	case "plugin.channel.http":
+		return executePluginChannelHTTP(ctx, plugin, request)
 	default:
 		return pluginHostError("unknown_operation", "unknown plugin host operation: "+operation), pluginHostInvalidRequest
 	}
+}
+
+func executePluginChannelHTTP(ctx context.Context, plugin model.Plugin, request map[string]interface{}) (map[string]interface{}, uint32) {
+	if !pluginHasPermission(plugin, "plugin.channel.http") {
+		return pluginHostError("permission_denied", "plugin lacks plugin.channel.http permission"), pluginHostDenied
+	}
+	method := strings.ToUpper(stringRequest(request, "method"))
+	if method == "" {
+		method = http.MethodPost
+	}
+	switch method {
+	case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+	default:
+		return pluginHostError("invalid_request", "HTTP method is not allowed"), pluginHostInvalidRequest
+	}
+	rawURL := stringRequest(request, "url")
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Scheme != "http" && parsed.Scheme != "https" || parsed.Host == "" {
+		return pluginHostError("invalid_request", "HTTP url must be an absolute http or https URL"), pluginHostInvalidRequest
+	}
+	if parsed.User != nil || parsed.Hostname() == "" {
+		return pluginHostError("invalid_request", "HTTP url must not include user credentials"), pluginHostInvalidRequest
+	}
+	body := stringRequest(request, "body")
+	if len(body) > pluginHostMaxRequest {
+		return pluginHostError("invalid_request", "HTTP request body is too large"), pluginHostInvalidRequest
+	}
+	httpRequest, err := http.NewRequestWithContext(ctx, method, parsed.String(), strings.NewReader(body))
+	if err != nil {
+		return pluginHostError("invalid_request", err.Error()), pluginHostInvalidRequest
+	}
+	if headers, ok := request["headers"].(map[string]interface{}); ok {
+		if len(headers) > 50 {
+			return pluginHostError("invalid_request", "too many HTTP headers"), pluginHostInvalidRequest
+		}
+		for key, value := range headers {
+			name := strings.TrimSpace(key)
+			text, ok := value.(string)
+			if name == "" || !ok || len(name) > 120 || len(text) > 4096 || strings.EqualFold(name, "Host") {
+				return pluginHostError("invalid_request", "invalid HTTP header"), pluginHostInvalidRequest
+			}
+			httpRequest.Header.Set(name, text)
+		}
+	}
+	response, err := pluginChannelHTTPClient.Do(httpRequest)
+	if err != nil {
+		return pluginHostError("http_error", err.Error()), pluginHostInternal
+	}
+	defer response.Body.Close()
+	responseBody, err := io.ReadAll(io.LimitReader(response.Body, pluginChannelHTTPMaxResponse+1))
+	if err != nil {
+		return pluginHostError("http_error", err.Error()), pluginHostInternal
+	}
+	if len(responseBody) > pluginChannelHTTPMaxResponse {
+		return pluginHostError("response_too_large", "HTTP response body exceeds 1 MiB"), pluginHostInternal
+	}
+	responseHeaders := map[string]string{}
+	for key, values := range response.Header {
+		if len(responseHeaders) >= 50 {
+			break
+		}
+		responseHeaders[key] = strings.Join(values, ", ")
+	}
+	return map[string]interface{}{"ok": true, "status": response.StatusCode, "headers": responseHeaders, "body": string(responseBody)}, pluginHostOK
+}
+
+// pluginChannelHTTPDialContext resolves first and dials only public IPs. This
+// prevents a plugin from reaching the host, container, or private network.
+func pluginChannelHTTPDialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, err
+	}
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	dialer := &net.Dialer{}
+	var lastErr error
+	for _, candidate := range ips {
+		if !pluginChannelHTTPPublicIP(candidate.IP) {
+			lastErr = errors.New("HTTP target resolves to a non-public address")
+			continue
+		}
+		conn, dialErr := dialer.DialContext(ctx, network, net.JoinHostPort(candidate.IP.String(), port))
+		if dialErr == nil {
+			return conn, nil
+		}
+		lastErr = dialErr
+	}
+	if lastErr == nil {
+		lastErr = errors.New("HTTP target has no public addresses")
+	}
+	return nil, lastErr
+}
+
+func pluginChannelHTTPPublicIP(ip net.IP) bool {
+	if ip == nil || !ip.IsGlobalUnicast() || ip.IsUnspecified() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() {
+		return false
+	}
+	if ipv4 := ip.To4(); ipv4 != nil {
+		// CGNAT and benchmark ranges are not private according to net.IP, but
+		// must not be reachable from a plugin-managed HTTP client either.
+		if ipv4[0] == 0 || ipv4[0] == 100 && ipv4[1] >= 64 && ipv4[1] <= 127 || ipv4[0] == 198 && ipv4[1]&0xfe == 18 {
+			return false
+		}
+	}
+	return true
 }
 
 func executePluginWalletSettlement(ctx context.Context, plugin model.Plugin, invocation pluginRuntimeInvocation, request map[string]interface{}) (map[string]interface{}, uint32) {

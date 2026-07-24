@@ -40,7 +40,7 @@ type MessageChannelIntegration struct {
 	UserID                          uint       `gorm:"uniqueIndex:idx_message_channel_user_name;not null" json:"user_id"`
 	User                            model.User `gorm:"foreignKey:UserID" json:"-"`
 	Name                            string     `gorm:"uniqueIndex:idx_message_channel_user_name;size:120;not null" json:"name"`
-	Provider                        string     `gorm:"index;size:30;not null" json:"provider"`
+	Provider                        string     `gorm:"index;size:180;not null" json:"provider"`
 	BotToken                        string     `gorm:"type:text;not null" json:"-"`
 	WebhookSecret                   string     `gorm:"uniqueIndex;size:80;not null" json:"-"`
 	Enabled                         bool       `gorm:"default:true" json:"enabled"`
@@ -256,9 +256,14 @@ func (api *API) updateAdminSettings(c *gin.Context) {
 }
 
 func (api *API) getUserSettings(c *gin.Context) {
+	user, ok := currentUser(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"enabled":   Enabled(),
-		"providers": supportedProviders(),
+		"providers": supportedProvidersForUser(user.ID),
 	})
 }
 
@@ -464,7 +469,7 @@ func (api *API) receiveWebhook(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Message channel is disabled"})
 		return
 	}
-	provider := normalizeProvider(c.Param("provider"))
+	provider := resolveProvider(c.Param("provider"))
 	if provider == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Unsupported message channel provider"})
 		return
@@ -499,7 +504,27 @@ func processMessageChannelPayload(ctx context.Context, integration MessageChanne
 	if !ok {
 		return errors.New("unsupported provider")
 	}
-	summary := adapter.ExtractWebhookSummary(body)
+	var summary webhookSummary
+	if pluginAdapter, ok := adapter.(pluginChannelProvider); ok {
+		method := "POST"
+		headers := map[string]string{}
+		if c != nil {
+			method = c.Request.Method
+			for key, values := range c.Request.Header {
+				if len(headers) >= 50 {
+					break
+				}
+				headers[key] = strings.Join(values, ", ")
+			}
+		}
+		var err error
+		summary, err = pluginChannelInboundSummary(ctx, pluginAdapter.descriptor, integration, body, method, headers)
+		if err != nil {
+			return err
+		}
+	} else {
+		summary = adapter.ExtractWebhookSummary(body)
+	}
 	now := time.Now()
 	message := MessageChannelMessage{
 		IntegrationID:    integration.ID,
@@ -658,9 +683,13 @@ func integrationFromInput(c *gin.Context, input integrationInput, current Messag
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Message channel name is too long"})
 		return MessageChannelIntegration{}, false
 	}
-	provider := normalizeProvider(input.Provider)
+	provider := resolveProvider(input.Provider)
 	if provider == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Unsupported message channel provider"})
+		return MessageChannelIntegration{}, false
+	}
+	if descriptor, ok := pluginChannelDescriptorFor(provider); ok && !communityservice.PluginEnabledForUser(descriptor.Plugin, current.UserID) {
+		c.JSON(http.StatusForbidden, gin.H{"error": "The plugin for this message channel is disabled"})
 		return MessageChannelIntegration{}, false
 	}
 	advancedOptions := normalizeAdvancedOptions(input.AdvancedOptions)
@@ -680,7 +709,7 @@ func integrationFromInput(c *gin.Context, input integrationInput, current Messag
 		}
 		providerConfig = normalizeTencentChannelConfig(providerConfig)
 		advancedOptions.CustomProviderConfigJSON = encodeProviderConfig(providerConfig)
-	} else if provider != providerWeixin && botToken == "" {
+	} else if !isPluginChannelProvider(provider) && provider != providerWeixin && botToken == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Bot token is required"})
 		return MessageChannelIntegration{}, false
 	}
@@ -1342,6 +1371,16 @@ func normalizeProvider(value string) string {
 	default:
 		return ""
 	}
+}
+
+func resolveProvider(value string) string {
+	if provider := normalizeProvider(value); provider != "" {
+		return provider
+	}
+	if descriptor, ok := pluginChannelDescriptorFor(strings.TrimSpace(value)); ok {
+		return descriptor.Provider
+	}
+	return ""
 }
 
 func normalizeMode(value, fallback string) string {
